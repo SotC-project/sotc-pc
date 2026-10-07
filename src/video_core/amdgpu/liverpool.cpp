@@ -662,7 +662,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::EventWriteEos: {
                 // The game may read compute results once this event fires.
                 if (rasterizer) {
-                    rasterizer->FlushMirrors();
+                    rasterizer->FlushMirrors(1);
                 }
                 const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
                 if (rasterizer) {
@@ -685,7 +685,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::EventWriteEop: {
                 // The game may read compute results once this event fires.
                 if (rasterizer) {
-                    rasterizer->FlushMirrors();
+                    rasterizer->FlushMirrors(2);
                 }
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 if (rasterizer) {
@@ -1116,7 +1116,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         case PM4ItOpcode::ReleaseMem: {
             // The game may read compute results once this event fires.
             if (rasterizer) {
-                rasterizer->FlushMirrors();
+                rasterizer->FlushMirrors(4);
             }
             const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(header);
             if (rasterizer) {

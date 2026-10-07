@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <string>
@@ -95,6 +96,15 @@ inline void StartThreadSampler() {
                 }
                 LOG_ERROR(Render, "profile: {} samples, {:.0f}% with the leaf outside this image{}",
                           total, 100.0 * outside / std::max(total, 1u), text);
+                // Full histogram for offline aggregation (overwritten each interval).
+                if (FILE* file = std::fopen("profile_full.txt", "w")) {
+                    std::fprintf(file, "samples %u outside %u\n", total, outside);
+                    for (const auto& [frames, count] : top) {
+                        std::fprintf(file, "%u %llx %llx %llx\n", count, frames[0], frames[1],
+                                     frames[2]);
+                    }
+                    std::fclose(file);
+                }
                 counts.clear();
                 total = outside = 0;
             }

@@ -191,6 +191,7 @@ void Rasterizer::EliminateFastClear() {
 struct DrawStats {
     u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
     u64 ns_pipeline{}, ns_bind{}, ns_draw_total{}, ns_dispatch_total{}, ns_mirror{};
+    u32 flushes{};
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
@@ -202,9 +203,11 @@ struct DrawStats {
                           "bind_failed {} max_indices {} mirrors {} submits {}",
                   drawn, indirect, dispatch, filtered, no_pipeline, bind_failed, verts_max, mirrors,
                   frames);
-        LOG_ERROR(Render, "time/3s ms: pipeline {} bind {} draws {} dispatches {} mirror {}",
+        LOG_ERROR(Render, "time/3s ms: pipeline {} bind {} draws {} dispatches {} mirror {} "
+                          "flushes {}",
                   ns_pipeline / 1000000, ns_bind / 1000000, ns_draw_total / 1000000,
-                  ns_dispatch_total / 1000000, ns_mirror / 1000000);
+                  ns_dispatch_total / 1000000, ns_mirror / 1000000, flushes);
+        flushes = 0;
         ns_pipeline = ns_bind = ns_draw_total = ns_dispatch_total = ns_mirror = 0;
         filtered = no_pipeline = bind_failed = drawn = indirect = dispatch = verts_max = mirrors = frames = 0;
     }
@@ -594,7 +597,7 @@ void Rasterizer::DispatchDirect() {
     g_stats.mirrors += u32(mirrors.size());
     pending_mirrors.insert(pending_mirrors.end(), mirrors.begin(), mirrors.end());
     if (mirror_now) {
-        FlushMirrors();
+        FlushMirrors(32);
     }
     return;
 
@@ -648,11 +651,20 @@ void Rasterizer::Finish() {
     scheduler.Finish();
 }
 
-void Rasterizer::FlushMirrors() {
-    if (pending_mirrors.empty()) {
+void Rasterizer::FlushMirrors(u32 source) {
+    // Sources: 1 EOS, 2 EOP, 4 ReleaseMem, 8 submit, 16 fence, 32 immediate. The game consumes
+    // compute results after end-of-pipe events; flushing at EOS and ReleaseMem as well only adds
+    // blocking GPU round trips (measured: same draw counts, about half the flushes).
+    // SOTC_FLUSH_MASK overrides the set for experiments.
+    static const u32 mask = [] {
+        const char* value = std::getenv("SOTC_FLUSH_MASK");
+        return value ? u32(std::atoi(value)) : (2u | 8u | 16u | 32u);
+    }();
+    if (pending_mirrors.empty() || !(mask & source)) {
         return;
     }
     ScopedNs timer{g_stats.ns_mirror};
+    ++g_stats.flushes;
     std::ranges::sort(pending_mirrors);
     const auto dup = std::ranges::unique(pending_mirrors);
     pending_mirrors.erase(dup.begin(), dup.end());
@@ -661,7 +673,7 @@ void Rasterizer::FlushMirrors() {
 }
 
 void Rasterizer::OnSubmit() {
-    FlushMirrors();
+    FlushMirrors(8);
     ++g_stats.frames;
     texture_cache.DebugDumpImages();
     buffer_cache.TickFrame();
@@ -671,7 +683,7 @@ void Rasterizer::OnSubmit() {
 }
 
 void Rasterizer::OnFence() {
-    FlushMirrors();
+    FlushMirrors(16);
     texture_cache.ProcessDownloadImages();
 }
 

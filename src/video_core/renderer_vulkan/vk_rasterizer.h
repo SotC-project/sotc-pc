@@ -84,7 +84,7 @@ public:
     void OnSubmit();
 
     /// Copies pending compute outputs back into guest memory.
-    void FlushMirrors();
+    void FlushMirrors(u32 source);
     void OnFence();
 
     PipelineCache& GetPipelineCache() {
