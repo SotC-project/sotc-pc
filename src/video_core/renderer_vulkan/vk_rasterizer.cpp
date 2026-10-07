@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string>
 #include "common/debug.h"
+#include "video_core/thread_sampler.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -238,6 +239,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     scheduler.PopPendingOperations();
     g_stats.Tick();
+    VideoCore::StartThreadSampler();
 
     if (!FilterDraw()) {
         ++g_stats.filtered;
