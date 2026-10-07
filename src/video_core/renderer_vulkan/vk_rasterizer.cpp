@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <unordered_map>
+#include <vector>
 #include <cstdlib>
 #include <string>
 #include "common/debug.h"
@@ -524,6 +526,28 @@ void Rasterizer::DispatchDirect() {
     }
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    {
+        // Temporary: which compute shaders dominate, with their dispatch sizes.
+        static std::unordered_map<u64, std::pair<u32, u64>> histogram;
+        static auto last = std::chrono::steady_clock::now();
+        auto& entry = histogram[cs.pgm_hash];
+        ++entry.first;
+        entry.second += u64(cs_program.dim_x) * cs_program.dim_y * cs_program.dim_z;
+        if (const auto now = std::chrono::steady_clock::now();
+            now - last >= std::chrono::seconds(6)) {
+            last = now;
+            std::vector<std::pair<u64, std::pair<u32, u64>>> top(histogram.begin(),
+                                                                 histogram.end());
+            std::ranges::sort(top, [](auto& x, auto& y) { return x.second.first > y.second.first; });
+            std::string line;
+            for (size_t i = 0; i < std::min<size_t>(top.size(), 10); ++i) {
+                line += fmt::format("{:#x}:{}x(groups {}) ", top[i].first, top[i].second.first,
+                                    top[i].second.second / std::max(top[i].second.first, 1u));
+            }
+            LOG_ERROR(Render, "dispatch/6s {} shaders: {}", top.size(), line);
+            histogram.clear();
+        }
+    }
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
         return;
     }
