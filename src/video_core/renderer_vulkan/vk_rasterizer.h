@@ -82,6 +82,9 @@ public:
     u64 Flush();
     void Finish();
     void OnSubmit();
+
+    /// Copies pending compute outputs back into guest memory.
+    void FlushMirrors();
     void OnFence();
 
     PipelineCache& GetPipelineCache() {
@@ -175,6 +178,7 @@ private:
 
     bool attachment_feedback_loop{};
     bool needs_barrier{};
+    std::vector<std::pair<VAddr, u32>> pending_mirrors;
 };
 
 } // namespace Vulkan

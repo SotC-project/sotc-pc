@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
+#include <string>
 #include "common/debug.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -181,24 +184,83 @@ void Rasterizer::EliminateFastClear() {
     ScopeMarkerEnd();
 }
 
+// Temporary render statistics, printed every few seconds.
+struct DrawStats {
+    u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
+    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    void Tick() {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last < std::chrono::seconds(3)) {
+            return;
+        }
+        last = now;
+        LOG_ERROR(Render, "stats/3s: drawn {} indirect {} dispatch {} filtered {} no_pipeline {} "
+                          "bind_failed {} max_indices {} mirrors {} submits {}",
+                  drawn, indirect, dispatch, filtered, no_pipeline, bind_failed, verts_max, mirrors,
+                  frames);
+        filtered = no_pipeline = bind_failed = drawn = indirect = dispatch = verts_max = mirrors = frames = 0;
+    }
+};
+static DrawStats g_stats;
+static bool CoversViewBlock(VAddr addr, u64 size);
+
+// Debug aid: SOTC_DRAWLOG_AT=<seconds> logs every draw for 50 ms.
+static bool DrawLogActive() {
+    static const char* at = std::getenv("SOTC_DRAWLOG_AT");
+    if (!at) {
+        return false;
+    }
+    static const auto start = std::chrono::steady_clock::now();
+    const auto t = std::chrono::steady_clock::now() - start;
+    return t >= std::chrono::seconds(std::atoi(at)) &&
+           t < std::chrono::seconds(std::atoi(at)) + std::chrono::milliseconds(100);
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
+    g_stats.Tick();
 
     if (!FilterDraw()) {
+        ++g_stats.filtered;
         return;
     }
 
     const auto& regs = liverpool->regs;
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
     if (!pipeline) {
+        ++g_stats.no_pipeline;
         return;
     }
 
     PrepareRenderState(pipeline);
     if (!BindResources(pipeline)) {
+        ++g_stats.bind_failed;
         return;
+    }
+    ++g_stats.drawn;
+    g_stats.verts_max = std::max<u32>(g_stats.verts_max, regs.num_indices);
+    if (DrawLogActive()) {
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        std::string bufs;
+        for (const auto& desc : vs.buffers) {
+            if (desc.buffer_type == Shader::BufferType::Guest) {
+                const auto sharp = desc.GetSharp(vs);
+                bufs += fmt::format("[{:#x} st{} n{:#x}]", u64(sharp.base_address),
+                                    sharp.GetStride(), u32(sharp.num_records));
+            }
+        }
+        LOG_ERROR(Render, "draw vs {:#x} fs {:#x} prim {} n {} inst {} idx {} cb0 {:#x} mrt {:#x} "
+                          "vsbuf {}",
+                  vs.pgm_hash, 0, u32(regs.primitive_type), regs.num_indices,
+                  regs.num_instances.NumInstances(), is_indexed,
+                  u64(regs.color_buffers[0].Address()), pipeline->GetGraphicsKey().mrt_mask, bufs);
+        LOG_ERROR(Render, "   dstate mrt {:#x} cmode {} depth {:#x} dctl {:#x} vp {} {}",
+                  pipeline->GetGraphicsKey().mrt_mask, u32(regs.color_control.mode),
+                  u64(regs.depth_buffer.DepthAddress()),
+                  *reinterpret_cast<const u32*>(&regs.depth_control), regs.viewports[0].xscale,
+                  regs.viewports[0].yscale);
     }
     const auto state = BeginRendering(pipeline);
 
@@ -238,6 +300,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u32 max_count, VAddr count_address, u16 vertex_sgpr_offset,
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
+    ++g_stats.indirect;
 
     scheduler.PopPendingOperations();
 
@@ -259,6 +322,119 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         return;
     }
     const auto state = BeginRendering(pipeline);
+
+    if (DrawLogActive()) {
+        const auto& regs = liverpool->regs;
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        const auto& fs = pipeline->GetStage(Shader::SwStage::Fragment);
+        std::string bufs;
+        std::string inst;
+        const u32* args = reinterpret_cast<const u32*>(arg_address + offset);
+        for (const auto& desc : vs.buffers) {
+            if (desc.buffer_type == Shader::BufferType::Guest) {
+                const auto sharp = desc.GetSharp(vs);
+                bufs += fmt::format("[{:#x} st{} n{:#x} gpu{}]", u64(sharp.base_address),
+                                    sharp.GetStride(), u32(sharp.num_records),
+                                    buffer_cache.IsRegionGpuModified(sharp.base_address,
+                                                                     sharp.GetSize()));
+                if (sharp.GetStride() == 128) {
+                    // CPU-side view of the instance record this draw selects.
+                    const u32 index = args[4] & 0xffff;
+                    if (index < sharp.num_records &&
+                        memory->IsValidMapping(sharp.base_address + index * 128ull, 128)) {
+                        const float* rec =
+                            reinterpret_cast<const float*>(sharp.base_address + index * 128ull);
+                        for (u32 k = 0; k < 16; ++k) {
+                            inst += fmt::format("{:.3g} ", rec[k]);
+                        }
+                    }
+                }
+            }
+        }
+        LOG_ERROR(Render, "indirect vs {:#x} fs {:#x} prim {} idx {} max {} stride {} count_addr "
+                          "{:#x} gpu_args {} args {} {} {} {} {} sgpr {} {} cb0 {:#x} vsbuf {}",
+                  vs.pgm_hash, fs.pgm_hash, u32(regs.primitive_type), is_indexed, max_count,
+                  stride, count_address,
+                  buffer_cache.IsRegionGpuModified(arg_address + offset, stride * max_count),
+                  args[0], args[1], args[2], args[3], args[4], vertex_sgpr_offset,
+                  instance_sgpr_offset, u64(regs.color_buffers[0].Address()), bufs);
+        LOG_ERROR(Render, "   inst {}", inst);
+        {
+            // Textures the fragment shader samples and whether guest memory holds data for them.
+            const auto& fsi = pipeline->GetStage(Shader::SwStage::Fragment);
+            std::string tex;
+            for (const auto& desc : fsi.images) {
+                const auto tsharp = desc.GetSharp(fsi);
+                const u64 taddr = tsharp.Address();
+                u32 nonzero = 0;
+                tex += fmt::format("[{:#x} {}x{} fmt{} nz{}]", taddr, tsharp.width + 1,
+                                   tsharp.height + 1, u32(tsharp.data_format), nonzero);
+            }
+            LOG_ERROR(Render, "   tex fs {:#x} {}", fsi.pgm_hash, tex);
+            if (fsi.pgm_hash == 0x972ea312) {
+                const u64 f1 = u64(fsi.user_data[0]) | (u64(fsi.user_data[1]) << 32);
+                if (memory->IsValidMapping(f1, 32)) {
+                    const u64 mat = *reinterpret_cast<const u64*>(f1 + 24) & 0xffffffffffffULL;
+                    if (memory->IsValidMapping(mat, 100 * 4)) {
+                        const u32* m = reinterpret_cast<const u32*>(mat);
+                        LOG_ERROR(Render, "   matblock root {:#x} mat {:#x} gpu {} t0 {:08x} {:08x} "
+                                          "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} head {:08x} "
+                                          "{:08x} {:08x} {:08x}",
+                                  f1, mat, buffer_cache.IsRegionGpuModified(mat, 400), m[92], m[93],
+                                  m[94], m[95], m[96], m[97], m[98], m[99], m[0], m[1], m[2], m[3]);
+                    } else {
+                        LOG_ERROR(Render, "   matblock root {:#x} mat {:#x} unmapped", f1, mat);
+                    }
+                }
+            }
+        }
+        {
+            // CPU view of the per-view constants (view-projection rows at dwords 32..47).
+            const u64 p1 = u64(vs.user_data[0]) | (u64(vs.user_data[1]) << 32);
+            if (memory->IsValidMapping(p1, 16)) {
+                const u64 p2 = *reinterpret_cast<const u64*>(p1 + 8) & 0xffffffffffffULL;
+                if (memory->IsValidMapping(p2, 82 * 4)) {
+                    const float* c = reinterpret_cast<const float*>(p2);
+                    LOG_ERROR(Render, "   srt p1 {:#x} p2 {:#x} gpu2 {} vp [{:.3g} {:.3g} {:.3g} "
+                                      "{:.3g}] [{:.3g} {:.3g} {:.3g} {:.3g}] [{:.3g} {:.3g} {:.3g} "
+                                      "{:.3g}] [{:.3g} {:.3g} {:.3g} {:.3g}]",
+                              p1, p2, buffer_cache.IsRegionGpuModified(p2, 328), c[32], c[33],
+                              c[34], c[35], c[36], c[37], c[38], c[39], c[40], c[41], c[42], c[43],
+                              c[44], c[45], c[46], c[47]);
+                }
+            }
+        }
+        {
+            const auto& vp = regs.viewports[0];
+            const auto& sc = regs.screen_scissor;
+            const auto& gs = regs.generic_scissor;
+            LOG_ERROR(Render, "   state mrt {:#x} cmode {} mask {:#x} depth {:#x} dctl {:#x} "
+                              "poly {:#x} clip {:#x} vpc {:#x} vp {} {} {} {} {} {} gsc {} {} {} "
+                              "{} ssc {} {} {} {}",
+                      pipeline->GetGraphicsKey().mrt_mask, u32(regs.color_control.mode),
+                      regs.color_target_mask.raw, u64(regs.depth_buffer.DepthAddress()),
+                      *reinterpret_cast<const u32*>(&regs.depth_control), *reinterpret_cast<const u32*>(&regs.polygon_control), *reinterpret_cast<const u32*>(&regs.clipper_control),
+                      *reinterpret_cast<const u32*>(&regs.viewport_control), vp.xscale, vp.xoffset, vp.yscale, vp.yoffset,
+                      vp.zscale, vp.zoffset, u32(gs.top_left_x), u32(gs.top_left_y),
+                      u32(gs.bottom_right_x), u32(gs.bottom_right_y), s32(sc.top_left_x),
+                      s32(sc.top_left_y), s32(sc.bottom_right_x), s32(sc.bottom_right_y));
+        }
+        static int compared = 0;
+        if (compared < 3) {
+            ++compared;
+            for (const auto& desc : vs.buffers) {
+                if (desc.buffer_type != Shader::BufferType::Guest) {
+                    continue;
+                }
+                const auto sharp = desc.GetSharp(vs);
+                if (memory->IsValidMapping(sharp.base_address, sharp.GetSize())) {
+                    LOG_ERROR(Render, "   compare {:#x} size {:#x} mismatched bytes {}",
+                              u64(sharp.base_address), sharp.GetSize(),
+                              buffer_cache.DebugMismatch(sharp.base_address, sharp.GetSize()));
+                }
+            }
+        }
+    }
 
     BindVertexBuffers(pipeline);
     if (is_indexed) {
@@ -317,6 +493,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
 void Rasterizer::DispatchDirect() {
     RENDERER_TRACE;
+    ++g_stats.dispatch;
 
     scheduler.PopPendingOperations();
 
@@ -347,11 +524,40 @@ void Rasterizer::DispatchDirect() {
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
 
+    // Small compute outputs are constant blocks that later shaders read through SRT pointers,
+    // which are resolved on the CPU; keep guest memory in step with them.
+    static const u32 mirror_limit = [] {
+        const char* kb = std::getenv("SOTC_MIRROR_KB");
+        return (kb ? u32(std::atoi(kb)) : 16u) << 10;
+    }();
+    // 0x50784801 builds the per-view camera block that the very next draws read through the SRT
+    // walker, so it is mirrored immediately; everything else waits for the next sync point.
+    const bool mirror_now = cs.pgm_hash == 0x50784801;
+    boost::container::small_vector<std::pair<VAddr, u32>, 4> mirrors;
+    for (const auto& desc : cs.buffers) {
+
+        if (desc.buffer_type != Shader::BufferType::Guest || !desc.is_written) {
+            continue;
+        }
+        const auto sharp = desc.GetSharp(cs);
+        if (sharp.base_address != 0 && sharp.GetSize() != 0 && sharp.GetSize() <= mirror_limit) {
+            mirrors.emplace_back(sharp.base_address, sharp.GetSize());
+        }
+    }
+    ResetBindings(true);
+    g_stats.mirrors += u32(mirrors.size());
+    pending_mirrors.insert(pending_mirrors.end(), mirrors.begin(), mirrors.end());
+    if (mirror_now) {
+        FlushMirrors();
+    }
+    return;
+
     ResetBindings(true);
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     RENDERER_TRACE;
+    ++g_stats.dispatch;
 
     scheduler.PopPendingOperations();
 
@@ -395,7 +601,21 @@ void Rasterizer::Finish() {
     scheduler.Finish();
 }
 
+void Rasterizer::FlushMirrors() {
+    if (pending_mirrors.empty()) {
+        return;
+    }
+    std::ranges::sort(pending_mirrors);
+    const auto dup = std::ranges::unique(pending_mirrors);
+    pending_mirrors.erase(dup.begin(), dup.end());
+    buffer_cache.MirrorToGuest(pending_mirrors);
+    pending_mirrors.clear();
+}
+
 void Rasterizer::OnSubmit() {
+    FlushMirrors();
+    ++g_stats.frames;
+    texture_cache.DebugDumpImages();
     buffer_cache.TickFrame();
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
@@ -403,6 +623,7 @@ void Rasterizer::OnSubmit() {
 }
 
 void Rasterizer::OnFence() {
+    FlushMirrors();
     texture_cache.ProcessDownloadImages();
 }
 
@@ -453,6 +674,16 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
         // Update current vertex inputs.
         const auto cmdbuf = scheduler.CommandBuffer();
         cmdbuf.setVertexInputEXT(bindings, attributes);
+    }
+
+    if (DrawLogActive()) {
+        std::string vbs;
+        for (const auto& buffer : guest_buffers) {
+            vbs += fmt::format("[{:#x} st{} n{:#x}]", u64(buffer.base_address),
+                               buffer.GetStride(), u32(buffer.num_records));
+        }
+        LOG_ERROR(Render, "   vertex bindings {} attrs {} {}", bindings.size(), attributes.size(),
+                  vbs);
     }
 
     if (bindings.empty()) {
@@ -792,10 +1023,28 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
-                const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
+                u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
                 if (size != vsharp.GetSize()) {
-                    LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
-                              vsharp.GetSize(), size, stage.pgm_hash);
+                    // The engine declares its structured buffers as ~4GB ("unbounded"). Binding
+                    // everything up to the end of the mapping makes every draw track and upload
+                    // hundreds of MB of unrelated heap, so bound them.
+                    // ponytail: fixed window, derive the real extent from the shader if a
+                    // buffer ever needs more.
+                    static const u64 unbounded_cap = [] {
+                        const char* mb = std::getenv("SOTC_UNBOUNDED_CAP_MB");
+                        return (mb ? std::strtoull(mb, nullptr, 10) : 0) << 20;
+                    }();
+                    if (unbounded_cap) {
+                        size = std::min(size, unbounded_cap);
+                    }
+                }
+                static int bind_traced = 0;
+                if (desc.is_written && CoversViewBlock(vsharp.base_address, size) &&
+                    bind_traced++ < 12) {
+                    LOG_ERROR(Render, "viewblock written bind by {:#x} base {:#x} size {:#x} "
+                                      "declared {:#x} stride {}",
+                              stage.pgm_hash, u64(vsharp.base_address), size, vsharp.GetSize(),
+                              vsharp.GetStride());
                 }
                 const auto [buffer, offset] = buffer_cache.ObtainBuffer(
                     vsharp.base_address, size, desc.is_written, desc.is_formatted);
@@ -1170,14 +1419,27 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     ScopeMarkerEnd();
 }
 
+// Temporary: who writes the per-view constant block on the GPU side?
+static bool CoversViewBlock(VAddr addr, u64 size) {
+    constexpr VAddr block = 0x24230c3a0;
+    return addr <= block && block < addr + size;
+}
+
 void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
                "FillBuffer address and size must be a multiple of 4 bytes");
+    static int fill_traced = 0;
+    if (!is_gds && CoversViewBlock(address, num_bytes) && fill_traced++ < 6) {
+        LOG_ERROR(Render, "viewblock FillBuffer {:#x} n {:#x} value {:#x}", address, num_bytes,
+                  value);
+    }
     if (!is_gds) {
         texture_cache.ClearMeta(address);
+        // Always keep guest memory in step: constants are also read back on the CPU (SRT walk),
+        // even from regions the GPU has written to.
+        u32* buffer = std::bit_cast<u32*>(address);
+        std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
         if (!buffer_cache.IsRegionGpuModified(address, num_bytes)) {
-            u32* buffer = std::bit_cast<u32*>(address);
-            std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
             return;
         }
     }
@@ -1191,11 +1453,22 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
-    if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
-        if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
-            !texture_cache.FindImageFromRange(src, num_bytes)) {
-            // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
-            std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
+    static int copy_traced = 0;
+    if (!dst_gds && CoversViewBlock(dst, num_bytes) && copy_traced++ < 6) {
+        LOG_ERROR(Render, "viewblock CopyBuffer dst {:#x} src {:#x} n {:#x} src_gds {} src_gpu {} "
+                          "src_img {}",
+                  dst, src, num_bytes, src_gds, buffer_cache.IsRegionGpuModified(src, num_bytes),
+                  bool(texture_cache.FindImageFromRange(src, num_bytes)));
+    }
+    if (!dst_gds && !src_gds && !texture_cache.FindImageFromRange(src, num_bytes)) {
+        // Mirror the copy in guest memory. Constants and resource descriptors copied this way
+        // are also read back on the CPU (SRT walk). The GPU-modified flag is page granular and
+        // sticky, so it cannot be used to decide whether the source bytes are current; if they
+        // are not, the destination was stale on the CPU side anyway.
+        std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
+        if (!buffer_cache.IsRegionGpuModified(src, num_bytes) &&
+            !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
+            // Neither buffer was transferred to the GPU yet, the host copy is enough.
             return;
         }
     }

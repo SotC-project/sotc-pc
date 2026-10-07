@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstring>
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -102,11 +104,45 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
     return true;
 }
 
+// Gnm's compute "fill" shader: dst[i] = src[i % src_len] for i below the control count. Shadow of
+// the Colossus builds its whole per-frame constant heap (camera matrices, material and texture
+// descriptors) with it. Those constants are read back on the CPU when shader resources are
+// resolved, so the fill has to land in guest memory, which running it on the GPU never does.
+static constexpr u64 FILL_SHADER_HASH = 0x50784801;
+
+static bool ExecuteFillShaderHLE(const Shader::Info& info, const AmdGpu::ComputeProgram& cs_program,
+                                 Rasterizer& rasterizer) {
+    const auto ctl_sharp = info.buffers[0].GetSharp(info);
+    const auto src_sharp = info.buffers[1].GetSharp(info);
+    const auto dst_sharp = info.buffers[2].GetSharp(info);
+    const u32* ctl = reinterpret_cast<const u32*>(ctl_sharp.base_address);
+    const u32* src = reinterpret_cast<const u32*>(src_sharp.base_address);
+    u32* dst = reinterpret_cast<u32*>(dst_sharp.base_address);
+    const u32 src_len = ctl[1];
+    const u32 count = std::min({ctl[0], info.user_data[6], cs_program.dim_x * 64u,
+                                dst_sharp.GetSize() / u32(sizeof(u32))});
+    if (src_len == 0 || count == 0) {
+        return true;
+    }
+    // Drop write protection and mark the range CPU-modified so the GPU copy is refreshed.
+    rasterizer.InvalidateMemory(dst_sharp.base_address, u64(count) * sizeof(u32), true);
+    if (src_len >= count) {
+        std::memcpy(dst, src, u64(count) * sizeof(u32));
+    } else {
+        for (u32 i = 0; i < count; ++i) {
+            dst[i] = src[i % src_len];
+        }
+    }
+    return true;
+}
+
 bool ExecuteShaderHLE(const Shader::Info& info, const AmdGpu::Regs& regs,
                       const AmdGpu::ComputeProgram& cs_program, Rasterizer& rasterizer) {
     switch (info.pgm_hash) {
     case COPY_SHADER_HASH:
         return ExecuteCopyShaderHLE(info, cs_program, rasterizer);
+    case FILL_SHADER_HASH:
+        return ExecuteFillShaderHLE(info, cs_program, rasterizer);
     default:
         return false;
     }

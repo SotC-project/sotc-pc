@@ -411,7 +411,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetPredication: {
-                LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
+                static int traced = 0;
+                if (traced < 12) {
+                    ++traced;
+                    LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION {:#x} {:#x}", reinterpret_cast<const u32*>(header)[1],
+                                reinterpret_cast<const u32*>(header)[2]);
+                }
                 break;
             }
             case PM4ItOpcode::IndexType: {
@@ -655,6 +660,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::EventWriteEos: {
+                // The game may read compute results once this event fires.
+                if (rasterizer) {
+                    rasterizer->FlushMirrors();
+                }
                 const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
                 if (rasterizer) {
                     rasterizer->OnFence();
@@ -674,6 +683,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::EventWriteEop: {
+                // The game may read compute results once this event fires.
+                if (rasterizer) {
+                    rasterizer->FlushMirrors();
+                }
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 if (rasterizer) {
                     rasterizer->OnFence();
@@ -829,7 +842,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::GetLodStats: {
-                LOG_WARNING(Render_Vulkan, "Unimplemented IT_GET_LOD_STATS");
+                LOG_TRACE(Render_Vulkan, "Unimplemented IT_GET_LOD_STATS");
                 break;
             }
             case PM4ItOpcode::CondExec: {
@@ -1101,6 +1114,10 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::ReleaseMem: {
+            // The game may read compute results once this event fires.
+            if (rasterizer) {
+                rasterizer->FlushMirrors();
+            }
             const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(header);
             if (rasterizer) {
                 rasterizer->OnFence();

@@ -10,6 +10,8 @@
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/process.h"
+#include <xxhash.h>
+#include "core/direct_aliases.h"
 #include "core/memory.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
@@ -159,6 +161,24 @@ void MemoryManager::CopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) {
         virtual_addr += copy_size;
         dest += copy_size;
     }
+}
+
+u64 MemoryManager::HashSparseMemory(VAddr virtual_addr, u64 size) {
+    // Same walk as CopySparseMemory, feeding a streaming hash instead of a destination buffer.
+    const auto& backing_pages = impl.BackingPages();
+    XXH3_state_t state;
+    XXH3_64bits_reset(&state);
+    while (size) {
+        const u64 page = virtual_addr >> 14;
+        const u64 offset_in_page = virtual_addr % 16_KB;
+        const u64 chunk = std::min<u64>(16_KB - offset_in_page, size);
+        if (auto* entry = backing_pages.find(page); entry && *entry) {
+            XXH3_64bits_update(&state, *entry + offset_in_page, chunk);
+        }
+        size -= chunk;
+        virtual_addr += chunk;
+    }
+    return XXH3_64bits_digest(&state);
 }
 
 bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
@@ -657,6 +677,8 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
             new_vma.phys_areas[offset_in_vma] = dmem_handle->second;
             MergeAdjacent(new_vma.phys_areas, new_vma.phys_areas.find(offset_in_vma));
 
+            DirectAliases().Add(mapped_addr + offset_in_vma, start_phys_addr, size_in_dma);
+
             // Merge the new dmem_area with dmem_map
             MergeAdjacent(dmem_map, dmem_handle);
 
@@ -980,6 +1002,10 @@ u64 MemoryManager::UnmapBytesFromEntry(VAddr virtual_addr, VirtualMemoryArea vma
             phys_handle++;
         }
         ASSERT_MSG(size_to_free == 0, "Failed to unmap physical memory");
+    }
+
+    if (vma_type == VMAType::Direct) {
+        DirectAliases().Remove(virtual_addr, size_in_vma);
     }
 
     // Mark region as free and attempt to coalesce it with neighbours.

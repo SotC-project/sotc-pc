@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -234,6 +235,16 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
+    // Temporary: presented frames per second.
+    static u32 flips = 0;
+    static auto last = std::chrono::steady_clock::now();
+    ++flips;
+    if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(3)) {
+        LOG_ERROR(Lib_VideoOut, "fps {:.1f}",
+                  flips / std::chrono::duration<double>(now - last).count());
+        flips = 0;
+        last = now;
+    }
     // Update HDR status before presenting.
     presenter->SetHDR(req.port->is_hdr);
 

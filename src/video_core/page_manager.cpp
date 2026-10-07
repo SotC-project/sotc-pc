@@ -12,6 +12,7 @@
 #include "common/signal_context.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
+#include "core/direct_aliases.h"
 #include "core/memory.h"
 #include "core/signals.h"
 #include "video_core/page_manager.h"
@@ -429,6 +430,13 @@ struct SignalImpl : public PageManager::Impl {
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
         impl.Protect(address, size, perms);
+        // Direct memory can be mapped at several addresses; watch every one of them, or writes
+        // through another mapping go unnoticed.
+        // ponytail: if two aliases are both tracked, unprotecting one drops the watch on the
+        // other. Per-physical-page watch counts would fix that.
+        Core::DirectAliases().ForEachAlias(address, size, [&](VAddr alias, u64 alias_size) {
+            impl.Protect(alias, alias_size, perms);
+        });
     }
 
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
@@ -436,12 +444,17 @@ struct SignalImpl : public PageManager::Impl {
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
-        if (Common::IsWriteError(context)) {
-            return rasterizer->InvalidateMemory(addr, size, is_gpu_thread);
-        } else {
-            return rasterizer->ReadMemory(addr, size, is_gpu_thread);
-        }
-        return false;
+        const bool is_write = Common::IsWriteError(context);
+        const auto handle = [&](VAddr target, u64 target_size) {
+            return is_write ? rasterizer->InvalidateMemory(target, target_size, is_gpu_thread)
+                            : rasterizer->ReadMemory(target, target_size, is_gpu_thread);
+        };
+        bool handled = handle(addr, size);
+        // The access may have gone through another mapping of memory the GPU tracks.
+        Core::DirectAliases().ForEachAlias(addr, size, [&](VAddr alias, u64 alias_size) {
+            handled |= handle(alias, alias_size);
+        });
+        return handled;
     }
 };
 

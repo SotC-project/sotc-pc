@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
@@ -85,6 +90,61 @@ static OrbisPadButtonDataOffset SDLGamepadToOrbisButton(u8 button) {
 static Uint32 SDLCALL PollController(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
     auto* controller = reinterpret_cast<Input::GameController*>(userdata);
     controller->PollState();
+    return interval;
+}
+
+// Test driver: SOTC_SCRIPT="95:cross,100:shot,160:quit" runs pad presses, screenshots and exit at
+// the given seconds after start, so runs need no desktop focus.
+static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
+    using Libraries::Pad::OrbisPadButtonDataOffset;
+    struct Step {
+        double at;
+        std::string action;
+    };
+    static const std::vector<Step> steps = [] {
+        std::vector<Step> out;
+        std::stringstream ss{std::getenv("SOTC_SCRIPT")};
+        for (std::string item; std::getline(ss, item, ',');) {
+            const auto colon = item.find(':');
+            out.push_back({std::stod(item.substr(0, colon)), item.substr(colon + 1)});
+        }
+        return out;
+    }();
+    static const u64 start = SDL_GetTicks();
+    static size_t next = 0;
+    static u64 release_at = 0;
+    static OrbisPadButtonDataOffset held{};
+    auto* controller = reinterpret_cast<Input::GameController*>(userdata);
+    const u64 now = SDL_GetTicks();
+    if (release_at && now >= release_at) {
+        controller->Button(held, false);
+        release_at = 0;
+    }
+    if (next < steps.size() && (now - start) / 1000.0 >= steps[next].at) {
+        const std::string& action = steps[next++].action;
+        static const std::unordered_map<std::string, OrbisPadButtonDataOffset> buttons = {
+            {"cross", OrbisPadButtonDataOffset::Cross},
+            {"circle", OrbisPadButtonDataOffset::Circle},
+            {"triangle", OrbisPadButtonDataOffset::Triangle},
+            {"square", OrbisPadButtonDataOffset::Square},
+            {"options", OrbisPadButtonDataOffset::Options},
+            {"up", OrbisPadButtonDataOffset::Up},
+            {"down", OrbisPadButtonDataOffset::Down},
+            {"left", OrbisPadButtonDataOffset::Left},
+            {"right", OrbisPadButtonDataOffset::Right},
+        };
+        if (action == "shot") {
+            VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
+        } else if (action == "quit") {
+            SDL_Event e{};
+            e.type = SDL_EVENT_QUIT;
+            SDL_PushEvent(&e);
+        } else if (const auto it = buttons.find(action); it != buttons.end()) {
+            held = it->second;
+            controller->Button(held, true);
+            release_at = now + 250;
+        }
+    }
     return interval;
 }
 
@@ -344,6 +404,9 @@ void WindowSDL::InitTimers() {
         SDL_AddTimer(4, &PollController, controllers[i]);
     }
     SDL_AddTimer(33, Input::MousePolling, (void*)controllers[0]);
+    if (std::getenv("SOTC_SCRIPT")) {
+        SDL_AddTimer(50, &ScriptTick, controllers[0]);
+    }
 }
 
 void WindowSDL::RequestKeyboard() {

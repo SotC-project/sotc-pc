@@ -142,6 +142,16 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
     if (report_unhandled) {
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
+        // Host stack of the faulting thread, to symbolize crashes without a debugger.
+        void* frames[40];
+        const USHORT count = RtlCaptureStackBackTrace(0, 40, frames, nullptr);
+        std::string trace;
+        for (USHORT i = 0; i < count; ++i) {
+            trace += fmt::format("{} ", frames[i]);
+        }
+        LOG_CRITICAL(Debug, "access {:#x} rsp {:#x} stack: {}",
+                     pExp->ExceptionRecord->ExceptionInformation[1], pExp->ContextRecord->Rsp,
+                     trace);
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 

@@ -4,7 +4,12 @@
 #include <limits>
 #include <xxhash.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include "common/assert.h"
+#include "common/path_util.h"
+#include "common/io_file.h"
 #include "common/debug.h"
 #include "common/div_ceil.h"
 #include "common/hash.h"
@@ -76,6 +81,67 @@ void TextureCache::ProcessDownloadImages() {
         DownloadImageMemory(image_id, true);
     }
     download_images.clear();
+}
+
+// Debug aid: SOTC_DUMP_AT=<seconds> writes every GPU-written image once, as raw texels with a
+// small text header, to user/screenshots/dump for offline inspection.
+void TextureCache::DebugDumpImages() {
+    static const char* at = std::getenv("SOTC_DUMP_AT");
+    static const auto start = std::chrono::steady_clock::now();
+    static bool done = false;
+    if (!at || done ||
+        std::chrono::steady_clock::now() - start < std::chrono::seconds(std::atoi(at))) {
+        return;
+    }
+    done = true;
+    const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dump";
+    std::filesystem::create_directories(dir);
+    u32 count = 0;
+    for (u32 index = 0; index < 65536; ++index) {
+        const ImageId image_id{index};
+        if (!slot_images.IsAllocated(image_id)) {
+            continue;
+        }
+        Image& image = slot_images[image_id];
+        const auto& info = image.info;
+        if (False(image.flags & ImageFlagBits::GpuModified) || info.size.depth != 1 ||
+            info.resources.layers != 1 || info.num_bits == 0 || info.size.width < 64 ||
+            info.props.is_block || info.num_samples > 1 ||
+            (info.props.is_depth && info.pixel_format != vk::Format::eD32Sfloat &&
+             info.pixel_format != vk::Format::eD32SfloatS8Uint &&
+             info.pixel_format != vk::Format::eD16Unorm) ||
+            info.pitch < info.size.width) {
+            continue;
+        }
+        // Oversized on purpose: the host format can be wider than the guest one.
+        const u32 size = info.pitch * info.size.height * 16;
+        const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16);
+        const vk::BufferImageCopy copy = {
+            .bufferOffset = download.offset,
+            .bufferRowLength = info.pitch,
+            .bufferImageHeight = info.size.height,
+            .imageSubresource = {.aspectMask = info.props.is_depth
+                                                   ? vk::ImageAspectFlagBits::eDepth
+                                                   : vk::ImageAspectFlagBits::eColor,
+                                 .mipLevel = 0,
+                                 .baseArrayLayer = 0,
+                                 .layerCount = 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {info.size.width, info.size.height, 1},
+        };
+        runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+        scheduler.Finish();
+        download.Invalidate();
+        const auto name = fmt::format("{:03}_{:x}_{}x{}_p{}_b{}_{}", count++, info.guest_address,
+                                      info.size.width, info.size.height, info.pitch,
+                                      info.num_bits, vk::to_string(info.pixel_format));
+        Common::FS::IOFile file{dir / (name + ".raw"), Common::FS::FileAccessMode::Create};
+        const u32 texel_bytes = info.props.is_depth
+                                    ? (info.pixel_format == vk::Format::eD16Unorm ? 2 : 4)
+                                    : info.num_bits / 8;
+        file.WriteRaw<u8>(download.mapped, info.pitch * info.size.height * texel_bytes);
+    }
+    LOG_ERROR(Render, "Dumped {} GPU images", count);
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {

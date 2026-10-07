@@ -2,8 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <magic_enum/magic_enum.hpp>
 
+#include <cstdlib>
+#include <unordered_map>
+#include <vector>
+#include <unordered_set>
+#include <xxhash.h>
 #include "common/alignment.h"
 #include "core/debug_state.h"
 #include "core/memory.h"
@@ -89,7 +95,31 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 
 BufferCache::~BufferCache() = default;
 
+// Re-upload read-only ranges from guest memory once per frame unless the GPU wrote them in the
+// last couple of frames. Write tracking alone leaves this engine's per-frame ring allocations
+// stale on the GPU. SOTC_NO_FORCE_UPLOAD=1 restores tracking-only behaviour.
+// ponytail: hashes every bound range once per frame; a GPU write to the same address older than
+// two frames with unchanged guest bytes would go unnoticed.
+static u64 g_frame = 0;
+// GPU-written ranges of the current frame and of the two before it.
+static std::array<VideoCore::RangeSet, 3> g_recent_writes;
+struct UploadState {
+    u64 frame;
+    u64 hash;
+};
+static std::unordered_map<u64, UploadState> g_last_upload;
+
+// Temporary cost counters for the forced-upload path.
+static u64 g_hash_bytes = 0, g_hash_ranges = 0, g_hash_changed = 0, g_sync_calls = 0;
+
 void BufferCache::TickFrame() {
+    ++g_frame;
+    if (g_frame % 120 == 0) {
+        LOG_ERROR(Render, "force-upload/120f: sync calls {} hashed ranges {} MB {} changed {}",
+                  g_sync_calls, g_hash_ranges, g_hash_bytes >> 20, g_hash_changed);
+        g_hash_bytes = g_hash_ranges = g_hash_changed = g_sync_calls = 0;
+    }
+    g_recent_writes[g_frame % g_recent_writes.size()].Clear();
     if (std::exchange(fault_process_pending, false)) {
         fault_manager->ProcessFaultBuffer();
     }
@@ -167,10 +197,56 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     memory_tracker->UnmarkRegionAsGpuModified(device_addr, size, false);
 }
 
+// Copies GPU-written ranges back into guest memory so CPU-side readers see what compute shaders
+// produced: the game itself (culling results) and the SRT walker that flattens shader constants.
+// One GPU flush covers the whole batch.
+void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
+    if (ranges.empty()) {
+        return;
+    }
+    u64 total = 0;
+    for (const auto& [addr, size] : ranges) {
+        total += Common::AlignUp(size, 64);
+    }
+    const auto download = staging_pool.Request(total, VideoCore::MemoryType::HostCached);
+    u64 cursor = 0;
+    for (const auto& [addr, size] : ranges) {
+        const auto [buffer, offset] = ObtainBuffer(addr, size, false);
+        const vk::BufferCopy copy{offset, download.offset + cursor, size};
+        runtime.CopyBuffer(buffer, download.buffer, std::span{&copy, 1});
+        cursor += Common::AlignUp(size, 64);
+    }
+    scheduler.Finish();
+    download.buffer->Invalidate(download.offset, total);
+    cursor = 0;
+    for (const auto& [addr, size] : ranges) {
+        memory->TryWriteBacking(std::bit_cast<u8*>(addr), download.mapped + cursor, size);
+        cursor += Common::AlignUp(size, 64);
+    }
+}
+
+// Debug aid: bytes of the GPU-side copy of a range that differ from guest memory.
+u64 BufferCache::DebugMismatch(VAddr device_addr, u32 size) {
+    const auto [buffer, offset] = ObtainBuffer(device_addr, size, false);
+    const auto download = staging_pool.Request(size, VideoCore::MemoryType::HostCached);
+    const vk::BufferCopy copy{offset, download.offset, size};
+    runtime.CopyBuffer(buffer, download.buffer, std::span{&copy, 1});
+    scheduler.Finish();
+    download.buffer->Invalidate(download.offset, size);
+    u64 mismatched = 0;
+    const u8* guest = std::bit_cast<const u8*>(device_addr);
+    for (u32 i = 0; i < size; ++i) {
+        mismatched += guest[i] != download.mapped[i];
+    }
+    return mismatched;
+}
+
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
-    if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size)) {
+    static const bool stream_always = std::getenv("SOTC_STREAM_ALWAYS") != nullptr;
+    if (!is_written && size <= STREAM_THRESHOLD &&
+        (stream_always || !IsRegionGpuModified(device_addr, size))) {
         const auto [data, offset] = stream_buffer.Map(size, instance.UniformMinAlignment());
         memory->CopySparseMemory(device_addr, data, size);
         stream_buffer.Commit();
@@ -183,6 +259,11 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
     if (is_written) {
         gpu_modified_ranges.Add(device_addr, size);
+        // Temporary: list distinct GPU-written ranges.
+        static std::unordered_set<u64> seen;
+        if (size >= 0x1000 && seen.size() < 400 && seen.insert(device_addr ^ (u64(size) << 40)).second) {
+            LOG_ERROR(Render, "gpu-written buffer {:#x} size {:#x}", device_addr, size);
+        }
     }
     return {arena, arena->Offset(device_addr)};
 }
@@ -332,6 +413,40 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
                                     bool is_written, bool is_texel_buffer) {
+    static const bool force_upload = std::getenv("SOTC_NO_FORCE_UPLOAD") == nullptr;
+    ++g_sync_calls;
+    if (force_upload) {
+        if (is_written) {
+            g_recent_writes[g_frame % g_recent_writes.size()].Add(device_addr, size);
+        } else {
+            UploadState& last = g_last_upload[device_addr ^ (u64(size) << 40)];
+            const auto gpu_recent = [&] {
+                return std::ranges::any_of(g_recent_writes, [&](const auto& set) {
+                    return set.Intersects(device_addr, size);
+                });
+            };
+            // The engine also binds "unbounded" buffers clamped to hundreds of MB; hashing those
+            // every frame is not affordable, so they stay on write tracking alone.
+            static constexpr u32 MaxForcedSize = 4_MB;
+            if (size <= MaxForcedSize && last.frame != g_frame + 1 && !gpu_recent() &&
+                memory->IsValidMapping(device_addr, size)) {
+                last.frame = g_frame + 1;
+                // Only pay for the upload when guest memory actually changed.
+                // Hashed through the backing pages: the range may cross unreadable guest pages.
+                const u64 hash = memory->HashSparseMemory(device_addr, size);
+                g_hash_bytes += size;
+                ++g_hash_ranges;
+                g_hash_changed += hash != last.hash;
+                if (hash != last.hash) {
+                    last.hash = hash;
+                    // ponytail: goes through the tracker, which toggles page protections per
+                    // changed range; a direct staging copy here lost the device and needs
+                    // investigating before it can replace this.
+                    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+                }
+            }
+        }
+    }
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {

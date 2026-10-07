@@ -468,6 +468,8 @@ set(SYSTEM_LIBS src/core/libraries/system/commondialog.cpp
                 src/core/libraries/ngs2/ngs2_sampler.h
                 src/core/libraries/ngs2/ngs2_submixer.cpp
                 src/core/libraries/ngs2/ngs2_submixer.h
+                 src/core/libraries/ngs2/ngs2_synth.cpp
+                 src/core/libraries/ngs2/ngs2_synth.h
                 src/core/libraries/ajm/ajm_error.h
                 src/core/libraries/audio3d/audio3d.cpp
                 src/core/libraries/audio3d/audio3d.h

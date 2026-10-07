@@ -250,6 +250,9 @@ public:
 
     u64 ClampRangeSize(VAddr virtual_addr, u64 size);
 
+    /// Hashes guest memory, skipping pages without backing.
+    u64 HashSparseMemory(VAddr virtual_addr, u64 size);
+
     void SetPrtArea(u32 id, VAddr address, u64 size);
 
     void CopySparseMemory(VAddr source, u8* dest, u64 size);

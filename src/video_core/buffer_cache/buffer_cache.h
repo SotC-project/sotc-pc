@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <span>
+#include <utility>
 #include <deque>
 #include <boost/container/small_vector.hpp>
 
@@ -100,6 +102,11 @@ public:
 
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
+
+    u64 DebugMismatch(VAddr device_addr, u32 size);
+
+    /// Copies GPU-written ranges back into guest memory with a single flush.
+    void MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges);
 
 private:
     struct ArenaBinds {

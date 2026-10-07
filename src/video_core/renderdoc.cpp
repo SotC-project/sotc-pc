@@ -4,6 +4,8 @@
 #include "common/assert.h"
 #include "common/logging/formatter.h"
 #include "core/emulator_settings.h"
+#include <cstdlib>
+#include <string>
 #include "video_core/renderdoc.h"
 
 #include <atomic>
@@ -93,9 +95,21 @@ void LoadRenderDoc() {
     }
 }
 
+void TriggerCapture();
+
 void StartCapture() {
     if (!rdoc_api) {
         return;
+    }
+
+    // Debug aid: SOTC_CAPTURE_FRAMES="1200,3600" captures those frame numbers.
+    static u64 frame = 0;
+    static const std::string capture_frames = [] {
+        const char* v = std::getenv("SOTC_CAPTURE_FRAMES");
+        return "," + std::string(v ? v : "") + ",";
+    }();
+    if (capture_frames.find("," + std::to_string(++frame) + ",") != std::string::npos) {
+        TriggerCapture();
     }
 
     if (capture_state == CaptureState::Triggered) {

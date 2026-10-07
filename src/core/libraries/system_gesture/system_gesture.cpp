@@ -69,7 +69,7 @@ int PS4_SYSV_ABI sceSystemGestureGetTouchEvents() {
 }
 
 int PS4_SYSV_ABI sceSystemGestureGetTouchEventsCount() {
-    LOG_ERROR(Lib_SystemGesture, "(STUBBED) called");
+    LOG_TRACE(Lib_SystemGesture, "(STUBBED) called");
     return ORBIS_OK;
 }
 
@@ -109,12 +109,12 @@ int PS4_SYSV_ABI sceSystemGestureUpdateAllTouchRecognizer() {
 }
 
 int PS4_SYSV_ABI sceSystemGestureUpdatePrimitiveTouchRecognizer() {
-    LOG_ERROR(Lib_SystemGesture, "(STUBBED) called");
+    LOG_TRACE(Lib_SystemGesture, "(STUBBED) called");
     return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI sceSystemGestureUpdateTouchRecognizer() {
-    LOG_ERROR(Lib_SystemGesture, "(STUBBED) called");
+    LOG_TRACE(Lib_SystemGesture, "(STUBBED) called");
     return ORBIS_OK;
 }
 
