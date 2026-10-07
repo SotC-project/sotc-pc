@@ -230,6 +230,25 @@ struct DrawStats {
 };
 static DrawStats g_stats;
 
+// Temporary: SOTC_BISECT_AT=<seconds> then withholds one compute shader's mirror at a time for
+// a few frames and logs the indirect draw count, to find the outputs the game reads on the CPU.
+struct MirrorBisect {
+    std::vector<u64> hashes;
+    size_t index{};
+    u64 frame{};       // frames since the current step began
+    u64 draws{};       // indirect draws in the measured frames of the step
+    u64 total_draws{}; // indirect draws this frame
+    bool active{};
+    u64 Skipped() const {
+        return active && index < hashes.size() && frame < 5 ? hashes[index] : 0;
+    }
+};
+static MirrorBisect g_bisect;
+
+// Set when a frame submits far more draws than the game ever intends, which is what stale
+// culling results look like: some other shader's output is being read back, so mirror them all.
+static bool g_mirror_everything = false;
+
 struct ScopedNs {
     u64& sink;
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -339,6 +358,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
     ++g_stats.indirect;
+    ++g_bisect.total_draws;
     ScopedNs total_timer{g_stats.ns_draw_total};
 
     scheduler.PopPendingOperations();
@@ -614,13 +634,43 @@ void Rasterizer::DispatchDirect() {
     // which are resolved on the CPU; keep guest memory in step with them.
     static const u32 mirror_limit = [] {
         const char* kb = std::getenv("SOTC_MIRROR_KB");
-        return (kb ? u32(std::atoi(kb)) : 16u) << 10;
+        const char* bytes = std::getenv("SOTC_MIRROR_BYTES");
+        return bytes ? u32(std::atoi(bytes)) : (kb ? u32(std::atoi(kb)) : 16u) << 10;
     }();
     // 0x50784801 builds the per-view camera block that the very next draws read through the SRT
     // walker, so it is mirrored immediately; everything else waits for the next sync point.
     const bool mirror_now = cs.pgm_hash == 0x50784801;
     boost::container::small_vector<std::pair<VAddr, u32>, 4> mirrors;
+    // Experiment: SOTC_MIRROR_SKIP=hash,hash leaves those shaders' outputs on the GPU only.
+    // SOTC_MIRROR_ONLY=hash,hash mirrors nothing but those shaders' outputs.
+    static const auto hash_list = [](const char* name) {
+        std::vector<u64> list;
+        const char* value = std::getenv(name);
+        for (const char* cur = value; cur && *cur;) {
+            char* end = nullptr;
+            list.push_back(std::strtoull(cur, &end, 16));
+            cur = *end ? end + 1 : end;
+        }
+        return list;
+    };
+    static const std::vector<u64> mirror_skip = hash_list("SOTC_MIRROR_SKIP");
+    // Only 0x4defcf7f and 0x2e0f474b (culling) are read back by the game itself, but the other
+    // outputs must still reach guest memory: forced re-uploads would otherwise replace them
+    // with stale data (device loss in the new-game fly-in), so everything is mirrored.
+    static const std::vector<u64> mirror_only = hash_list("SOTC_MIRROR_ONLY");
+    static std::unordered_map<u64, std::pair<u32, u64>> mirror_histogram;
+    if (!g_bisect.active && std::ranges::find(g_bisect.hashes, u64(cs.pgm_hash)) == g_bisect.hashes.end()) {
+        g_bisect.hashes.push_back(cs.pgm_hash);
+    }
+    const bool skip_mirror =
+        g_bisect.Skipped() == cs.pgm_hash ||
+        std::ranges::find(mirror_skip, u64(cs.pgm_hash)) != mirror_skip.end() ||
+        (!mirror_only.empty() && !g_mirror_everything &&
+         std::ranges::find(mirror_only, u64(cs.pgm_hash)) == mirror_only.end());
     for (const auto& desc : cs.buffers) {
+        if (skip_mirror) {
+            break;
+        }
 
         if (desc.buffer_type != Shader::BufferType::Guest || !desc.is_written) {
             continue;
@@ -631,6 +681,25 @@ void Rasterizer::DispatchDirect() {
         }
     }
     ResetBindings(true);
+    {
+        auto& entry = mirror_histogram[cs.pgm_hash];
+        for (const auto& [address, size] : mirrors) {
+            ++entry.first;
+            entry.second += size;
+        }
+        static auto last = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(6)) {
+            last = now;
+            std::string line;
+            for (const auto& [hash, value] : mirror_histogram) {
+                if (value.first) {
+                    line += fmt::format("{:#x}:{}x{}B ", hash, value.first, value.second / value.first);
+                }
+            }
+            LOG_ERROR(Render, "mirrors/6s: {}", line);
+            mirror_histogram.clear();
+        }
+    }
     g_stats.mirrors += u32(mirrors.size());
     pending_mirrors.insert(pending_mirrors.end(), mirrors.begin(), mirrors.end());
     if (mirror_now) {
@@ -711,6 +780,34 @@ void Rasterizer::FlushMirrors(u32 source) {
 
 void Rasterizer::OnSubmit() {
     FlushMirrors(8);
+    {
+        static const char* at = std::getenv("SOTC_BISECT_AT");
+        static const auto start = std::chrono::steady_clock::now();
+        if (at && !g_bisect.active &&
+            std::chrono::steady_clock::now() - start >= std::chrono::seconds(std::atoi(at))) {
+            g_bisect.active = true;
+            g_bisect.frame = 0;
+            g_bisect.draws = 0;
+            LOG_ERROR(Render, "bisect: start, {} shaders", g_bisect.hashes.size());
+        } else if (g_bisect.active && g_bisect.index < g_bisect.hashes.size()) {
+            if (g_bisect.frame >= 2 && g_bisect.frame < 5) {
+                g_bisect.draws += g_bisect.total_draws;
+            }
+            if (++g_bisect.frame == 8) {
+                LOG_ERROR(Render, "bisect: {:#x} indirect/frame {}", g_bisect.hashes[g_bisect.index],
+                          g_bisect.draws / 3);
+                ++g_bisect.index;
+                g_bisect.frame = 0;
+                g_bisect.draws = 0;
+            }
+        }
+        if (!g_bisect.active && !g_mirror_everything && g_bisect.total_draws > 20000) {
+            g_mirror_everything = true;
+            LOG_ERROR(Render, "{} indirect draws in one frame: mirroring every compute output",
+                      g_bisect.total_draws);
+        }
+        g_bisect.total_draws = 0;
+    }
     ++g_stats.frames;
     texture_cache.DebugDumpImages();
     buffer_cache.TickFrame();
