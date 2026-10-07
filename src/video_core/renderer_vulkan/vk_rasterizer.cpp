@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <intrin.h>
 #include <unordered_map>
 #include <vector>
 #include <cstdlib>
@@ -192,6 +193,9 @@ struct DrawStats {
     u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
     u64 ns_pipeline{}, ns_bind{}, ns_draw_total{}, ns_dispatch_total{}, ns_mirror{};
     u32 flushes{};
+    u64 ns_stage[8]{};
+    u64 ns_bind_buffers{}, ns_bind_textures{};
+    u64 tsc_stage3{};
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
@@ -208,6 +212,18 @@ struct DrawStats {
                   ns_pipeline / 1000000, ns_bind / 1000000, ns_draw_total / 1000000,
                   ns_dispatch_total / 1000000, ns_mirror / 1000000, flushes);
         flushes = 0;
+        LOG_ERROR(Render, "indirect stages ms: prepare {} begin {} vertex {} args(tsc/1e6) {} "
+                          "descriptors {} dynstate {} sched-begin {} draw+reset {}",
+                  ns_stage[0] / 1000000, ns_stage[1] / 1000000, ns_stage[2] / 1000000,
+                  tsc_stage3 / 1000000, ns_stage[4] / 1000000, ns_stage[5] / 1000000,
+                  ns_stage[6] / 1000000, ns_stage[7] / 1000000);
+        LOG_ERROR(Render, "bind split ms: buffers {} textures {}", ns_bind_buffers / 1000000,
+                  ns_bind_textures / 1000000);
+        ns_bind_buffers = ns_bind_textures = 0;
+        for (auto& v : ns_stage) {
+            v = 0;
+        }
+        tsc_stage3 = 0;
         ns_pipeline = ns_bind = ns_draw_total = ns_dispatch_total = ns_mirror = 0;
         filtered = no_pipeline = bind_failed = drawn = indirect = dispatch = verts_max = mirrors = frames = 0;
     }
@@ -343,11 +359,17 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         return;
     }
 
-    PrepareRenderState(pipeline);
+    {
+        ScopedNs t{g_stats.ns_stage[0]};
+        PrepareRenderState(pipeline);
+    }
     if (ScopedNs timer{g_stats.ns_bind}; !BindResources(pipeline)) {
         return;
     }
-    const auto state = BeginRendering(pipeline);
+    const auto state = [&] {
+        ScopedNs t{g_stats.ns_stage[1]};
+        return BeginRendering(pipeline);
+    }();
 
     if (DrawLogActive()) {
         const auto& regs = liverpool->regs;
@@ -462,10 +484,14 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         }
     }
 
-    BindVertexBuffers(pipeline);
-    if (is_indexed) {
-        BindIndexBuffer();
+    {
+        ScopedNs t{g_stats.ns_stage[2]};
+        BindVertexBuffers(pipeline);
+        if (is_indexed) {
+            BindIndexBuffer();
+        }
     }
+    u64 stage3_start = __rdtsc();
 
     const auto size = stride * max_count;
     const auto [buffer, base] = buffer_cache.ObtainBuffer(arg_address + offset, size, false);
@@ -485,9 +511,20 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         runtime.FlushBarriers();
     }
 
-    pipeline->BindResources(set_writes, push_data);
-    UpdateDynamicState(pipeline, is_indexed);
-    scheduler.BeginRendering(state);
+    g_stats.tsc_stage3 += __rdtsc() - stage3_start;
+    {
+        ScopedNs t{g_stats.ns_stage[4]};
+        pipeline->BindResources(set_writes, push_data);
+    }
+    {
+        ScopedNs t{g_stats.ns_stage[5]};
+        UpdateDynamicState(pipeline, is_indexed);
+    }
+    {
+        ScopedNs t{g_stats.ns_stage[6]};
+        scheduler.BeginRendering(state);
+    }
+    ScopedNs tail_timer{g_stats.ns_stage[7]};
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
@@ -709,8 +746,14 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
                           stage->samplers.size());
-        BindBuffers(*stage, binding, push_data);
-        BindTextures(*stage, binding);
+        {
+            ScopedNs t{g_stats.ns_bind_buffers};
+            BindBuffers(*stage, binding, push_data);
+        }
+        {
+            ScopedNs t{g_stats.ns_bind_textures};
+            BindTextures(*stage, binding);
+        }
         uses_dma |= stage->uses_dma;
     }
 
