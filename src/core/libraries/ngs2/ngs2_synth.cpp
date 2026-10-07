@@ -113,7 +113,6 @@ struct Voice {
 
     // Bus voices (submixer, mastering, effects): planar input accumulated by upstream voices.
     u32 channels = 2;
-    int matrix_zero = -1;
     u32 output_id{};
     OrbisNgs2UserFxProcessHandler fx_handler{};
     uintptr_t fx_data[3]{};
@@ -505,42 +504,6 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     switch (p->id) {
     case VoiceMatrixLevels: {
         const auto& m = As<OrbisNgs2VoiceMatrixLevelsParam>(p);
-        {
-            // Temporary: how many matrix updates are all-zero, and which entries are used.
-            static u32 zero_calls = 0, nonzero_calls = 0;
-            static u64 used_mask = 0;
-            float top = 0;
-            for (u32 k = 0; m.aLevel && k < std::min<u32>(m.numLevels, 64); ++k) {
-                top = std::max(top, std::abs(m.aLevel[k]));
-                if (m.aLevel[k] != 0.0f) {
-                    used_mask |= 1ull << k;
-                }
-            }
-            (top == 0.0f ? zero_calls : nonzero_calls)++;
-            static int transitions = 0;
-            const int now_zero = top == 0.0f;
-            if (v.matrix_zero != now_zero && transitions < 150) {
-                ++transitions;
-                LOG_ERROR(Lib_Ngs2, "voice {:x} ch {} matrix {} (top {:.3f}) state {:#x} decoded {}",
-                          reinterpret_cast<uintptr_t>(&v) & 0xfffff, v.format.numChannels,
-                          now_zero ? "ZERO" : "audible", top, v.state, v.decoded_samples);
-            }
-            v.matrix_zero = now_zero;
-            if ((zero_calls + nonzero_calls) % 50 == 0) {
-                LOG_ERROR(Lib_Ngs2, "matrix calls: zero {} nonzero {} used entries {:#x}", zero_calls,
-                          nonzero_calls, used_mask);
-            }
-        }
-        static int matrix_traced = 0;
-        if (matrix_traced < 40 && m.aLevel) {
-            ++matrix_traced;
-            std::string values;
-            for (u32 k = 0; k < std::min<u32>(m.numLevels, 16); ++k) {
-                values += fmt::format("{:.3f} ", m.aLevel[k]);
-            }
-            LOG_ERROR(Lib_Ngs2, "matrix: sampler {} id {} levels {} size {} : {}", IsSampler(v),
-                      m.matrixId, m.numLevels, p->size, values);
-        }
         if (m.matrixId < 64 && m.aLevel && m.numLevels <= ORBIS_NGS2_MAX_MATRIX_LEVELS) {
             if (m.matrixId >= v.matrices.size()) {
                 v.matrices.resize(m.matrixId + 1);
@@ -576,10 +539,11 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     case VoiceKickEvent:
         {
             static int events = 0;
-            if (IsSampler(v) && events++ < 120) {
-                LOG_ERROR(Lib_Ngs2, "voice {:x} event {} state {:#x}",
+            if (IsSampler(v) && events++ < 400) {
+                LOG_ERROR(Lib_Ngs2, "voice {:x} event {} state {:#x} decoded {} render {}",
                           reinterpret_cast<uintptr_t>(&v) & 0xfffff,
-                          As<OrbisNgs2VoiceEventParam>(p).eventId, v.state);
+                          As<OrbisNgs2VoiceEventParam>(p).eventId, v.state, v.decoded_samples,
+                          g_diag.renders);
             }
         }
         switch (As<OrbisNgs2VoiceEventParam>(p).eventId) {
@@ -759,7 +723,17 @@ s32 VoiceGetState(OrbisNgs2Handle voice_handle, OrbisNgs2VoiceState* out_state, 
         auto* sampler = reinterpret_cast<OrbisNgs2SamplerVoiceState*>(out_state);
         sampler->envelopeHeight = 1.0f;
         sampler->numDecodedSamples = voice->decoded_samples;
+        // Streams watch this to know when to queue the next chunk, so it has to advance while
+        // a block plays, not only when it ends.
         sampler->decodedDataSize = voice->decoded_bytes;
+        if (voice->block_open && !voice->blocks.empty()) {
+            const u64 size = voice->blocks.front().info.dataSize;
+            const u64 total = voice->pcm.size();
+            sampler->decodedDataSize +=
+                voice->format.waveformType == Atrac9
+                    ? voice->block_off
+                    : (total ? size * std::min<u64>(voice->pcm_pos * voice->format.numChannels, total) / total : 0);
+        }
         sampler->userData = voice->user_data;
         sampler->waveformData = voice->waveform_data;
     }
