@@ -14,6 +14,7 @@
 #include <mutex>
 #include <vector>
 
+#include <fmt/format.h>
 #include <libatrac9.h>
 
 #include "common/logging/log.h"
@@ -146,6 +147,14 @@ struct Rack {
 };
 
 std::recursive_mutex g_mutex;
+
+// Temporary diagnostics for bringing the signal path up.
+struct Diag {
+    float sampler_peak, sampler_port_volume, matrix_peak, bus_peak;
+    u64 sampler_ports, pcm_frames, blocks, bus_voices_used, bus_ports, matrices, ports_with_matrix;
+    u32 renders;
+};
+Diag g_diag{};
 std::vector<std::unique_ptr<Rack>> g_racks;
 
 // Resolves a guest handle to a voice. Handles are our own pointers, but they come back from the
@@ -380,7 +389,8 @@ void Route(Voice& v, const float* src, u32 src_ch, u32 frames) {
         dest->bus_used = true;
         const u32 dest_ch = std::clamp<u32>(dest->channels, 1, MaxChannels);
         const std::vector<float>* matrix = nullptr;
-        if (port.matrix_id >= 0 && size_t(port.matrix_id) < v.matrices.size() &&
+        static const bool ignore_matrix = std::getenv("SOTC_AUDIO_NO_MATRIX") != nullptr;
+        if (!ignore_matrix && port.matrix_id >= 0 && size_t(port.matrix_id) < v.matrices.size() &&
             !v.matrices[port.matrix_id].empty()) {
             matrix = &v.matrices[port.matrix_id];
         }
@@ -388,8 +398,9 @@ void Route(Voice& v, const float* src, u32 src_ch, u32 frames) {
             for (u32 o = 0; o < dest_ch; ++o) {
                 float level;
                 if (matrix) {
+                    // Levels are stored one row per output channel: level[out * inputs + in].
                     const u32 outs = u32(matrix->size()) / src_ch;
-                    level = o < outs ? (*matrix)[in * outs + o] : 0.0f;
+                    level = o < outs ? (*matrix)[o * src_ch + in] : 0.0f;
                 } else if (src_ch == 1) {
                     level = o < 2 ? 0.7071f : 0.0f;
                 } else {
@@ -456,6 +467,33 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     switch (p->id) {
     case VoiceMatrixLevels: {
         const auto& m = As<OrbisNgs2VoiceMatrixLevelsParam>(p);
+        {
+            // Temporary: how many matrix updates are all-zero, and which entries are used.
+            static u32 zero_calls = 0, nonzero_calls = 0;
+            static u64 used_mask = 0;
+            float top = 0;
+            for (u32 k = 0; m.aLevel && k < std::min<u32>(m.numLevels, 64); ++k) {
+                top = std::max(top, std::abs(m.aLevel[k]));
+                if (m.aLevel[k] != 0.0f) {
+                    used_mask |= 1ull << k;
+                }
+            }
+            (top == 0.0f ? zero_calls : nonzero_calls)++;
+            if ((zero_calls + nonzero_calls) % 50 == 0) {
+                LOG_ERROR(Lib_Ngs2, "matrix calls: zero {} nonzero {} used entries {:#x}", zero_calls,
+                          nonzero_calls, used_mask);
+            }
+        }
+        static int matrix_traced = 0;
+        if (matrix_traced < 40 && m.aLevel) {
+            ++matrix_traced;
+            std::string values;
+            for (u32 k = 0; k < std::min<u32>(m.numLevels, 16); ++k) {
+                values += fmt::format("{:.3f} ", m.aLevel[k]);
+            }
+            LOG_ERROR(Lib_Ngs2, "matrix: sampler {} id {} levels {} size {} : {}", IsSampler(v),
+                      m.matrixId, m.numLevels, p->size, values);
+        }
         if (m.matrixId < 64 && m.aLevel && m.numLevels <= ORBIS_NGS2_MAX_MATRIX_LEVELS) {
             if (m.matrixId >= v.matrices.size()) {
                 v.matrices.resize(m.matrixId + 1);
@@ -694,6 +732,24 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                 continue;
             }
             const u32 ch = RenderSampler(*voice, scratch.data(), frames);
+            for (u32 n = 0; n < ch * frames; ++n) {
+                g_diag.sampler_peak = std::max(g_diag.sampler_peak, std::abs(scratch[n]));
+            }
+            for (const Port& port : voice->ports) {
+                g_diag.sampler_ports += port.dest != nullptr;
+                g_diag.sampler_port_volume = std::max(g_diag.sampler_port_volume, port.volume);
+                if (port.matrix_id >= 0 && size_t(port.matrix_id) < voice->matrices.size()) {
+                    for (float level : voice->matrices[port.matrix_id]) {
+                        g_diag.matrix_peak = std::max(g_diag.matrix_peak, level);
+                    }
+                }
+            }
+            g_diag.matrices += voice->matrices.size();
+            for (const Port& port : voice->ports) {
+                g_diag.ports_with_matrix += port.matrix_id >= 0;
+            }
+            g_diag.pcm_frames += voice->pcm.size();
+            g_diag.blocks += voice->blocks.size();
             Route(*voice, scratch.data(), ch, frames);
         }
     }
@@ -731,7 +787,27 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             };
             voice->fx_handler(&context);
         }
+        ++g_diag.bus_voices_used;
+        for (const Port& port : voice->ports) {
+            g_diag.bus_ports += port.dest != nullptr;
+        }
+        for (u32 n = 0; n < ch * frames; ++n) {
+            g_diag.bus_peak = std::max(g_diag.bus_peak, std::abs(scratch[n]));
+        }
         Route(*voice, scratch.data(), ch, frames);
+    }
+    if (++g_diag.renders % 1000 == 0) {
+        LOG_ERROR(Lib_Ngs2, "synth diag: sampler peak {:.3f} patched ports {} port vol {:.2f} "
+                            "matrix peak {:.3f} pcm {} blocks {} | bus voices used {} patched {} "
+                            "peak after fx {:.3f}",
+                  g_diag.sampler_peak, g_diag.sampler_ports, g_diag.sampler_port_volume,
+                  g_diag.matrix_peak, g_diag.pcm_frames, g_diag.blocks, g_diag.bus_voices_used,
+                  g_diag.bus_ports, g_diag.bus_peak);
+        LOG_ERROR(Lib_Ngs2, "synth diag2: matrices {} ports with matrix {}", g_diag.matrices,
+                  g_diag.ports_with_matrix);
+        const u32 renders = g_diag.renders;
+        g_diag = {};
+        g_diag.renders = renders;
     }
 
     for (u32 i = 0; buffers && i < num_buffers; ++i) {
@@ -747,6 +823,34 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
         }
         if (master) {
             WriteOutput(*master, buffers[i], frames);
+            // Temporary: output level meter, to confirm the synth produces signal.
+            static float peak[4]{};
+            static u32 playing_max = 0, renders = 0;
+            if (i < 4 && master->bus_used) {
+                for (u32 c = 0; c < 2; ++c) {
+                    for (u32 n = 0; n < frames; ++n) {
+                        peak[i] = std::max(peak[i], std::abs(master->bus[c * MaxGrain + n]));
+                    }
+                }
+            }
+            if (i == 0) {
+                u32 playing = 0;
+                for (auto& rack : g_racks) {
+                    if (rack->id == RackSampler) {
+                        for (auto& voice : rack->voices) {
+                            playing += (voice->state & Playing) != 0;
+                        }
+                    }
+                }
+                playing_max = std::max(playing_max, playing);
+                if (++renders % 1000 == 0) {
+                    LOG_ERROR(Lib_Ngs2, "audio/1000 grains: peak out0 {:.3f} out1 {:.3f} out2 {:.3f}, "
+                                        "max playing sampler voices {}",
+                              peak[0], peak[1], peak[2], playing_max);
+                    peak[0] = peak[1] = peak[2] = peak[3] = 0;
+                    playing_max = 0;
+                }
+            }
         } else {
             std::memset(buffers[i].buffer, 0, buffers[i].bufferSize);
         }
