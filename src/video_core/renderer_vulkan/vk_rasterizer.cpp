@@ -187,6 +187,7 @@ void Rasterizer::EliminateFastClear() {
 // Temporary render statistics, printed every few seconds.
 struct DrawStats {
     u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
+    u64 ns_pipeline{}, ns_bind{}, ns_draw_total{}, ns_dispatch_total{}, ns_mirror{};
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
@@ -198,10 +199,24 @@ struct DrawStats {
                           "bind_failed {} max_indices {} mirrors {} submits {}",
                   drawn, indirect, dispatch, filtered, no_pipeline, bind_failed, verts_max, mirrors,
                   frames);
+        LOG_ERROR(Render, "time/3s ms: pipeline {} bind {} draws {} dispatches {} mirror {}",
+                  ns_pipeline / 1000000, ns_bind / 1000000, ns_draw_total / 1000000,
+                  ns_dispatch_total / 1000000, ns_mirror / 1000000);
+        ns_pipeline = ns_bind = ns_draw_total = ns_dispatch_total = ns_mirror = 0;
         filtered = no_pipeline = bind_failed = drawn = indirect = dispatch = verts_max = mirrors = frames = 0;
     }
 };
 static DrawStats g_stats;
+
+struct ScopedNs {
+    u64& sink;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~ScopedNs() {
+        sink += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+    }
+};
 static bool CoversViewBlock(VAddr addr, u64 size);
 
 // Debug aid: SOTC_DRAWLOG_AT=<seconds> logs every draw for 50 ms.
@@ -301,6 +316,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
     ++g_stats.indirect;
+    ScopedNs total_timer{g_stats.ns_draw_total};
 
     scheduler.PopPendingOperations();
 
@@ -312,13 +328,16 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         .vertex_sgpr_offset = vertex_sgpr_offset,
         .instance_sgpr_offset = instance_sgpr_offset,
     };
-    const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline(params);
+    const GraphicsPipeline* pipeline = [&] {
+        ScopedNs timer{g_stats.ns_pipeline};
+        return pipeline_cache.GetGraphicsPipeline(params);
+    }();
     if (!pipeline) {
         return;
     }
 
     PrepareRenderState(pipeline);
-    if (!BindResources(pipeline)) {
+    if (ScopedNs timer{g_stats.ns_bind}; !BindResources(pipeline)) {
         return;
     }
     const auto state = BeginRendering(pipeline);
@@ -494,6 +513,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 void Rasterizer::DispatchDirect() {
     RENDERER_TRACE;
     ++g_stats.dispatch;
+    ScopedNs total_timer{g_stats.ns_dispatch_total};
 
     scheduler.PopPendingOperations();
 
@@ -508,7 +528,7 @@ void Rasterizer::DispatchDirect() {
         return;
     }
 
-    if (!BindResources(pipeline)) {
+    if (ScopedNs timer{g_stats.ns_bind}; !BindResources(pipeline)) {
         return;
     }
 
@@ -558,6 +578,7 @@ void Rasterizer::DispatchDirect() {
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     RENDERER_TRACE;
     ++g_stats.dispatch;
+    ScopedNs total_timer{g_stats.ns_dispatch_total};
 
     scheduler.PopPendingOperations();
 
@@ -567,7 +588,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
         return;
     }
 
-    if (!BindResources(pipeline)) {
+    if (ScopedNs timer{g_stats.ns_bind}; !BindResources(pipeline)) {
         return;
     }
 
@@ -605,6 +626,7 @@ void Rasterizer::FlushMirrors() {
     if (pending_mirrors.empty()) {
         return;
     }
+    ScopedNs timer{g_stats.ns_mirror};
     std::ranges::sort(pending_mirrors);
     const auto dup = std::ranges::unique(pending_mirrors);
     pending_mirrors.erase(dup.begin(), dup.end());
