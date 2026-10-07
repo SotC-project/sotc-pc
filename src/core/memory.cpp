@@ -10,6 +10,7 @@
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/process.h"
+#define XXH_STATIC_LINKING_ONLY // for a stack-allocated XXH3_state_t
 #include <xxhash.h>
 #include "core/direct_aliases.h"
 #include "core/memory.h"
