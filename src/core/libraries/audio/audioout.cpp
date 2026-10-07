@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -495,7 +496,14 @@ s32 PS4_SYSV_ABI sceAudioOutGetPortState(s32 handle, OrbisAudioOutPortState* sta
     case OrbisAudioOutPort::Bgm:
     case OrbisAudioOutPort::Audio3d:
         state->output = ORBIS_AUDIO_OUT_STATE_OUTPUT_CONNECTED_PRIMARY;
-        state->channel = port->format_info.num_channels > 2 ? 2 : port->format_info.num_channels;
+        state->channel = [&]() -> u8 {
+            // Experiment: SOTC_PORT_CHANNELS overrides the channel count reported to the game.
+            static const char* forced = std::getenv("SOTC_PORT_CHANNELS");
+            if (forced) {
+                return u8(std::atoi(forced));
+            }
+            return port->format_info.num_channels > 2 ? 2 : port->format_info.num_channels;
+        }();
         break;
     case OrbisAudioOutPort::Voice:
     case OrbisAudioOutPort::Personal:

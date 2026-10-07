@@ -113,6 +113,7 @@ struct Voice {
 
     // Bus voices (submixer, mastering, effects): planar input accumulated by upstream voices.
     u32 channels = 2;
+    int matrix_zero = -1;
     u32 output_id{};
     OrbisNgs2UserFxProcessHandler fx_handler{};
     uintptr_t fx_data[3]{};
@@ -123,7 +124,13 @@ struct Voice {
     // Sampler voices.
     OrbisNgs2WaveformFormat format{};
     std::deque<Block> blocks;
-    std::vector<float> pcm; // interleaved decode of the current block
+    std::vector<float> pcm; // interleaved decode of the current part of the front block
+    bool block_open{};      // front block has been started
+    u32 block_off{};        // bytes of the front block consumed by the decoder
+    u64 block_skip{};       // samples still to drop at the start of the front block
+    u64 block_left{};       // samples the front block may still produce
+    u32 at9_frame{};        // frame index inside the current ATRAC9 superframe
+    s32 at9_super_left{};   // bytes of the current superframe not yet consumed
     size_t pcm_pos{};       // frame cursor into pcm
     double phase{};
     float pitch = 1.0f;
@@ -150,7 +157,7 @@ std::recursive_mutex g_mutex;
 
 // Temporary diagnostics for bringing the signal path up.
 struct Diag {
-    float sampler_peak, sampler_port_volume, matrix_peak, bus_peak;
+    float sampler_peak, sampler_port_volume, matrix_peak, bus_peak, bus_peak_pre, send_peak;
     u64 sampler_ports, pcm_frames, blocks, bus_voices_used, bus_ports, matrices, ports_with_matrix;
     u32 renders;
 };
@@ -181,6 +188,7 @@ void ResetSampler(Voice& v) {
     v.blocks.clear();
     v.pcm.clear();
     v.pcm_pos = 0;
+    v.block_open = false;
     v.phase = 0;
     v.decoded_samples = 0;
     v.decoded_bytes = 0;
@@ -217,7 +225,8 @@ void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
     }
 }
 
-void DecodeAtrac9(Voice& v, const Block& b, std::vector<float>& out) {
+// Decodes up to `max_frames` ATRAC9 frames from the current position in the block.
+void DecodeAtrac9(Voice& v, const Block& b, std::vector<float>& out, u32 max_frames) {
     if (!v.at9) {
         v.at9 = Atrac9GetHandle();
         // The config word holds the four ATRAC9 config bytes most significant first.
@@ -227,26 +236,40 @@ void DecodeAtrac9(Voice& v, const Block& b, std::vector<float>& out) {
             LOG_ERROR(Lib_Ngs2, "ATRAC9 init failed, config {:#x}", v.format.configData);
             Atrac9ReleaseHandle(v.at9);
             v.at9 = nullptr;
+            v.block_off = b.info.dataSize;
             return;
         }
     }
     Atrac9CodecInfo info{};
     Atrac9GetCodecInfo(v.at9, &info);
-    const u32 frame_samples = info.frameSamples;
-    const u8* src = b.data + b.info.dataOffset;
-    s32 remaining = b.info.dataSize;
-    while (remaining > 0) {
-        out.resize(out.size() + frame_samples * info.channels);
+    const size_t frame_floats = size_t(info.frameSamples) * info.channels;
+    if (v.block_off == 0) {
+        v.at9_frame = 0;
+        v.at9_super_left = info.superframeSize;
+    }
+    // One call decodes one frame. The decoder only reports consumed bytes when it finishes a
+    // superframe, so zero bytes used is normal for the frames in between.
+    for (u32 frame = 0; frame < max_frames && v.block_off < b.info.dataSize; ++frame) {
+        out.resize(out.size() + frame_floats);
         int used = 0;
-        const int ret = Atrac9DecodeF32(v.at9, src, remaining,
-                                        out.data() + out.size() - frame_samples * info.channels,
-                                        &used, 0);
-        if (ret != 0 || used <= 0) {
-            out.resize(out.size() - frame_samples * info.channels);
-            break;
+        const int ret = Atrac9DecodeF32(v.at9, b.data + b.info.dataOffset + v.block_off,
+                                        int(b.info.dataSize - v.block_off),
+                                        out.data() + out.size() - frame_floats, &used, 0);
+        if (ret != 0 || used < 0) {
+            LOG_ERROR(Lib_Ngs2, "ATRAC9 decode error {:#x} at byte {} of {}", u32(ret), v.block_off,
+                      b.info.dataSize);
+            out.resize(out.size() - frame_floats);
+            v.block_off = b.info.dataSize; // give up on the rest of this block
+            return;
         }
-        src += used;
-        remaining -= used;
+        v.block_off += u32(used);
+        // Frames are variable length; the superframe is padded to a fixed size.
+        v.at9_super_left -= std::min<s32>(v.at9_super_left, used);
+        if (++v.at9_frame == u32(std::max(info.framesInSuperframe, 1))) {
+            v.block_off += u32(v.at9_super_left);
+            v.at9_frame = 0;
+            v.at9_super_left = info.superframeSize;
+        }
     }
 }
 
@@ -262,10 +285,22 @@ void DecodePcm(const Block& b, std::vector<float>& out, F&& conv) {
     }
 }
 
-// Decodes the block at the front of the queue into v.pcm.
-void DecodeFront(Voice& v) {
+// Decodes the next part of the front block into v.pcm. Returns false once the block is used up.
+// Streams are decoded as they play: the game keeps loading a chunk while its start is playing.
+bool DecodeMore(Voice& v) {
     const Block& b = v.blocks.front();
     const u32 ch = std::clamp<u32>(v.format.numChannels, 1, MaxChannels);
+    if (!v.block_open) {
+        v.block_open = true;
+        v.block_off = 0;
+        v.block_skip = b.info.numSkipSamples;
+        v.block_left = b.info.numSamples ? b.info.numSamples : ~0ull;
+        v.waveform_data = b.data + b.info.dataOffset;
+        v.user_data = b.info.userData;
+    }
+    if (v.block_off >= b.info.dataSize || v.block_left == 0) {
+        return false;
+    }
     v.pcm.clear();
     v.pcm_pos = 0;
     switch (v.format.waveformType) {
@@ -291,22 +326,24 @@ void DecodeFront(Voice& v) {
         DecodeVag(v, b, v.pcm);
         break;
     case Atrac9:
-        DecodeAtrac9(v, b, v.pcm);
+        DecodeAtrac9(v, b, v.pcm, 16);
         break;
     default:
         LOG_ERROR(Lib_Ngs2, "Unsupported waveform type {:#x}", v.format.waveformType);
         break;
     }
-    // Trim to the samples the block declares.
-    const size_t skip = size_t(b.info.numSkipSamples) * ch;
-    if (skip && skip <= v.pcm.size()) {
-        v.pcm.erase(v.pcm.begin(), v.pcm.begin() + skip);
+    if (v.format.waveformType != Atrac9) {
+        v.block_off = b.info.dataSize; // the other formats are decoded in one step
     }
-    if (b.info.numSamples && size_t(b.info.numSamples) * ch < v.pcm.size()) {
-        v.pcm.resize(size_t(b.info.numSamples) * ch);
+    // Apply the block's leading skip and its sample count.
+    const u64 skip = std::min<u64>(v.block_skip, v.pcm.size() / ch);
+    v.pcm.erase(v.pcm.begin(), v.pcm.begin() + skip * ch);
+    v.block_skip -= skip;
+    if (v.pcm.size() / ch > v.block_left) {
+        v.pcm.resize(v.block_left * ch);
     }
-    v.waveform_data = b.data + b.info.dataOffset;
-    v.user_data = b.info.userData;
+    v.block_left -= v.pcm.size() / ch;
+    return true;
 }
 
 // Fetches the next source frame, advancing through blocks. Returns false when out of data.
@@ -315,30 +352,23 @@ bool NextFrame(Voice& v, float* frame, u32 ch) {
         if (v.blocks.empty()) {
             return false;
         }
-        if (!v.pcm.empty()) {
-            // Finished the current block.
-            Block& b = v.blocks.front();
-            v.decoded_bytes += b.info.dataSize;
-            if (b.info.numRepeats == RepeatInfinite) {
-                v.pcm_pos = 0;
-                continue;
-            }
-            if (b.info.numRepeats > 0) {
-                --b.info.numRepeats;
-                v.pcm_pos = 0;
-                continue;
-            }
-            v.blocks.pop_front();
-            v.pcm.clear();
-            v.pcm_pos = 0;
-            if (v.blocks.empty()) {
-                return false;
-            }
+        if (DecodeMore(v)) {
+            continue;
         }
-        DecodeFront(v);
-        if (v.pcm.empty()) {
-            v.blocks.pop_front();
+        // The front block is used up.
+        Block& b = v.blocks.front();
+        v.decoded_bytes += b.info.dataSize;
+        v.block_open = false;
+        v.pcm.clear();
+        v.pcm_pos = 0;
+        if (b.info.numRepeats == RepeatInfinite) {
+            continue;
         }
+        if (b.info.numRepeats > 0) {
+            --b.info.numRepeats;
+            continue;
+        }
+        v.blocks.pop_front();
     }
     std::memcpy(frame, v.pcm.data() + v.pcm_pos * ch, ch * sizeof(float));
     ++v.pcm_pos;
@@ -356,6 +386,14 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
         // ponytail: zero-order hold resampling, switch to linear/sinc if aliasing is audible.
         while (v.phase >= 1.0) {
             if (!NextFrame(v, next, ch)) {
+                {
+                    static int ended = 0;
+                    if (ended++ < 60) {
+                        LOG_ERROR(Lib_Ngs2, "voice {:x} out of data after {} samples, {} bytes",
+                                  reinterpret_cast<uintptr_t>(&v) & 0xfffff, v.decoded_samples,
+                                  v.decoded_bytes);
+                    }
+                }
                 // Out of data: the voice finishes and frees itself.
                 std::fill(std::begin(v.last), std::end(v.last), 0.0f);
                 v.state = 0;
@@ -479,6 +517,15 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
                 }
             }
             (top == 0.0f ? zero_calls : nonzero_calls)++;
+            static int transitions = 0;
+            const int now_zero = top == 0.0f;
+            if (v.matrix_zero != now_zero && transitions < 150) {
+                ++transitions;
+                LOG_ERROR(Lib_Ngs2, "voice {:x} ch {} matrix {} (top {:.3f}) state {:#x} decoded {}",
+                          reinterpret_cast<uintptr_t>(&v) & 0xfffff, v.format.numChannels,
+                          now_zero ? "ZERO" : "audible", top, v.state, v.decoded_samples);
+            }
+            v.matrix_zero = now_zero;
             if ((zero_calls + nonzero_calls) % 50 == 0) {
                 LOG_ERROR(Lib_Ngs2, "matrix calls: zero {} nonzero {} used entries {:#x}", zero_calls,
                           nonzero_calls, used_mask);
@@ -510,6 +557,15 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     case VoicePortVolume: {
         const auto& m = As<OrbisNgs2VoicePortVolumeParam>(p);
         GetPort(v, m.port).volume = m.level;
+        {
+            static u32 vol_zero = 0, vol_nonzero = 0, traced = 0;
+            (m.level == 0.0f ? vol_zero : vol_nonzero)++;
+            if (IsSampler(v) && traced < 60 && m.port == 0) {
+                ++traced;
+                LOG_ERROR(Lib_Ngs2, "voice {:x} port0 volume {:.4f} (calls zero {} nonzero {})",
+                          reinterpret_cast<uintptr_t>(&v) & 0xfffff, m.level, vol_zero, vol_nonzero);
+            }
+        }
         break;
     }
     case VoicePatch: {
@@ -518,6 +574,14 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         break;
     }
     case VoiceKickEvent:
+        {
+            static int events = 0;
+            if (IsSampler(v) && events++ < 120) {
+                LOG_ERROR(Lib_Ngs2, "voice {:x} event {} state {:#x}",
+                          reinterpret_cast<uintptr_t>(&v) & 0xfffff,
+                          As<OrbisNgs2VoiceEventParam>(p).eventId, v.state);
+            }
+        }
         switch (As<OrbisNgs2VoiceEventParam>(p).eventId) {
         case Play:
             v.state = (v.state | InUse | Playing) & ~(Stopped | Paused | Empty);
@@ -542,12 +606,37 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     case SamplerSetup:
         ResetSampler(v);
         v.format = As<OrbisNgs2SamplerVoiceSetupParam>(p).format;
+        {
+            static int setups = 0;
+            if (setups++ < 60) {
+                LOG_ERROR(Lib_Ngs2, "voice {:x} setup type {:#x} ch {} rate {} flags {:#x}",
+                          reinterpret_cast<uintptr_t>(&v) & 0xfffff, v.format.waveformType,
+                          v.format.numChannels, v.format.sampleRate,
+                          As<OrbisNgs2SamplerVoiceSetupParam>(p).flags);
+            }
+        }
         v.pitch = 1.0f;
         v.phase = 1.0;
         v.state = InUse;
         break;
     case SamplerWaveformBlocks: {
         const auto& m = As<OrbisNgs2SamplerVoiceWaveformBlocksParam>(p);
+        {
+            static int traced = 0;
+            if (traced < 70) {
+                ++traced;
+                std::string text;
+                for (u32 i = 0; m.aBlock && i < std::min<u32>(m.numBlocks, 4); ++i) {
+                    const auto& blk = m.aBlock[i];
+                    text += fmt::format("[off {:#x} size {:#x} rep {:#x} skip {} n {} ud {:#x}] ",
+                                        blk.dataOffset, blk.dataSize, blk.numRepeats,
+                                        blk.numSkipSamples, blk.numSamples, blk.userData);
+                }
+                LOG_ERROR(Lib_Ngs2, "voice {:x} blocks data {} flags {:#x} n {} queued {} state {:#x}: {}",
+                          reinterpret_cast<uintptr_t>(&v) & 0xfffff, fmt::ptr(m.data), m.flags,
+                          m.numBlocks, v.blocks.size(), v.state, text);
+            }
+        }
         for (u32 i = 0; m.data && m.aBlock && i < m.numBlocks; ++i) {
             v.blocks.push_back({static_cast<const u8*>(m.data), m.aBlock[i]});
         }
@@ -744,6 +833,23 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                     }
                 }
             }
+            {
+                // Loudest thing this voice sends anywhere: source peak x port volume x matrix.
+                float src_peak = 0;
+                for (u32 n = 0; n < ch * frames; ++n) {
+                    src_peak = std::max(src_peak, std::abs(scratch[n]));
+                }
+                for (const Port& port : voice->ports) {
+                    if (!port.dest || port.matrix_id < 0 ||
+                        size_t(port.matrix_id) >= voice->matrices.size()) {
+                        continue;
+                    }
+                    for (float level : voice->matrices[port.matrix_id]) {
+                        g_diag.send_peak =
+                            std::max(g_diag.send_peak, src_peak * port.volume * std::abs(level));
+                    }
+                }
+            }
             g_diag.matrices += voice->matrices.size();
             for (const Port& port : voice->ports) {
                 g_diag.ports_with_matrix += port.matrix_id >= 0;
@@ -768,6 +874,9 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
         for (u32 c = 0; c < ch; ++c) {
             std::memcpy(scratch.data() + c * frames, voice->bus.data() + c * MaxGrain,
                         frames * sizeof(float));
+        }
+        for (u32 n = 0; n < ch * frames; ++n) {
+            g_diag.bus_peak_pre = std::max(g_diag.bus_peak_pre, std::abs(scratch[n]));
         }
         if (voice->fx_handler && !no_fx) {
             // The game's own DSP (mixing, gain, compression) runs as a callback on the bus.
@@ -803,8 +912,9 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                   g_diag.sampler_peak, g_diag.sampler_ports, g_diag.sampler_port_volume,
                   g_diag.matrix_peak, g_diag.pcm_frames, g_diag.blocks, g_diag.bus_voices_used,
                   g_diag.bus_ports, g_diag.bus_peak);
-        LOG_ERROR(Lib_Ngs2, "synth diag2: matrices {} ports with matrix {}", g_diag.matrices,
-                  g_diag.ports_with_matrix);
+        LOG_ERROR(Lib_Ngs2, "synth diag2: matrices {} ports with matrix {} send peak {:.3f} bus "
+                            "peak before fx {:.3f}",
+                  g_diag.matrices, g_diag.ports_with_matrix, g_diag.send_peak, g_diag.bus_peak_pre);
         const u32 renders = g_diag.renders;
         g_diag = {};
         g_diag.renders = renders;
