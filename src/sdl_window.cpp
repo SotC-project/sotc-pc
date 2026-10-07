@@ -114,6 +114,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
     static size_t next = 0;
     static u64 release_at = 0;
     static OrbisPadButtonDataOffset held{};
+    static SDL_Event key_event{};
+    static u64 key_release_at = 0;
     auto* controller = reinterpret_cast<Input::GameController*>(userdata);
     const u64 now = SDL_GetTicks();
     if (release_at && now >= release_at) {
@@ -143,7 +145,40 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
+        } else if (action.starts_with("key=")) {
+            // A keyboard key or mouse button by its binding-file name, sent as SDL events so it
+            // goes through the same binding layer as a real device.
+            // "key=w*2000" holds the key for 2000 ms; the default is 250 ms.
+            auto name = action.substr(4);
+            u64 hold_ms = 250;
+            if (const auto star = name.find('*'); star != std::string::npos) {
+                hold_ms = std::stoull(name.substr(star + 1));
+                name = name.substr(0, star);
+            }
+            if (const auto key = Input::string_to_keyboard_key_map.find(name);
+                key != Input::string_to_keyboard_key_map.end()) {
+                const bool is_mouse = name.ends_with("button");
+                key_event = {};
+                if (is_mouse) {
+                    key_event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+                    key_event.button.button = static_cast<Uint8>(key->second);
+                    key_event.button.down = true;
+                } else {
+                    key_event.type = SDL_EVENT_KEY_DOWN;
+                    key_event.key.key = key->second;
+                    key_event.key.down = true;
+                }
+                SDL_PushEvent(&key_event);
+                key_release_at = now + hold_ms;
+            }
         }
+    }
+    if (key_release_at && now >= key_release_at) {
+        const bool is_mouse = key_event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        key_event.type = is_mouse ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_KEY_UP;
+        (is_mouse ? key_event.button.down : key_event.key.down) = false;
+        SDL_PushEvent(&key_event);
+        key_release_at = 0;
     }
     return interval;
 }
