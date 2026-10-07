@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include "fiber.h"
 
 #include "common/elf_info.h"
@@ -41,6 +44,30 @@ void PS4_SYSV_ABI _sceFiberCheckStackOverflow(OrbisFiberContext* ctx) {
     if (stack_base && *stack_base != kFiberStackSignature) {
         UNREACHABLE_MSG("Stack overflow detected in fiber with size = 0x{:x}", stack_size);
     }
+}
+
+// Guest fiber stacks are sized for PS4 code, where system calls run on a kernel stack. Here the
+// HLE implementations and the page-fault handler run on the calling fiber's stack and need far
+// more than the 64 KiB a game typically provides, so small fibers get a larger host-side stack.
+static constexpr u64 HostFiberStackSize = 512_KB;
+static std::mutex host_stacks_mutex;
+static std::unordered_map<OrbisFiber*, std::unique_ptr<u8[]>> host_stacks;
+
+static void* HostStackTop(OrbisFiber* fiber) {
+    if (fiber->size_context >= HostFiberStackSize) {
+        return reinterpret_cast<u8*>(fiber->addr_context) + fiber->size_context;
+    }
+    std::scoped_lock lock{host_stacks_mutex};
+    auto& stack = host_stacks[fiber];
+    if (!stack) {
+        stack = std::make_unique<u8[]>(HostFiberStackSize);
+    }
+    return stack.get() + HostFiberStackSize;
+}
+
+static void ReleaseHostStack(OrbisFiber* fiber) {
+    std::scoped_lock lock{host_stacks_mutex};
+    host_stacks.erase(fiber);
 }
 
 s32 PS4_SYSV_ABI _sceFiberAttachContext(OrbisFiber* fiber, void* addr_context, u64 size_context) {
@@ -99,7 +126,7 @@ void PS4_SYSV_ABI _sceFiberSwitchToFiber(OrbisFiber* fiber, u64 arg_on_run_to,
     data.entry = fiber->entry;
     data.arg_on_initialize = fiber->arg_on_initialize;
     data.arg_on_run_to = arg_on_run_to;
-    data.stack_addr = reinterpret_cast<u8*>(fiber->addr_context) + fiber->size_context;
+    data.stack_addr = HostStackTop(fiber);
     if (fiber->flags & FiberFlags::SetFpuRegs) {
         data.fpucw = 0x037f;
         data.mxcsr = 0x9fc0;
@@ -253,6 +280,7 @@ s32 PS4_SYSV_ABI sceFiberFinalize(OrbisFiber* fiber) {
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Terminated)) {
         return ORBIS_FIBER_ERROR_STATE;
     }
+    ReleaseHostStack(fiber);
 
     return ORBIS_OK;
 }
