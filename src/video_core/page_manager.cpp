@@ -12,6 +12,7 @@
 #include "common/signal_context.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
+#include <boost/container/small_vector.hpp>
 #include "core/direct_aliases.h"
 #include "core/memory.h"
 #include "core/signals.h"
@@ -450,10 +451,15 @@ struct SignalImpl : public PageManager::Impl {
                             : rasterizer->ReadMemory(target, target_size, is_gpu_thread);
         };
         bool handled = handle(addr, size);
-        // The access may have gone through another mapping of memory the GPU tracks.
+        // The access may have gone through another mapping of memory the GPU tracks. Collect the
+        // aliases first: handling one re-enters Protect, which takes the alias map lock again.
+        boost::container::small_vector<std::pair<VAddr, u64>, 4> aliases;
         Core::DirectAliases().ForEachAlias(addr, size, [&](VAddr alias, u64 alias_size) {
-            handled |= handle(alias, alias_size);
+            aliases.emplace_back(alias, alias_size);
         });
+        for (const auto& [alias, alias_size] : aliases) {
+            handled |= handle(alias, alias_size);
+        }
         return handled;
     }
 };

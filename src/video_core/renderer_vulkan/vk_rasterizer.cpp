@@ -653,12 +653,12 @@ void Rasterizer::Finish() {
 
 void Rasterizer::FlushMirrors(u32 source) {
     // Sources: 1 EOS, 2 EOP, 4 ReleaseMem, 8 submit, 16 fence, 32 immediate. The game consumes
-    // compute results after end-of-pipe events; flushing at EOS and ReleaseMem as well only adds
+    // compute results after end-of-pipe events; flushing at EOS, ReleaseMem and fences only adds
     // blocking GPU round trips (measured: same draw counts, about half the flushes).
     // SOTC_FLUSH_MASK overrides the set for experiments.
     static const u32 mask = [] {
         const char* value = std::getenv("SOTC_FLUSH_MASK");
-        return value ? u32(std::atoi(value)) : (2u | 8u | 16u | 32u);
+        return value ? u32(std::atoi(value)) : (2u | 8u | 32u);
     }();
     if (pending_mirrors.empty() || !(mask & source)) {
         return;

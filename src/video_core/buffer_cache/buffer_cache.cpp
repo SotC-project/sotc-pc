@@ -111,12 +111,16 @@ static std::unordered_map<u64, UploadState> g_last_upload;
 
 // Temporary cost counters for the forced-upload path.
 static u64 g_hash_bytes = 0, g_hash_ranges = 0, g_hash_changed = 0, g_sync_calls = 0;
+static u64 g_upload_bytes = 0, g_upload_calls = 0, g_image_bytes = 0, g_image_calls = 0;
 
 void BufferCache::TickFrame() {
     ++g_frame;
     if (g_frame % 120 == 0) {
         LOG_ERROR(Render, "force-upload/120f: sync calls {} hashed ranges {} MB {} changed {}",
                   g_sync_calls, g_hash_ranges, g_hash_bytes >> 20, g_hash_changed);
+        LOG_ERROR(Render, "uploads/120f: buffer MB {} in {} copies, image-backed MB {} in {}",
+                  g_upload_bytes >> 20, g_upload_calls, g_image_bytes >> 20, g_image_calls);
+        g_upload_bytes = g_upload_calls = g_image_bytes = g_image_calls = 0;
         g_hash_bytes = g_hash_ranges = g_hash_changed = g_sync_calls = 0;
     }
     g_recent_writes[g_frame % g_recent_writes.size()].Clear();
@@ -272,6 +276,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
     if (IsRegionGpuModified(device_addr, size)) {
         return ObtainBuffer(device_addr, size, false);
     }
+    g_image_bytes += size;
+    ++g_image_calls;
     const auto staging = staging_pool.Request(size, VideoCore::MemoryType::HostUncached,
                                               instance.StorageMinAlignment());
     memory->CopySparseMemory(device_addr, staging.mapped, staging.size);
@@ -453,6 +459,8 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
         copies.emplace_back(total_size_bytes, addr, size);
         total_size_bytes += size;
     });
+    g_upload_bytes += total_size_bytes;
+    g_upload_calls += copies.size();
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
         for (auto& copy : copies) {

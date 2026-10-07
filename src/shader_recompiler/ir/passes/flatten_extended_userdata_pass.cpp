@@ -595,6 +595,9 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
 
     if (!PushPtr(c, pass_info, off_dw)) {
         LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+        // PushPtr has already emitted its push; balance it, or the generated walker returns
+        // through a corrupted stack.
+        PopPtr(c);
         return;
     }
     PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
