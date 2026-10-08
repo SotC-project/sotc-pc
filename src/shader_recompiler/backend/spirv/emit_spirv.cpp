@@ -445,6 +445,15 @@ void DefineEntryPoint(const Info& info, const RuntimeInfo& runtime_info, EmitCon
         execution_model = spv::ExecutionModel::GLCompute;
         ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize, workgroup_size[0],
                              workgroup_size[1], workgroup_size[2]);
+        // GCN code reduces values across the lanes of a wave (DPP shuffles, v_readlane) after
+        // loops whose trip count differs per lane, and expects every lane to take part again
+        // once the loop is over. Vulkan only guarantees that with maximal reconvergence;
+        // without it those subgroup operations may read undefined lanes (garbage in SotC's
+        // light probe coefficients, hence randomly tinted characters).
+        if (ctx.profile.supports_maximal_reconvergence) {
+            ctx.AddExtension("SPV_KHR_maximal_reconvergence");
+            ctx.AddExecutionMode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
+        }
         break;
     }
     case SwStage::Vertex:

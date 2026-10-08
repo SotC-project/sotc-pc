@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <queue>
@@ -203,12 +204,17 @@ bool Wave64UniformBranchesEnabled() {
 
 void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info,
                            const Profile& profile) {
-    if (program.info.hw_stage != HwStage::Compute || profile.subgroup_size == 64) {
+    if (program.info.hw_stage != HwStage::Compute) {
         return;
     }
 
     const auto [size_x, size_y, size_z] = runtime_info.hw.cs.workgroup_size;
     const u32 num_threads = size_x * size_y * size_z;
+    // Lanes the workgroup can actually populate. This also applies to hosts with 64-lane
+    // subgroups: a 32-thread workgroup leaves lanes 32-63 without an invocation there too, and
+    // broadcasting from them is just as undefined (random garbage in SotC's light probe
+    // coefficients on AMD, which showed as randomly tinted characters).
+    const u32 host_lanes = std::min<u32>(profile.subgroup_size, 32);
     if (num_threads <= 32) {
         // The whole workgroup fits in one host subgroup, but the guest code was written for a
         // wave64 whose upper half is inactive. Reads of a fixed lane in that upper half (e.g. the
@@ -223,7 +229,7 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                     continue;
                 }
                 const u32 lane = inst.Arg(1).U32();
-                if (lane < profile.subgroup_size) {
+                if (lane < host_lanes) {
                     continue;
                 }
                 // SOTC_WAVE64_IDENTITY=0 restores the plain fold (for A/B comparisons).
@@ -236,10 +242,13 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                 if (identity) {
                     inst.ReplaceUsesWithAndRemove(IR::Value{*identity});
                 } else {
-                    inst.SetArg(1, IR::Value{lane % profile.subgroup_size});
+                    inst.SetArg(1, IR::Value{lane % host_lanes});
                 }
             }
         }
+        return;
+    }
+    if (profile.subgroup_size == 64) {
         return;
     }
 

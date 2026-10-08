@@ -435,6 +435,11 @@ public:
                image_2d_view_of_3d_features.sampler2DViewOf3D;
     }
 
+    /// Returns whether VK_KHR_shader_maximal_reconvergence is supported.
+    bool IsMaximalReconvergenceSupported() const {
+        return maximal_reconvergence;
+    }
+
     /// Returns whether VK_EXT_image_view_min_lod is supported.
     bool IsImageViewMinLodSupported() const {
         return image_view_min_lod;
@@ -532,6 +537,7 @@ private:
     bool attachment_feedback_loop{};
     bool image_2d_view_of_3d{};
     bool image_view_min_lod{};
+    bool maximal_reconvergence{};
     bool shader_clock{};
     bool supports_memory_budget{};
     bool supports_block_texel_view{};

@@ -210,6 +210,13 @@ u64 BufferCache::DebugMismatch(VAddr device_addr, u32 size) {
     runtime.CopyBuffer(buffer, download.buffer, std::span{&copy, 1});
     scheduler.Finish();
     download.buffer->Invalidate(download.offset, size);
+    if (std::getenv("SOTC_BUFLOG")) {
+        // Keep the GPU side for offline inspection.
+        if (FILE* f = std::fopen(fmt::format("bufgpu_{:x}.raw", device_addr).c_str(), "wb")) {
+            std::fwrite(download.mapped, 1, size, f);
+            std::fclose(f);
+        }
+    }
     u64 mismatched = 0;
     const u8* guest = std::bit_cast<const u8*>(device_addr);
     for (u32 i = 0; i < size; ++i) {

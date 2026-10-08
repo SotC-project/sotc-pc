@@ -1373,6 +1373,51 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
+            {
+                // Temporary: SOTC_BUFLOG=<shader hash> describes that shader's buffers and
+                // compares their GPU copies with guest memory (first few binds, after 90 s).
+                static const u64 only = [] {
+                    const char* v = std::getenv("SOTC_BUFLOG");
+                    return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+                }();
+                static const auto start = std::chrono::steady_clock::now();
+                static u32 logged = 0;
+                if (only && desc.is_written && (vsharp.GetStride() == 68 || vsharp.GetStride() == 80 ||
+                                                vsharp.GetStride() == 288)) {
+                    static std::unordered_set<u64> writers;
+                    if (writers.insert(stage.pgm_hash ^ (u64(vsharp.GetStride()) << 40)).second) {
+                        LOG_ERROR(Render, "bufwriter shader {:#x} addr {:#x} size {:#x} stride {}",
+                                  stage.pgm_hash, u64(vsharp.base_address), vsharp.GetSize(),
+                                  vsharp.GetStride());
+                    }
+                }
+                if (only && stage.pgm_hash == only && logged < 24 &&
+                    std::chrono::steady_clock::now() - start > std::chrono::seconds(90) &&
+                    vsharp.base_address != 0 && vsharp.GetSize() != 0) {
+                    ++logged;
+                    const u64 full = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
+                    const u32 check = u32(std::min<u64>(full, 4_MB));
+                    const bool valid = memory->IsValidMapping(vsharp.base_address, check);
+                    const bool gpu = buffer_cache.IsRegionGpuModified(vsharp.base_address, check);
+                    const u64 bad = valid && !desc.is_written
+                                        ? buffer_cache.DebugMismatch(vsharp.base_address, check)
+                                        : 0;
+                    LOG_ERROR(Render, "buflog addr {:#x} size {:#x} clamp {:#x} stride {} written "
+                                      "{} gpumod {} valid {} mismatch {} of {}",
+                              u64(vsharp.base_address), vsharp.GetSize(), full,
+                              vsharp.GetStride(), desc.is_written, gpu, valid, bad, check);
+                    if (valid && !desc.is_written) {
+                        std::vector<u8> data(check);
+                        memory->CopySparseMemory(vsharp.base_address, data.data(), check);
+                        if (FILE* f = std::fopen(fmt::format("buflog_{:x}_{}.raw",
+                                                             u64(vsharp.base_address),
+                                                             vsharp.GetStride()).c_str(), "wb")) {
+                            std::fwrite(data.data(), 1, data.size(), f);
+                            std::fclose(f);
+                        }
+                    }
+                }
+            }
             if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
