@@ -28,7 +28,9 @@ namespace VideoCore {
 
 inline void StartThreadSampler() {
     static std::atomic_bool started{false};
-    if (!std::getenv("SOTC_PROFILE") || started.exchange(true)) {
+    // getenv is slow enough to show up when called per draw.
+    static const bool enabled = std::getenv("SOTC_PROFILE") != nullptr;
+    if (!enabled || started.exchange(true)) {
         return;
     }
     HANDLE target{};
@@ -44,6 +46,7 @@ inline void StartThreadSampler() {
         using Key = std::array<u64, 3>; // innermost three frames inside this executable
         std::map<Key, u32> counts;
         std::map<std::pair<u64, u64>, u32> outside_counts; // (leaf address >> 16, our frame)
+        std::map<u64, u32> leaf_counts; // exact leaf addresses outside this image
         u32 total = 0, outside = 0;
         auto last = GetTickCount64();
         while (true) {
@@ -62,7 +65,7 @@ inline void StartThreadSampler() {
                 }
                 // Scan the stack for return addresses into this image instead of unwinding:
                 // RtlVirtualUnwind faults on frames of guest code, which has no unwind data.
-                std::array<u64, 768> stack;
+                std::array<u64, 8192> stack;
                 SIZE_T got{};
                 ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(ctx.Rsp),
                                   stack.data(), sizeof(stack), &got);
@@ -76,6 +79,7 @@ inline void StartThreadSampler() {
                 if (!leaf_inside) {
                     // Which module the thread was executing in, with the innermost frame of ours.
                     ++outside_counts[{ctx.Rip >> 16, key[0]}];
+                    ++leaf_counts[ctx.Rip];
                 }
                 ++counts[key];
             }
@@ -119,6 +123,22 @@ inline void StartThreadSampler() {
                     std::fclose(file);
                 }
                 outside_counts.clear();
+                if (FILE* file = std::fopen("profile_leaf.txt", "w")) {
+                    for (const auto& [rip, count] : leaf_counts) {
+                        HMODULE module{};
+                        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCSTR>(rip), &module);
+                        char name[MAX_PATH] = "?";
+                        if (module) {
+                            GetModuleFileNameA(module, name, sizeof(name));
+                        }
+                        std::fprintf(file, "%u %llx %s%c", count,
+                                     rip - reinterpret_cast<u64>(module), name, 10);
+                    }
+                    std::fclose(file);
+                }
+                leaf_counts.clear();
                 counts.clear();
                 total = outside = 0;
             }

@@ -198,10 +198,23 @@ struct DrawStats {
     u64 ns_bind_buffers{}, ns_bind_textures{};
     u64 tsc_stage3{};
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    u64 last_tsc = __rdtsc();
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
         if (now - last < std::chrono::seconds(3)) {
             return;
+        }
+        // Ticks per nanosecond over the interval that just ended.
+        const u64 tsc_now = __rdtsc();
+        const double scale =
+            double(std::chrono::duration_cast<std::chrono::nanoseconds>(now - last).count()) /
+            double(tsc_now - last_tsc);
+        last_tsc = tsc_now;
+        for (u64* value : {&ns_pipeline, &ns_bind, &ns_draw_total, &ns_dispatch_total, &ns_mirror,
+                           &ns_bind_buffers, &ns_bind_textures, &ns_stage[0], &ns_stage[1],
+                           &ns_stage[2], &ns_stage[4], &ns_stage[5], &ns_stage[6], &ns_stage[7],
+                           &tsc_stage3}) {
+            *value = u64(double(*value) * scale);
         }
         last = now;
         LOG_ERROR(Render, "stats/3s: drawn {} indirect {} dispatch {} filtered {} no_pipeline {} "
@@ -213,7 +226,7 @@ struct DrawStats {
                   ns_pipeline / 1000000, ns_bind / 1000000, ns_draw_total / 1000000,
                   ns_dispatch_total / 1000000, ns_mirror / 1000000, flushes);
         flushes = 0;
-        LOG_ERROR(Render, "indirect stages ms: prepare {} begin {} vertex {} args(tsc/1e6) {} "
+        LOG_ERROR(Render, "indirect stages ms: prepare {} begin {} vertex {} args {} "
                           "descriptors {} dynstate {} sched-begin {} draw+reset {}",
                   ns_stage[0] / 1000000, ns_stage[1] / 1000000, ns_stage[2] / 1000000,
                   tsc_stage3 / 1000000, ns_stage[4] / 1000000, ns_stage[5] / 1000000,
@@ -251,13 +264,13 @@ static MirrorBisect g_bisect;
 // culling results look like: some other shader's output is being read back, so mirror them all.
 static bool g_mirror_everything = false;
 
+// Accumulates time-stamp counter ticks (a clock query per scope is measurable at this call
+// rate); DrawStats::Tick scales them to nanoseconds.
 struct ScopedNs {
     u64& sink;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    u64 start = __rdtsc();
     ~ScopedNs() {
-        sink += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - start)
-                    .count();
+        sink += __rdtsc() - start;
     }
 };
 static bool CoversViewBlock(VAddr addr, u64 size);
@@ -696,7 +709,8 @@ void Rasterizer::DispatchDirect() {
         auto& entry = histogram[cs.pgm_hash];
         ++entry.first;
         entry.second += u64(cs_program.dim_x) * cs_program.dim_y * cs_program.dim_z;
-        if (const auto now = std::chrono::steady_clock::now();
+        static u32 calls = 0;
+        if (const auto now = (++calls & 0xFFF) ? last : std::chrono::steady_clock::now();
             now - last >= std::chrono::seconds(6)) {
             last = now;
             std::vector<std::pair<u64, std::pair<u32, u64>>> top(histogram.begin(),
@@ -789,7 +803,9 @@ void Rasterizer::DispatchDirect() {
             entry.second += size;
         }
         static auto last = std::chrono::steady_clock::now();
-        if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(6)) {
+        static u32 calls = 0;
+        if (const auto now = (++calls & 0xFFF) ? last : std::chrono::steady_clock::now();
+            now - last >= std::chrono::seconds(6)) {
             last = now;
             std::string line;
             for (const auto& [hash, value] : mirror_histogram) {
