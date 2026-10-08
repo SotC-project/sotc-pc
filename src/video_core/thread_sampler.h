@@ -55,27 +55,18 @@ inline void StartThreadSampler() {
             if (GetThreadContext(target, &ctx)) {
                 u32 found = 0;
                 bool leaf_inside = ctx.Rip >= base && ctx.Rip < end;
-                for (u32 depth = 0; depth < 48 && found < key.size(); ++depth) {
-                    if (ctx.Rip >= base && ctx.Rip < end) {
-                        key[found++] = ctx.Rip;
-                    }
-                    DWORD64 image_base{};
-                    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
-                    if (!fn) {
-                        // Leaf function without unwind data: return address is at the stack top.
-                        if (IsBadReadPtr(reinterpret_cast<void*>(ctx.Rsp), 8)) {
-                            break;
-                        }
-                        ctx.Rip = *reinterpret_cast<u64*>(ctx.Rsp);
-                        ctx.Rsp += 8;
-                    } else {
-                        void* handler_data{};
-                        DWORD64 establisher{};
-                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx,
-                                         &handler_data, &establisher, nullptr);
-                    }
-                    if (!ctx.Rip) {
-                        break;
+                if (leaf_inside) {
+                    key[found++] = ctx.Rip;
+                }
+                // Scan the stack for return addresses into this image instead of unwinding:
+                // RtlVirtualUnwind faults on frames of guest code, which has no unwind data.
+                std::array<u64, 768> stack;
+                SIZE_T got{};
+                ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(ctx.Rsp),
+                                  stack.data(), sizeof(stack), &got);
+                for (size_t i = 0; i < got / 8 && found < key.size(); ++i) {
+                    if (stack[i] >= base && stack[i] < end) {
+                        key[found++] = stack[i];
                     }
                 }
                 ++total;

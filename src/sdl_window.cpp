@@ -222,6 +222,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     // width/height as the windowed size to restore when leaving fullscreen.
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
                            EmulatorSettings.IsFullScreen());
+    // SOTC_HEADLESS=1 keeps the window hidden so automated runs do not take over the desktop.
+    const bool headless = std::getenv("SOTC_HEADLESS") != nullptr;
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, headless);
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     if (window == nullptr) {

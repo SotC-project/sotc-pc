@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <xxhash.h>
 
 #include <chrono>
@@ -846,6 +849,100 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     runtime.UploadImage(&image, buffer, image_copies);
+    ApplyTexturePack(image);
+}
+
+void TextureCache::ApplyTexturePack(Image& image) {
+    // File name: <hash of the guest data, 16 hex digits>.bin, holding the mip chain as
+    // consecutive untiled levels in the image's own format.
+    static const auto dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_textures";
+    static const bool dumping = std::getenv("SOTC_TEXDUMP") != nullptr;
+    static const auto pack = [] {
+        std::unordered_map<u64, std::vector<u8>> files;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            const auto path = entry.path();
+            if (path.extension() != ".bin") {
+                continue;
+            }
+            Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read};
+            std::vector<u8> data(file.GetSize());
+            file.ReadRaw<u8>(data.data(), data.size());
+            files.emplace(std::strtoull(path.stem().string().c_str(), nullptr, 16), std::move(data));
+        }
+        if (!files.empty()) {
+            LOG_INFO(Render, "Texture pack: {} replacement textures", files.size());
+        }
+        return files;
+    }();
+    const auto& info = image.info;
+    if ((pack.empty() && !dumping) || info.size.width > 2048 || info.size.height > 2048 ||
+        info.size.depth != 1 || info.resources.layers != 1 || info.num_samples > 1 ||
+        info.props.is_depth || info.num_bits == 0 || info.guest_size > 8_MB ||
+        True(image.flags & ImageFlagBits::GpuModified)) {
+        return;
+    }
+    auto* memory = Core::Memory::Instance();
+    if (!memory->IsValidMapping(info.guest_address, info.guest_size)) {
+        return;
+    }
+    const u64 hash = memory->HashSparseMemory(info.guest_address, info.guest_size);
+    const auto level_size = [&](u32 level) {
+        const u32 width = std::max(info.size.width >> level, 1u);
+        const u32 height = std::max(info.size.height >> level, 1u);
+        return info.props.is_block
+                   ? Common::DivCeil(width, 4u) * Common::DivCeil(height, 4u) * (info.num_bits / 8)
+                   : width * height * (info.num_bits / 8);
+    };
+    const auto level_copy = [&](u32 level, u64 offset) {
+        return vk::BufferImageCopy{
+            .bufferOffset = offset,
+            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                 .mipLevel = level,
+                                 .baseArrayLayer = 0,
+                                 .layerCount = 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {std::max(info.size.width >> level, 1u),
+                            std::max(info.size.height >> level, 1u), 1},
+        };
+    };
+    if (dumping) {
+        static std::unordered_set<u64> dumped;
+        if (!dumped.insert(hash).second) {
+            return;
+        }
+        std::filesystem::create_directories(dir / "dump");
+        const u32 size = level_size(0);
+        const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16);
+        const auto copy = level_copy(0, download.offset);
+        runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+        scheduler.Finish();
+        download.Invalidate();
+        const auto name = fmt::format("{:016x}_{}x{}_m{}_{}.raw", hash, info.size.width,
+                                      info.size.height, info.resources.levels,
+                                      vk::to_string(info.pixel_format));
+        Common::FS::IOFile file{dir / "dump" / name, Common::FS::FileAccessMode::Create};
+        file.WriteRaw<u8>(download.mapped, size);
+        return;
+    }
+    const auto it = pack.find(hash);
+    if (it == pack.end()) {
+        return;
+    }
+    const std::vector<u8>& data = it->second;
+    const auto upload = runtime.GetStagingPool().Request(data.size(), MemoryType::HostUncached, 16);
+    std::memcpy(upload.mapped, data.data(), data.size());
+    upload.Flush();
+    SmallVector<vk::BufferImageCopy, 14> copies;
+    u64 offset = 0;
+    for (u32 level = 0; level < info.resources.levels && offset + level_size(level) <= data.size();
+         ++level) {
+        copies.push_back(level_copy(level, upload.offset + offset));
+        offset += level_size(level);
+    }
+    if (!copies.empty()) {
+        runtime.UploadImage(&image, upload.buffer, copies);
+    }
 }
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sharp,

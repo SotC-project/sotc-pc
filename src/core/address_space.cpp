@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vector>
 #include <map>
 #include <fmt/format.h>
 #include "common/alignment.h"
@@ -321,9 +322,30 @@ struct AddressSpace::Impl {
                    "Cannot fit region into one placeholder");
 
         // If the region is mapped, we need to unmap first before we can modify the placeholders.
+        // Remapping the pieces afterwards resets every page to the region's protection, which
+        // would silently drop page-level protections applied since (GPU memory tracking relies
+        // on those to see guest writes). Record them here and reapply them once remapped.
+        struct ProtectedRun {
+            VAddr base;
+            u64 size;
+            DWORD prot;
+        };
+        std::vector<ProtectedRun> protected_runs;
         if (it->second.is_mapped) {
             ASSERT_MSG(it->second.phys_base != -1 || !it->second.is_mapped,
                        "Cannot split unbacked mapping");
+            const VAddr region_end = it->second.base + it->second.size;
+            for (VAddr addr = it->second.base; addr < region_end;) {
+                MEMORY_BASIC_INFORMATION info{};
+                if (!VirtualQueryEx(process, LPCVOID(addr), &info, sizeof(info))) {
+                    break;
+                }
+                const u64 run_size = std::min<u64>(info.RegionSize, region_end - addr);
+                if (info.State == MEM_COMMIT && info.Protect != it->second.prot) {
+                    protected_runs.push_back({addr, run_size, info.Protect});
+                }
+                addr += run_size;
+            }
             UnmapRegion(&it->second);
         }
 
@@ -394,6 +416,14 @@ struct AddressSpace::Impl {
         // If the requested region was mapped, remap it.
         if (it->second.is_mapped) {
             MapRegion(&it->second);
+        }
+
+        for (const auto& run : protected_runs) {
+            DWORD old_prot;
+            if (!VirtualProtectEx(process, LPVOID(run.base), run.size, run.prot, &old_prot)) {
+                LOG_ERROR(Core, "Failed to restore protection of {:#x}+{:#x}: {}", run.base,
+                          run.size, Common::GetLastErrorMsg());
+            }
         }
     }
 

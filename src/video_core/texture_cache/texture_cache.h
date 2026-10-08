@@ -314,6 +314,10 @@ private:
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id, bool sync = false);
 
+    /// Replaces a freshly uploaded image with one from user/sotc_textures, matched by the hash
+    /// of its guest data. SOTC_TEXDUMP=1 writes candidates there instead.
+    void ApplyTexturePack(Image& image);
+
     /// Register image in the page table
     void RegisterImage(ImageId image);
 

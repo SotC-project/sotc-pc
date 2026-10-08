@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <cstring>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -90,6 +92,11 @@ public:
             ManageAudioQueue();
         }
 
+        // SOTC_MUTE=1 silences all output (automated test runs).
+        static const bool mute = std::getenv("SOTC_MUTE") != nullptr;
+        if (mute) {
+            std::memset(internal_buffer, 0, internal_buffer_size);
+        }
         if (!SDL_PutAudioStreamData(stream, internal_buffer, internal_buffer_size)) [[unlikely]] {
             LOG_ERROR(Lib_AudioOut, "Failed to output to SDL audio stream: {}", SDL_GetError());
         }
