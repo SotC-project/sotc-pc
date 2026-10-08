@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <fstream>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -126,8 +127,40 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         controller->Button(held, false);
         release_at = 0;
     }
+    // Actions that are due now: from the timed script, and from SOTC_SCRIPT_FILE, a text file
+    // that is polled for appended lines (one action per line, run as soon as it is seen) so a
+    // run can be steered while it is in progress.
+    std::vector<std::string> due;
     if (next < steps.size() && (now - start) / 1000.0 >= steps[next].at) {
-        const std::string& action = steps[next++].action;
+        due.push_back(steps[next++].action);
+    }
+    static const char* live_path = std::getenv("SOTC_SCRIPT_FILE");
+    static std::streamoff live_offset = 0;
+    if (live_path) {
+        std::ifstream live{live_path, std::ios::binary};
+        live.seekg(0, std::ios::end);
+        const std::streamoff size = live.tellg();
+        if (size > live_offset) {
+            std::string text(size - live_offset, 0);
+            live.seekg(live_offset);
+            live.read(text.data(), text.size());
+            // Only consume complete lines.
+            const auto last_newline = text.rfind(10);
+            if (last_newline != std::string::npos) {
+                live_offset += last_newline + 1;
+                std::stringstream lines{text.substr(0, last_newline)};
+                for (std::string line; std::getline(lines, line);) {
+                    while (!line.empty() && (line.back() == 13 || line.back() == 32)) {
+                        line.pop_back();
+                    }
+                    if (!line.empty()) {
+                        due.push_back(line);
+                    }
+                }
+            }
+        }
+    }
+    for (const std::string& action : due) {
         static const std::unordered_map<std::string, OrbisPadButtonDataOffset> buttons = {
             {"cross", OrbisPadButtonDataOffset::Cross},
             {"circle", OrbisPadButtonDataOffset::Circle},
