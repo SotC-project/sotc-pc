@@ -60,6 +60,9 @@ struct Liverpool {
     };
 
     Regs regs{};
+    /// Set by every command other than an indirect draw; cleared by the rasterizer after one.
+    /// While clear, the next indirect draw can only differ in its argument slot.
+    bool state_changed_since_draw{true};
     std::array<CbDbExtent, NUM_COLOR_BUFFERS> last_cb_extent{};
     CbDbExtent last_db_extent{};
 

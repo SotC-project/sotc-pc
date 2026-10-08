@@ -193,6 +193,7 @@ struct DrawStats {
     u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
     u64 ns_pipeline{}, ns_bind{}, ns_draw_total{}, ns_dispatch_total{}, ns_mirror{};
     u32 flushes{};
+    u32 same_pipeline{}, same_inputs{};
     u64 ns_stage[8]{};
     u64 ns_bind_buffers{}, ns_bind_textures{};
     u64 tsc_stage3{};
@@ -217,8 +218,9 @@ struct DrawStats {
                   ns_stage[0] / 1000000, ns_stage[1] / 1000000, ns_stage[2] / 1000000,
                   tsc_stage3 / 1000000, ns_stage[4] / 1000000, ns_stage[5] / 1000000,
                   ns_stage[6] / 1000000, ns_stage[7] / 1000000);
-        LOG_ERROR(Render, "bind split ms: buffers {} textures {}", ns_bind_buffers / 1000000,
-                  ns_bind_textures / 1000000);
+        LOG_ERROR(Render, "bind split ms: buffers {} textures {} repeated {}",
+                  ns_bind_buffers / 1000000, ns_bind_textures / 1000000, same_inputs);
+        same_pipeline = same_inputs = 0;
         ns_bind_buffers = ns_bind_textures = 0;
         for (auto& v : ns_stage) {
             v = 0;
@@ -417,6 +419,43 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
     scheduler.PopPendingOperations();
     SubmitPeriodically(scheduler);
+
+    // The engine issues long runs of indirect draws that differ only in their argument slot.
+    // When no other command ran since the previous one and its pipeline, bindings and render
+    // pass are still current on the command buffer, only the draw itself has to be recorded.
+    struct RepeatDraw {
+        bool valid;
+        bool is_indexed;
+        u32 stride;
+        u16 vertex_sgpr_offset;
+        u16 instance_sgpr_offset;
+        vk::CommandBuffer cmdbuf;
+    };
+    static RepeatDraw repeat{};
+    const bool can_repeat =
+        repeat.valid && !liverpool->state_changed_since_draw && count_address == 0 &&
+        repeat.is_indexed == is_indexed && repeat.stride == stride &&
+        repeat.vertex_sgpr_offset == vertex_sgpr_offset &&
+        repeat.instance_sgpr_offset == instance_sgpr_offset && scheduler.IsRendering() &&
+        repeat.cmdbuf == scheduler.CommandBuffer();
+    repeat.valid = false;
+    if (can_repeat) {
+        const auto size = stride * max_count;
+        const auto [buffer, base] = buffer_cache.ObtainBuffer(arg_address + offset, size, false);
+        // Obtaining the arguments may have uploaded data, which ends the render pass.
+        if (scheduler.IsRendering() && repeat.cmdbuf == scheduler.CommandBuffer() &&
+            !runtime.IsBufferAccessed(buffer, base, size)) {
+            if (is_indexed) {
+                repeat.cmdbuf.drawIndexedIndirect(buffer->Handle(), base, max_count, stride);
+            } else {
+                repeat.cmdbuf.drawIndirect(buffer->Handle(), base, max_count, stride);
+            }
+            DebugState.IncDrawCall();
+            ++g_stats.same_inputs;
+            repeat.valid = true;
+            return;
+        }
+    }
 
     if (!FilterDraw()) {
         return;
@@ -631,6 +670,8 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     }
 
     ResetBindings(false);
+    repeat = {true, is_indexed, stride, vertex_sgpr_offset, instance_sgpr_offset, cmdbuf};
+    liverpool->state_changed_since_draw = false;
 }
 
 void Rasterizer::DispatchDirect() {

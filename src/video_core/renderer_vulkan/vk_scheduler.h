@@ -378,6 +378,11 @@ public:
     /// Ends current rendering scope.
     void EndRendering();
 
+    /// Returns true while a render pass is open on the current command buffer.
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
+    }
+
     /// Starts a new session.
     void BeginSession();
 

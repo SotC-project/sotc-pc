@@ -167,6 +167,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
 
         const PM4ItOpcode opcode = header->type3.opcode;
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
+        state_changed_since_draw = true;
         switch (opcode) {
         case PM4ItOpcode::Nop: {
             // const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -256,6 +257,19 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
+            switch (opcode) {
+            case PM4ItOpcode::Nop:
+            case PM4ItOpcode::SetBase:
+            case PM4ItOpcode::DrawIndirect:
+            case PM4ItOpcode::DrawIndirectMulti:
+            case PM4ItOpcode::DrawIndexIndirect:
+            case PM4ItOpcode::DrawIndexIndirectMulti:
+            case PM4ItOpcode::DrawIndexIndirectCountMulti:
+                break;
+            default:
+                state_changed_since_draw = true;
+                break;
+            }
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -935,6 +949,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         const PM4ItOpcode opcode = header->type3.opcode;
 
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
+        state_changed_since_draw = true;
         switch (opcode) {
         case PM4ItOpcode::Nop: {
             const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
