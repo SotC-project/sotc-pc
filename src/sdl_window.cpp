@@ -96,6 +96,10 @@ static Uint32 SDLCALL PollController(void* userdata, SDL_TimerID timer_id, Uint3
 
 // Test driver: SOTC_SCRIPT="95:cross,100:shot,160:quit" runs pad presses, screenshots and exit at
 // the given seconds after start, so runs need no desktop focus.
+// Window that scripted key and mouse events are addressed to; the overlay UI ignores events
+// that name no window.
+static SDL_WindowID g_script_window = 0;
+
 static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
     struct Step {
@@ -172,7 +176,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             {"left", OrbisPadButtonDataOffset::Left},
             {"right", OrbisPadButtonDataOffset::Right},
         };
-        if (action == "shot") {
+        if (action == "shotui") {
+            // Screenshot including the runtime's own overlays (system dialogs).
+            VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::WithOverlays);
+        } else if (action == "shot") {
             VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
         } else if (action == "quit") {
             SDL_Event e{};
@@ -202,7 +209,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     key_event.button.down = true;
                 } else {
                     key_event.type = SDL_EVENT_KEY_DOWN;
+                    key_event.key.windowID = g_script_window;
                     key_event.key.key = key->second;
+                    key_event.key.scancode = SDL_GetScancodeFromKey(key->second, nullptr);
                     key_event.key.down = true;
                 }
                 SDL_PushEvent(&key_event);
@@ -494,6 +503,7 @@ void WindowSDL::InitTimers() {
     }
     SDL_AddTimer(33, Input::MousePolling, (void*)controllers[0]);
     if (std::getenv("SOTC_SCRIPT")) {
+        g_script_window = SDL_GetWindowID(window);
         SDL_AddTimer(50, &ScriptTick, controllers[0]);
     }
     // Mouse look is on from the start; the mouse-to-joystick hotkey still toggles it. A hidden
