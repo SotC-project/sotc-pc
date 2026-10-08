@@ -24,6 +24,8 @@ float mouse_deadzone_offset = 0.5, mouse_speed = 1, mouse_speed_offset = 0.1250;
 bool mouse_gyro_roll_mode = false;
 Uint32 mouse_polling_id = 0;
 MouseMode mouse_mode = MouseMode::Off;
+// Motion added to the real mouse movement per poll; set by the scripted test driver.
+float test_mouse_delta[2] = {0.0f, 0.0f};
 
 // Switches mouse to a set mode or turns mouse emulation off if it was already in that mode.
 // Returns whether the mode is turned on.
@@ -68,6 +70,8 @@ void EmulateJoystick(GameController* controller, u32 interval) {
 
     float d_x = 0, d_y = 0;
     SDL_GetRelativeMouseState(&d_x, &d_y);
+    d_x += test_mouse_delta[0];
+    d_y += test_mouse_delta[1];
 
     float output_speed =
         SDL_clamp(sqrt(d_x * d_x + d_y * d_y) * mouse_speed + mouse_speed_offset * 128,

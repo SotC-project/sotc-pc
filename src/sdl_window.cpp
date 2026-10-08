@@ -114,8 +114,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
     static size_t next = 0;
     static u64 release_at = 0;
     static OrbisPadButtonDataOffset held{};
-    static SDL_Event key_event{};
-    static u64 key_release_at = 0;
+    struct HeldKey {
+        SDL_Event event;
+        u64 release_at;
+    };
+    static std::vector<HeldKey> held_keys;
+    static u64 mouse_release_at = 0;
     auto* controller = reinterpret_cast<Input::GameController*>(userdata);
     const u64 now = SDL_GetTicks();
     if (release_at && now >= release_at) {
@@ -158,7 +162,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             if (const auto key = Input::string_to_keyboard_key_map.find(name);
                 key != Input::string_to_keyboard_key_map.end()) {
                 const bool is_mouse = name.ends_with("button");
-                key_event = {};
+                SDL_Event key_event{};
                 if (is_mouse) {
                     key_event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
                     key_event.button.button = static_cast<Uint8>(key->second);
@@ -169,17 +173,31 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     key_event.key.down = true;
                 }
                 SDL_PushEvent(&key_event);
-                key_release_at = now + hold_ms;
+                held_keys.push_back({key_event, now + hold_ms});
             }
+        } else if (action.starts_with("mouse=")) {
+            // "mouse=20*1500": mouse moving right 20 counts per poll for 1500 ms (negative =
+            // left), through the same mouse-to-stick conversion as a real mouse.
+            const auto star = action.find('*');
+            Input::test_mouse_delta[0] = std::stof(action.substr(6, star - 6));
+            mouse_release_at =
+                now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
         }
     }
-    if (key_release_at && now >= key_release_at) {
-        const bool is_mouse = key_event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-        key_event.type = is_mouse ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_KEY_UP;
-        (is_mouse ? key_event.button.down : key_event.key.down) = false;
-        SDL_PushEvent(&key_event);
-        key_release_at = 0;
+    if (mouse_release_at && now >= mouse_release_at) {
+        Input::test_mouse_delta[0] = 0.0f;
+        mouse_release_at = 0;
     }
+    std::erase_if(held_keys, [now](HeldKey& key) {
+        if (now < key.release_at) {
+            return false;
+        }
+        const bool is_mouse = key.event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        key.event.type = is_mouse ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_KEY_UP;
+        (is_mouse ? key.event.button.down : key.event.key.down) = false;
+        SDL_PushEvent(&key.event);
+        return true;
+    });
     return interval;
 }
 
@@ -445,6 +463,11 @@ void WindowSDL::InitTimers() {
     if (std::getenv("SOTC_SCRIPT")) {
         SDL_AddTimer(50, &ScriptTick, controllers[0]);
     }
+    // Mouse look is on from the start; the mouse-to-joystick hotkey still toggles it. A hidden
+    // test window must not capture the pointer.
+    const bool capture = Input::ToggleMouseModeTo(Input::MouseMode::Joystick) &&
+                         std::getenv("SOTC_HEADLESS") == nullptr;
+    SDL_SetWindowRelativeMouseMode(window, capture);
 }
 
 void WindowSDL::RequestKeyboard() {
