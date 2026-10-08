@@ -199,6 +199,7 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
         memory->TryWriteBacking(std::bit_cast<u8*>(addr), download.mapped + cursor, size);
         cursor += Common::AlignUp(size, 64);
     }
+    pending_mirror_ranges.Clear();
 }
 
 // Debug aid: bytes of the GPU-side copy of a range that differ from guest memory.
@@ -392,8 +393,13 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {
-        copies.emplace_back(total_size_bytes, addr, size);
-        total_size_bytes += size;
+        // Dirty state is per page. A page the guest wrote to may also hold a compute output
+        // that has not been copied back yet; uploading those bytes would replace the GPU's
+        // result with what guest memory held before it.
+        pending_mirror_ranges.ForEachNotInRange(addr, size, [&](u64 part_addr, u64 part_size) {
+            copies.emplace_back(total_size_bytes, part_addr, part_size);
+            total_size_bytes += part_size;
+        });
     });
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);

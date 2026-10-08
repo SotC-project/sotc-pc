@@ -108,6 +108,11 @@ public:
     /// Copies GPU-written ranges back into guest memory with a single flush.
     void MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges);
 
+    /// Marks a range as written by the GPU and not yet copied back to guest memory.
+    void AddPendingMirror(VAddr device_addr, u32 size) {
+        pending_mirror_ranges.Add(device_addr, size);
+    }
+
 private:
     struct ArenaBinds {
         const Buffer* arena;
@@ -145,6 +150,9 @@ private:
     StreamBuffer stream_buffer;
     Buffer gds_buffer;
     RangeSet gpu_modified_ranges;
+    /// Compute outputs that are newer on the GPU than in guest memory, until MirrorToGuest
+    /// copies them back. Uploads must leave them alone.
+    RangeSet pending_mirror_ranges;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;

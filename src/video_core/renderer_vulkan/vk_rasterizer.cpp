@@ -819,6 +819,9 @@ void Rasterizer::DispatchDirect() {
     }
     g_stats.mirrors += u32(mirrors.size());
     pending_mirrors.insert(pending_mirrors.end(), mirrors.begin(), mirrors.end());
+    for (const auto& [address, size] : mirrors) {
+        buffer_cache.AddPendingMirror(address, size);
+    }
     if (mirror_now) {
         FlushMirrors(32);
     }
