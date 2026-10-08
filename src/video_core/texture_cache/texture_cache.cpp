@@ -858,6 +858,18 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     runtime.UploadImage(&image, buffer, image_copies);
+    {
+        // A guest write that faulted while the data above was being read has untracked the
+        // image and set its dirty flag, which the upload then cleared with the rest. Nothing
+        // would fault again, and the image would keep the half-written data it just received
+        // (seen with textures that are still being streamed in). Keep it dirty instead.
+        std::scoped_lock lk{image.mutex};
+        if (True(image.flags & ImageFlagBits::Registered) &&
+            (image.track_addr != image.info.guest_address ||
+             image.track_addr_end != image.info.guest_address + image.info.guest_size)) {
+            image.flags |= ImageFlagBits::CpuDirty;
+        }
+    }
     ApplyTexturePack(image);
 }
 
