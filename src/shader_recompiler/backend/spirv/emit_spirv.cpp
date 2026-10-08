@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <mutex>
 #include <span>
 #include <type_traits>
@@ -9,6 +10,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/assert.h"
+#include "common/elf_info.h"
 #include "common/func_traits.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
@@ -152,7 +154,40 @@ Id TypeId(const EmitContext& ctx, IR::Type type) {
     }
 }
 
+// Upper bound on the total loop iterations one shader invocation may run, across all of its
+// (possibly nested) loops. Guest loops are frequently bounded by values read from memory; when
+// emulation feeds a shader stale or garbage data such a loop can spin for billions of iterations,
+// which ends in a GPU timeout and a lost device. Real content stays far below this budget, so
+// cutting the loops short only degrades the affected frame instead of ending the session.
+// SHADPS4_LOOP_LIMIT overrides it (0 disables the guard).
+static u32 LoopIterationBudget() {
+    static const u32 budget = [] {
+        if (const char* value = std::getenv("SHADPS4_LOOP_LIMIT")) {
+            return static_cast<u32>(std::strtoul(value, nullptr, 0));
+        }
+        // Shadow of the Colossus runs away in some loops right after its intro video is skipped
+        // (stale data); a lower budget turns multi-second GPU stalls into a short hitch.
+        if (Common::ElfInfo::Instance().GameSerial() == "CUSA08809") {
+            return 1U << 13;
+        }
+        return 1U << 18;
+    }();
+    return budget;
+}
+
 void Traverse(EmitContext& ctx, const IR::Program& program) {
+    const u32 loop_budget = LoopIterationBudget();
+    Id loop_counter{};
+    const auto get_loop_counter = [&] {
+        if (!Sirit::ValidId(loop_counter)) {
+            const Id ptr_type{ctx.TypePointer(spv::StorageClass::Private, ctx.U32[1])};
+            loop_counter = ctx.AddGlobalVariable(ptr_type, spv::StorageClass::Private,
+                                                 ctx.u32_zero_value);
+            ctx.interfaces.push_back(loop_counter);
+        }
+        return loop_counter;
+    };
+
     IR::Block* current_block{};
     for (const IR::AbstractSyntaxNode& node : program.syntax_list) {
         switch (node.type) {
@@ -181,6 +216,12 @@ void Traverse(EmitContext& ctx, const IR::Program& program) {
             const Id continue_label{node.data.loop.continue_block->Definition<Id>()};
             const Id endloop_label{node.data.loop.merge->Definition<Id>()};
 
+            if (loop_budget != 0) {
+                // The header runs once per iteration: charge it to the invocation budget.
+                const Id counter{get_loop_counter()};
+                const Id count{ctx.OpLoad(ctx.U32[1], counter)};
+                ctx.OpStore(counter, ctx.OpIAdd(ctx.U32[1], count, ctx.ConstU32(1U)));
+            }
             ctx.OpLoopMerge(endloop_label, continue_label, spv::LoopControlMask::MaskNone);
             ctx.OpBranch(body_label);
             break;
@@ -200,6 +241,12 @@ void Traverse(EmitContext& ctx, const IR::Program& program) {
             Id cond{ctx.Def(node.data.repeat.cond)};
             const Id loop_header_label{node.data.repeat.loop_header->Definition<Id>()};
             const Id merge_label{node.data.repeat.merge->Definition<Id>()};
+            if (loop_budget != 0) {
+                const Id count{ctx.OpLoad(ctx.U32[1], get_loop_counter())};
+                const Id within_budget{
+                    ctx.OpULessThan(ctx.U1[1], count, ctx.ConstU32(loop_budget))};
+                cond = ctx.OpLogicalAnd(ctx.U1[1], cond, within_budget);
+            }
             ctx.OpBranchConditional(cond, loop_header_label, merge_label);
             break;
         }

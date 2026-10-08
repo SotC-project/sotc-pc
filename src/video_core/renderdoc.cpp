@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
 #include "common/assert.h"
 #include "common/logging/formatter.h"
 #include "core/emulator_settings.h"
@@ -37,6 +39,10 @@ void LoadRenderDoc() {
 
     // Check if we are running by RDoc GUI
     HMODULE mod = GetModuleHandleA("renderdoc.dll");
+    // Debug aid: SOTC_RDOC=<path to renderdoc.dll> loads a portable RenderDoc directly.
+    if (const char* portable = std::getenv("SOTC_RDOC"); !mod && portable) {
+        mod = LoadLibraryA(portable);
+    }
     if (!mod && EmulatorSettings.IsRenderdocEnabled()) {
         // If enabled in config, try to load RDoc runtime in offline mode
         HKEY h_reg_key;
@@ -92,6 +98,9 @@ void LoadRenderDoc() {
 
         // Also remove rdoc crash handler
         rdoc_api->UnloadCrashHandler();
+        if (const char* out = std::getenv("SOTC_CAPTURE_PATH")) {
+            rdoc_api->SetCaptureFilePathTemplate(out);
+        }
     }
 }
 
@@ -109,6 +118,15 @@ void StartCapture() {
         return "," + std::string(v ? v : "") + ",";
     }();
     if (capture_frames.find("," + std::to_string(++frame) + ",") != std::string::npos) {
+        TriggerCapture();
+    }
+    // SOTC_CAPTURE_AT=<seconds> captures the first frame after that time.
+    static const char* at = std::getenv("SOTC_CAPTURE_AT");
+    static const auto start = std::chrono::steady_clock::now();
+    static bool done = false;
+    if (at && !done &&
+        std::chrono::steady_clock::now() - start >= std::chrono::seconds(std::atoi(at))) {
+        done = true;
         TriggerCapture();
     }
 
