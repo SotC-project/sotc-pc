@@ -396,6 +396,15 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
         // Size is greater but resources are not, because the tiling mode is different.
         // Likely the address is reused for a image with a different tiling mode.
+        // Same surface described once with the base and once with the alternate (Neo) tiling:
+        // render targets are never detiled from guest memory, so both name the same image.
+        if (image_info.alt_tile != cache_image.info.alt_tile &&
+            image_info.tile_mode == cache_image.info.tile_mode &&
+            image_info.size == cache_image.info.size &&
+            image_info.pixel_format == cache_image.info.pixel_format) {
+            return {merged_image_id ? merged_image_id : cache_image_id, -1, -1};
+        }
+
         if (image_info.tile_mode != cache_image.info.tile_mode) {
             if (safe_to_delete) {
                 FreeImage(cache_image_id);
