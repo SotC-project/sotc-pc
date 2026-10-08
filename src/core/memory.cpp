@@ -184,18 +184,8 @@ u64 MemoryManager::HashSparseMemory(VAddr virtual_addr, u64 size) {
     return XXH3_64bits_digest(&state);
 }
 
-// Temporary diagnostics: pages written through the backing view, which bypasses page tracking.
-std::mutex g_backing_written_mutex;
-std::unordered_set<u64> g_backing_written;
-
 bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     const VAddr virtual_addr = std::bit_cast<VAddr>(address);
-    {
-        std::scoped_lock diag{g_backing_written_mutex};
-        for (VAddr page = virtual_addr >> 12; page <= (virtual_addr + size - 1) >> 12; ++page) {
-            g_backing_written.insert(page);
-        }
-    }
     std::shared_lock lk{mutex};
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
                virtual_addr);

@@ -272,10 +272,25 @@ static bool DrawLogActive() {
            t < std::chrono::seconds(std::atoi(at)) + std::chrono::milliseconds(100);
 }
 
+// Hands recorded work to the GPU during the frame, so that it executes while later commands are
+// still being recorded instead of all at once when the frame ends.
+static void SubmitPeriodically(Scheduler& scheduler) {
+    static const u32 interval = [] {
+        const char* value = std::getenv("SOTC_SUBMIT_EVERY");
+        return value ? u32(std::atoi(value)) : 512u;
+    }();
+    static u32 pending = 0;
+    if (interval && ++pending >= interval) {
+        pending = 0;
+        scheduler.Flush();
+    }
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
+    SubmitPeriodically(scheduler);
     g_stats.Tick();
     VideoCore::StartThreadSampler();
 
@@ -362,6 +377,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     ScopedNs total_timer{g_stats.ns_draw_total};
 
     scheduler.PopPendingOperations();
+    SubmitPeriodically(scheduler);
 
     if (!FilterDraw()) {
         return;
@@ -580,6 +596,7 @@ void Rasterizer::DispatchDirect() {
     ScopedNs total_timer{g_stats.ns_dispatch_total};
 
     scheduler.PopPendingOperations();
+    SubmitPeriodically(scheduler);
 
     const auto& cs_program = liverpool->GetCsRegs();
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
@@ -716,6 +733,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     ScopedNs total_timer{g_stats.ns_dispatch_total};
 
     scheduler.PopPendingOperations();
+    SubmitPeriodically(scheduler);
 
     const auto& cs_program = liverpool->GetCsRegs();
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();

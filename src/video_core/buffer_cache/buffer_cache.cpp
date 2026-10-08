@@ -15,7 +15,6 @@
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
-#include "core/direct_aliases.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
 #include "video_core/buffer_cache/region_definitions.h"
@@ -96,53 +95,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 
 BufferCache::~BufferCache() = default;
 
-// Re-upload read-only ranges from guest memory once per frame unless the GPU wrote them in the
-// last couple of frames. Write tracking alone leaves this engine's per-frame ring allocations
-// stale on the GPU. SOTC_NO_FORCE_UPLOAD=1 restores tracking-only behaviour.
-// ponytail: hashes every bound range once per frame; a GPU write to the same address older than
-// two frames with unchanged guest bytes would go unnoticed.
-static u64 g_frame = 0;
-// GPU-written ranges of the current frame and of the two before it.
-static std::array<VideoCore::RangeSet, 3> g_recent_writes;
-struct UploadState {
-    u64 frame;
-    u64 hash;
-};
-static std::unordered_map<u64, UploadState> g_last_upload;
-
-// Temporary cost counters for the forced-upload path.
-static u64 g_hash_bytes = 0, g_hash_ranges = 0, g_hash_changed = 0, g_sync_calls = 0;
-static u64 g_upload_bytes = 0, g_upload_calls = 0, g_image_bytes = 0, g_image_calls = 0;
-
-static std::array<u64, 4> g_bucket_bytes{}, g_bucket_seen{}, g_bucket_missed{};
-static u32 g_missed_logged = 0;
-static std::unordered_map<u64, u64> page_hash;
-} // namespace VideoCore
-namespace Core {
-extern std::mutex g_backing_written_mutex;
-extern std::unordered_set<u64> g_backing_written;
-} // namespace Core
-#include <mutex>
-#include <windows.h>
-namespace VideoCore {
-
 void BufferCache::TickFrame() {
-    ++g_frame;
-    if (g_frame % 120 == 0) {
-        LOG_ERROR(Render, "hash buckets/120f (4K,64K,512K,4M): MB {} {} {} {} seen {} {} {} {} missed {} {} {} {}",
-                  g_bucket_bytes[0] >> 20, g_bucket_bytes[1] >> 20, g_bucket_bytes[2] >> 20,
-                  g_bucket_bytes[3] >> 20, g_bucket_seen[0], g_bucket_seen[1], g_bucket_seen[2],
-                  g_bucket_seen[3], g_bucket_missed[0], g_bucket_missed[1], g_bucket_missed[2],
-                  g_bucket_missed[3]);
-        g_bucket_bytes = g_bucket_seen = g_bucket_missed = {};
-        LOG_ERROR(Render, "force-upload/120f: sync calls {} hashed ranges {} MB {} changed {}",
-                  g_sync_calls, g_hash_ranges, g_hash_bytes >> 20, g_hash_changed);
-        LOG_ERROR(Render, "uploads/120f: buffer MB {} in {} copies, image-backed MB {} in {}",
-                  g_upload_bytes >> 20, g_upload_calls, g_image_bytes >> 20, g_image_calls);
-        g_upload_bytes = g_upload_calls = g_image_bytes = g_image_calls = 0;
-        g_hash_bytes = g_hash_ranges = g_hash_changed = g_sync_calls = 0;
-    }
-    g_recent_writes[g_frame % g_recent_writes.size()].Clear();
     if (std::exchange(fault_process_pending, false)) {
         fault_manager->ProcessFaultBuffer();
     }
@@ -295,8 +248,6 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
     if (IsRegionGpuModified(device_addr, size)) {
         return ObtainBuffer(device_addr, size, false);
     }
-    g_image_bytes += size;
-    ++g_image_calls;
     const auto staging = staging_pool.Request(size, VideoCore::MemoryType::HostUncached,
                                               instance.StorageMinAlignment());
     memory->CopySparseMemory(device_addr, staging.mapped, staging.size);
@@ -438,120 +389,12 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
                                     bool is_written, bool is_texel_buffer) {
-    static const bool force_upload = std::getenv("SOTC_NO_FORCE_UPLOAD") == nullptr;
-    ++g_sync_calls;
-    // Temporary: exact check for writes that page tracking never saw. Every page is hashed on
-    // every bind; a page that is clean for the tracker but differs from its last synced hash
-    // changed without a fault.
-    static const bool track_diag = std::getenv("SOTC_TRACKDIAG") != nullptr;
-    if (track_diag && !is_written && size <= 512_KB && memory->IsValidMapping(device_addr, size)) {
-        static u64 checked = 0, missed = 0, logged = 0;
-        for (VAddr page = device_addr & ~0xFFFULL; page < device_addr + size; page += 0x1000) {
-            const u64 hash = memory->HashSparseMemory(page, 0x1000);
-            const bool dirty = memory_tracker->IsRegionCpuModified(page, 0x1000);
-            const bool gpu = std::ranges::any_of(
-                g_recent_writes, [&](const auto& set) { return set.Intersects(page, 0x1000); });
-            auto [it, fresh] = page_hash.try_emplace(page, hash);
-            {
-                std::scoped_lock diag{Core::g_backing_written_mutex};
-                fresh |= Core::g_backing_written.erase(page >> 12) != 0;
-            }
-            ++checked;
-            if (!fresh && !dirty && !gpu && it->second != hash) {
-                ++missed;
-                static const u64 log_after = std::strtoull(std::getenv("SOTC_TRACKDIAG"), nullptr, 0);
-                if (missed > log_after && logged++ < 80) {
-                    MEMORY_BASIC_INFORMATION info{};
-                    VirtualQuery(reinterpret_cast<void*>(page), &info, sizeof(info));
-                    std::string aliases;
-                    Core::DirectAliases().ForEachAlias(page, 0x1000, [&](VAddr alias, u64 asize) {
-                        MEMORY_BASIC_INFORMATION ai{};
-                        VirtualQuery(reinterpret_cast<void*>(alias), &ai, sizeof(ai));
-                        aliases += fmt::format(" {:#x}+{:#x}:prot{:#x}:dirty{}", alias, asize,
-                                               u32(ai.Protect),
-                                               memory_tracker->IsRegionCpuModified(alias, asize));
-                    });
-                    LOG_ERROR(Render,
-                              "untracked change: page {:#x} (bind {:#x}+{:#x}) prot {:#x} frame {} gpumod {} "
-                              "texel {} aliases:{}",
-                              page, device_addr, size, u32(info.Protect), g_frame,
-                              memory_tracker->IsRegionGpuModified(page, 0x1000), is_texel_buffer,
-                              aliases);
-                }
-            }
-            it->second = hash;
-            if (checked % 2000000 == 0) {
-                LOG_ERROR(Render, "trackdiag: {} pages checked, {} untracked changes", checked,
-                          missed);
-            }
-        }
-    }
-    if (force_upload) {
-        if (is_written) {
-            g_recent_writes[g_frame % g_recent_writes.size()].Add(device_addr, size);
-        } else {
-            UploadState& last = g_last_upload[device_addr ^ (u64(size) << 40)];
-            const auto gpu_recent = [&] {
-                return std::ranges::any_of(g_recent_writes, [&](const auto& set) {
-                    return set.Intersects(device_addr, size);
-                });
-            };
-            // The engine also binds "unbounded" buffers clamped to hundreds of MB; hashing those
-            // every frame is not affordable, so they stay on write tracking alone.
-            static constexpr u32 MaxForcedSize = 4_MB;
-            if (size <= MaxForcedSize && last.frame != g_frame + 1 && !gpu_recent() &&
-                memory->IsValidMapping(device_addr, size)) {
-                const bool first = last.frame == 0;
-                const bool tracked_dirty = memory_tracker->IsRegionCpuModified(device_addr, size);
-                last.frame = g_frame + 1;
-                // Only pay for the upload when guest memory actually changed.
-                // Hashed through the backing pages: the range may cross unreadable guest pages.
-                const u64 hash = memory->HashSparseMemory(device_addr, size);
-                g_hash_bytes += size;
-                ++g_hash_ranges;
-                g_hash_changed += hash != last.hash;
-                {
-                    // Temporary: which changes does write tracking miss, by range size?
-                    const u32 bucket = size <= 4_KB ? 0 : size <= 64_KB ? 1 : size <= 512_KB ? 2 : 3;
-                    g_bucket_bytes[bucket] += size;
-                    if (hash != last.hash && !first) {
-                        ++(tracked_dirty ? g_bucket_seen : g_bucket_missed)[bucket];
-                        if (!tracked_dirty && g_missed_logged < 40) {
-                            ++g_missed_logged;
-                            MEMORY_BASIC_INFORMATION info{};
-                            VirtualQuery(reinterpret_cast<void*>(device_addr), &info, sizeof(info));
-                            LOG_ERROR(Render,
-                                      "tracker missed write: addr {:#x} size {:#x} host prot {:#x} "
-                                      "region {:#x}+{:#x}",
-                                      device_addr, size, u32(info.Protect), u64(info.BaseAddress),
-                                      u64(info.RegionSize));
-                        }
-                    }
-                }
-                if (hash != last.hash) {
-                    last.hash = hash;
-                    // ponytail: goes through the tracker, which toggles page protections per
-                    // changed range; a direct staging copy here lost the device and needs
-                    // investigating before it can replace this.
-                    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
-                }
-            }
-        }
-    }
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {
-        if (track_diag) {
-            // This upload consumes the dirty state; the next diagnostic hash starts afresh.
-            for (VAddr page = addr & ~0xFFFULL; page < addr + size; page += 0x1000) {
-                page_hash.erase(page);
-            }
-        }
         copies.emplace_back(total_size_bytes, addr, size);
         total_size_bytes += size;
     });
-    g_upload_bytes += total_size_bytes;
-    g_upload_calls += copies.size();
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
         for (auto& copy : copies) {
