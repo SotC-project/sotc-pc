@@ -193,6 +193,7 @@ struct DrawStats {
     u32 filtered, no_pipeline, bind_failed, drawn, indirect, dispatch, verts_max, mirrors, frames;
     u64 ns_pipeline{}, ns_bind{}, ns_draw_total{}, ns_dispatch_total{}, ns_mirror{};
     u32 flushes{};
+    u32 flush_source[6]{};
     u32 same_pipeline{}, same_inputs{};
     u64 ns_stage[8]{};
     u64 ns_bind_buffers{}, ns_bind_textures{};
@@ -226,6 +227,11 @@ struct DrawStats {
                   ns_pipeline / 1000000, ns_bind / 1000000, ns_draw_total / 1000000,
                   ns_dispatch_total / 1000000, ns_mirror / 1000000, flushes);
         flushes = 0;
+        LOG_ERROR(Render, "flush sources: eop {} submit {} immediate {}", flush_source[1],
+                  flush_source[3], flush_source[5]);
+        for (auto& v : flush_source) {
+            v = 0;
+        }
         LOG_ERROR(Render, "indirect stages ms: prepare {} begin {} vertex {} args {} "
                           "descriptors {} dynstate {} sched-begin {} draw+reset {}",
                   ns_stage[0] / 1000000, ns_stage[1] / 1000000, ns_stage[2] / 1000000,
@@ -801,10 +807,17 @@ void Rasterizer::DispatchDirect() {
         return list;
     };
     static const std::vector<u64> mirror_skip = hash_list("SOTC_MIRROR_SKIP");
-    // Only 0x4defcf7f and 0x2e0f474b (culling) are read back by the game itself, but the other
-    // outputs must still reach guest memory: forced re-uploads would otherwise replace them
-    // with stale data (device loss in the new-game fly-in), so everything is mirrored.
-    static const std::vector<u64> mirror_only = hash_list("SOTC_MIRROR_ONLY");
+    // Only 0x4defcf7f and 0x2e0f474b (culling) are read back by the game itself, and the camera
+    // block of 0x50784801 is read by the SRT walker. The other outputs stay on the GPU: uploads
+    // no longer overwrite them, and mirroring them costs a blocking round trip at every
+    // end-of-pipe event (17 per frame). SOTC_MIRROR_ALL=1 mirrors everything again.
+    static const std::vector<u64> mirror_only = [] {
+        auto list = hash_list("SOTC_MIRROR_ONLY");
+        if (list.empty() && !std::getenv("SOTC_MIRROR_ALL")) {
+            list = {0x4defcf7f, 0x2e0f474b, 0x50784801};
+        }
+        return list;
+    }();
     static std::unordered_map<u64, std::pair<u32, u64>> mirror_histogram;
     if (!g_bisect.active && std::ranges::find(g_bisect.hashes, u64(cs.pgm_hash)) == g_bisect.hashes.end()) {
         g_bisect.hashes.push_back(cs.pgm_hash);
@@ -924,6 +937,7 @@ void Rasterizer::FlushMirrors(u32 source) {
     }
     ScopedNs timer{g_stats.ns_mirror};
     ++g_stats.flushes;
+    ++g_stats.flush_source[std::countr_zero(source)];
     std::ranges::sort(pending_mirrors);
     const auto dup = std::ranges::unique(pending_mirrors);
     pending_mirrors.erase(dup.begin(), dup.end());
