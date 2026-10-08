@@ -107,6 +107,33 @@ void TextureCache::DebugDumpImages() {
         }
         Image& image = slot_images[image_id];
         const auto& info = image.info;
+        if (True(image.flags & ImageFlagBits::GpuModified) && info.size.width == 16 &&
+            info.size.height == 16 && info.resources.layers > 1 && info.num_bits == 32) {
+            // Small layered arrays (light probe inputs): all layers, tightly packed.
+            const u32 layers = info.resources.layers;
+            const u32 bytes = 16 * 16 * 4 * layers;
+            const auto dl = runtime.GetStagingPool().Request(bytes, MemoryType::HostCached, 16);
+            const vk::BufferImageCopy copy = {
+                .bufferOffset = dl.offset,
+                .bufferRowLength = 16,
+                .bufferImageHeight = 16,
+                .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                     .mipLevel = 0,
+                                     .baseArrayLayer = 0,
+                                     .layerCount = layers},
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {16, 16, 1},
+            };
+            runtime.DownloadImage(&image, dl.buffer, std::span{&copy, 1});
+            scheduler.Finish();
+            dl.Invalidate();
+            Common::FS::IOFile out{dir / fmt::format("arr_{:x}_16x16x{}_{}.raw",
+                                                     info.guest_address, layers,
+                                                     vk::to_string(info.pixel_format)),
+                                   Common::FS::FileAccessMode::Create};
+            out.WriteRaw<u8>(dl.mapped, bytes);
+            continue;
+        }
         if (False(image.flags & ImageFlagBits::GpuModified) || info.size.depth != 1 ||
             info.resources.layers != 1 || info.num_bits == 0 || info.size.width < 64 ||
             info.props.is_block || info.num_samples > 1 ||
@@ -595,6 +622,24 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
 ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     const auto& info = desc.info;
     ASSERT(info.guest_address != 0);
+    {
+        // Temporary: SOTC_FINDLOG=1 lists every description of 16x16 layered images.
+        static const bool on = std::getenv("SOTC_FINDLOG") != nullptr;
+        static std::unordered_set<u64> seen;
+        if (on && info.size.width == 16 && info.size.height == 16 &&
+            seen.insert(info.guest_address ^ (u64(info.guest_size) << 36) ^
+                        (u64(desc.type) << 60) ^ (u64(info.pixel_format) << 8) ^
+                        (u64(desc.view_info.range.base.layer) << 24) ^
+                        (u64(desc.view_info.range.extent.layers) << 50))
+                .second) {
+            LOG_ERROR(Render, "findlog addr {:#x} size {:#x} layers {} fmt {} binding {} "
+                              "viewlayer {} n {} type {}",
+                      info.guest_address, info.guest_size, info.resources.layers,
+                      vk::to_string(info.pixel_format), u32(desc.type),
+                      desc.view_info.range.base.layer, desc.view_info.range.extent.layers,
+                      u32(desc.view_info.type));
+        }
+    }
 
     SmallVector<ImageId, 8> image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,

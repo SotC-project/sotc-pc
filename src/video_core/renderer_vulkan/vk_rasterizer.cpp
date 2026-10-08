@@ -348,6 +348,17 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         ++g_stats.filtered;
         return;
     }
+    {
+        // Debug aid: SOTC_SKIP_VS=<hex hash> drops draws using that vertex shader, to see what
+        // it renders.
+        static const u64 skip_vs = [] {
+            const char* v = std::getenv("SOTC_SKIP_VS");
+            return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        }();
+        if (skip_vs && pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash == skip_vs) {
+            return;
+        }
+    }
     // The game rasterizes over a thousand occluder boxes per frame into a depth buffer its
     // culling shaders test against. Leaving that buffer empty only makes culling less strict,
     // and the per-draw cost here far outweighs what the extra visible objects cost a PC GPU.
@@ -488,6 +499,17 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     if (DrawHasNoEffect(pipeline, liverpool->regs)) {
         ++g_stats.filtered;
         return;
+    }
+    {
+        // Debug aid: SOTC_SKIP_VS=<hex hash> drops draws using that vertex shader, to see what
+        // it renders.
+        static const u64 skip_vs = [] {
+            const char* v = std::getenv("SOTC_SKIP_VS");
+            return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        }();
+        if (skip_vs && pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash == skip_vs) {
+            return;
+        }
     }
 
     {
@@ -702,6 +724,16 @@ void Rasterizer::DispatchDirect() {
     }
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    {
+        // Debug aid: SOTC_SKIP_CS=<hex hash> drops dispatches of that compute shader.
+        static const u64 skip_cs = [] {
+            const char* v = std::getenv("SOTC_SKIP_CS");
+            return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        }();
+        if (skip_cs && cs.pgm_hash == skip_cs) {
+            return;
+        }
+    }
     {
         // Temporary: which compute shaders dominate, with their dispatch sizes.
         static std::unordered_map<u64, std::pair<u32, u64>> histogram;
@@ -1477,6 +1509,54 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
             auto& image = texture_cache.GetImage(image_id);
             auto& image_view = texture_cache.FindTexture(image_id, desc);
+            {
+                // Temporary: who reads and writes the 8192-wide lighting atlases.
+                static const u64 only = [] {
+                    const char* v = std::getenv("SOTC_ATLASLOG");
+                    return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+                }();
+                static const bool on = only != 0;
+                static std::unordered_set<u64> seen;
+                if (on && stage.pgm_hash == only && image.info.size.width == 16) {
+                    // Temporary: track the small probe arrays' guest contents over time.
+                    static std::unordered_map<u64, u64> last_hash;
+                    static u32 logged = 0;
+                    const auto& ii = image.info;
+                    const u64 hash = memory->HashSparseMemory(ii.guest_address, ii.guest_size);
+                    if (auto [it, fresh] = last_hash.try_emplace(ii.guest_address, 0);
+                        it->second != hash && logged < 60) {
+                        it->second = hash;
+                        ++logged;
+                        std::vector<u8> data(ii.guest_size);
+                        memory->CopySparseMemory(ii.guest_address, data.data(), data.size());
+                        const auto zeros = std::ranges::count(data, u8{0});
+                        LOG_ERROR(Render, "probearr {:#x} size {:#x} layers {} hash {:#x} zero "
+                                          "bytes {} tick {} tile {}",
+                                  ii.guest_address, ii.guest_size, ii.resources.layers, hash,
+                                  zeros, scheduler.CurrentTick(), u32(ii.tile_mode));
+                        if (FILE* f = std::fopen(
+                                fmt::format("probearr_{:x}_{}_{}.raw", ii.guest_address,
+                                            ii.resources.layers, logged).c_str(), "wb")) {
+                            std::fwrite(data.data(), 1, data.size(), f);
+                            std::fclose(f);
+                        }
+                    }
+                }
+                if (on && (only == 1 ? image.info.size.width == 8192 : stage.pgm_hash == only) &&
+                    seen.insert(stage.pgm_hash ^ (u64(desc.type) << 60) ^ image.info.guest_address ^ (u64(image.flags) << 44) ^ (u64(image.info.pixel_format) << 20))
+                        .second) {
+                    LOG_ERROR(Render, "atlaslog shader {:#x} stage {} addr {:#x} storage {} fmt {} "
+                                      "view fmt {} levels {} base {} n {} dims {}x{}x{} layers {} flags {:#x}",
+                              stage.pgm_hash, u32(stage.sw_stage), image.info.guest_address,
+                              desc.type == VideoCore::TextureCache::BindingType::Storage,
+                              vk::to_string(image.info.pixel_format),
+                              vk::to_string(desc.view_info.format), image.info.resources.levels,
+                              desc.view_info.range.base.level,
+                              desc.view_info.range.extent.levels, image.info.size.width,
+                              image.info.size.height, image.info.size.depth,
+                              image.info.resources.layers, u32(image.flags));
+                }
+            }
             const auto binding = image.binding;
 
             // The image is either bound as storage in a separate descriptor or bound as render
