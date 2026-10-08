@@ -100,6 +100,27 @@ static Uint32 SDLCALL PollController(void* userdata, SDL_TimerID timer_id, Uint3
 // that name no window.
 static SDL_WindowID g_script_window = 0;
 
+// Virtual gamepad for scripted controller tests (SOTC_VPAD=1). SDL reports it like a real
+// device, so its input takes the same path as a physical controller: detection, gamepad
+// events and the binding layer.
+static SDL_Joystick* g_virtual_pad = nullptr;
+
+static void AttachVirtualPad() {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.vendor_id = 0x045E; // reported as an Xbox 360 pad
+    desc.product_id = 0x028E;
+    desc.name = "Scripted test gamepad";
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+    g_virtual_pad = id ? SDL_OpenJoystick(id) : nullptr;
+    if (!g_virtual_pad) {
+        LOG_ERROR(Input, "Could not create the virtual gamepad: {}", SDL_GetError());
+    }
+}
+
 static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
     struct Step {
@@ -124,6 +145,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         u64 release_at;
     };
     static std::vector<HeldKey> held_keys;
+    struct HeldPad {
+        int index;
+        bool is_axis;
+        u64 release_at;
+    };
+    static std::vector<HeldPad> held_pad;
     static u64 mouse_release_at = 0;
     auto* controller = reinterpret_cast<Input::GameController*>(userdata);
     const u64 now = SDL_GetTicks();
@@ -217,6 +244,31 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 SDL_PushEvent(&key_event);
                 held_keys.push_back({key_event, now + hold_ms});
             }
+        } else if (action.starts_with("pad=") && g_virtual_pad) {
+            // "pad=south*300": gamepad button by its SDL name (south, east, west, north, start,
+            // back, dpup, leftshoulder, ...). "pad=lefty:-1*3000": stick or trigger axis held
+            // at a value from -1 to 1.
+            auto name = action.substr(4);
+            u64 hold_ms = 250;
+            if (const auto star = name.find('*'); star != std::string::npos) {
+                hold_ms = std::stoull(name.substr(star + 1));
+                name = name.substr(0, star);
+            }
+            if (const auto colon = name.find(':'); colon != std::string::npos) {
+                const auto axis = SDL_GetGamepadAxisFromString(name.substr(0, colon).c_str());
+                const float value = std::stof(name.substr(colon + 1));
+                if (axis != SDL_GAMEPAD_AXIS_INVALID) {
+                    SDL_SetJoystickVirtualAxis(g_virtual_pad, axis, Sint16(value * 32767));
+                    held_pad.push_back({int(axis), true, now + hold_ms});
+                }
+            } else if (const auto button = SDL_GetGamepadButtonFromString(name.c_str());
+                       button != SDL_GAMEPAD_BUTTON_INVALID) {
+                const bool ok = SDL_SetJoystickVirtualButton(g_virtual_pad, button, true);
+                LOG_INFO(Input, "virtual pad button {} ({}) down: {}", name, int(button), ok);
+                held_pad.push_back({int(button), false, now + hold_ms});
+            } else {
+                LOG_ERROR(Input, "virtual pad: unknown button {}", name);
+            }
         } else if (action.starts_with("mouse=")) {
             // "mouse=20*1500": mouse moving right 20 counts per poll for 1500 ms (negative =
             // left), through the same mouse-to-stick conversion as a real mouse.
@@ -226,6 +278,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
         }
     }
+    std::erase_if(held_pad, [now](const HeldPad& input) {
+        if (now < input.release_at) {
+            return false;
+        }
+        if (input.is_axis) {
+            SDL_SetJoystickVirtualAxis(g_virtual_pad, input.index, 0);
+        } else {
+            SDL_SetJoystickVirtualButton(g_virtual_pad, input.index, false);
+        }
+        return true;
+    });
     if (mouse_release_at && now >= mouse_release_at) {
         Input::test_mouse_delta[0] = 0.0f;
         mouse_release_at = 0;
@@ -343,7 +406,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     Input::ControllerOutput::LinkJoystickAxes();
     Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
 
-    if (EmulatorSettings.IsBackgroundControllerInput()) {
+    // A hidden test window never has focus, so its scripted gamepad needs background input.
+    if (EmulatorSettings.IsBackgroundControllerInput() || std::getenv("SOTC_HEADLESS")) {
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     }
 }
@@ -504,6 +568,9 @@ void WindowSDL::InitTimers() {
     SDL_AddTimer(33, Input::MousePolling, (void*)controllers[0]);
     if (std::getenv("SOTC_SCRIPT")) {
         g_script_window = SDL_GetWindowID(window);
+        if (std::getenv("SOTC_VPAD")) {
+            AttachVirtualPad();
+        }
         SDL_AddTimer(50, &ScriptTick, controllers[0]);
     }
     // Mouse look is on from the start; the mouse-to-joystick hotkey still toggles it. A hidden
