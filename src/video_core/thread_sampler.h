@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <string>
 #include <thread>
@@ -42,6 +43,7 @@ inline void StartThreadSampler() {
 
         using Key = std::array<u64, 3>; // innermost three frames inside this executable
         std::map<Key, u32> counts;
+        std::map<std::pair<u64, u64>, u32> outside_counts; // (leaf address >> 16, our frame)
         u32 total = 0, outside = 0;
         auto last = GetTickCount64();
         while (true) {
@@ -71,6 +73,10 @@ inline void StartThreadSampler() {
                 }
                 ++total;
                 outside += !leaf_inside;
+                if (!leaf_inside) {
+                    // Which module the thread was executing in, with the innermost frame of ours.
+                    ++outside_counts[{ctx.Rip >> 16, key[0]}];
+                }
                 ++counts[key];
             }
             ResumeThread(target);
@@ -96,6 +102,23 @@ inline void StartThreadSampler() {
                     }
                     std::fclose(file);
                 }
+                if (FILE* file = std::fopen("profile_outside.txt", "w")) {
+                    for (const auto& [where, count] : outside_counts) {
+                        char name[MAX_PATH] = "?";
+                        HMODULE module{};
+                        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                               reinterpret_cast<LPCSTR>(where.first << 16),
+                                               &module)) {
+                            GetModuleFileNameA(module, name, sizeof(name));
+                        }
+                        const char* base_name = std::strrchr(name, '\\');
+                        std::fprintf(file, "%u %s %llx\n", count, base_name ? base_name + 1 : name,
+                                     where.second);
+                    }
+                    std::fclose(file);
+                }
+                outside_counts.clear();
                 counts.clear();
                 total = outside = 0;
             }

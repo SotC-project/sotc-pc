@@ -272,6 +272,30 @@ static bool DrawLogActive() {
            t < std::chrono::seconds(std::atoi(at)) + std::chrono::milliseconds(100);
 }
 
+// A draw that writes no colour, depth or stencil and has no shader side effects can only feed
+// occlusion queries, and those are answered without rendering. Shadow of the Colossus issues
+// over a thousand such bounding box draws per frame.
+static bool DrawHasNoEffect(const GraphicsPipeline* pipeline, const AmdGpu::Regs& regs) {
+    if (pipeline->GetGraphicsKey().mrt_mask != 0) {
+        return false;
+    }
+    const auto& depth = regs.depth_control;
+    if ((depth.depth_enable && depth.depth_write_enable) || depth.stencil_enable) {
+        return false;
+    }
+    for (const auto* stage : pipeline->GetStages()) {
+        if (!stage) {
+            continue;
+        }
+        const auto written = [](const auto& desc) { return desc.is_written; };
+        if (std::ranges::any_of(stage->buffers, written) ||
+            std::ranges::any_of(stage->images, written)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Hands recorded work to the GPU during the frame, so that it executes while later commands are
 // still being recorded instead of all at once when the frame ends.
 static void SubmitPeriodically(Scheduler& scheduler) {
@@ -303,6 +327,21 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
     if (!pipeline) {
         ++g_stats.no_pipeline;
+        return;
+    }
+    if (DrawHasNoEffect(pipeline, regs)) {
+        ++g_stats.filtered;
+        return;
+    }
+    // The game rasterizes over a thousand occluder boxes per frame into a depth buffer its
+    // culling shaders test against. Leaving that buffer empty only makes culling less strict,
+    // and the per-draw cost here far outweighs what the extra visible objects cost a PC GPU.
+    // SOTC_OCCLUDERS=1 renders them again.
+    // ponytail: recognised by shape (36 indices, depth only); match the occluder depth target
+    // instead if another depth-only box pass ever turns up.
+    static const bool skip_occluders = std::getenv("SOTC_OCCLUDERS") == nullptr;
+    if (skip_occluders && regs.num_indices == 36 && pipeline->GetGraphicsKey().mrt_mask == 0) {
+        ++g_stats.filtered;
         return;
     }
 
@@ -392,6 +431,10 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         return pipeline_cache.GetGraphicsPipeline(params);
     }();
     if (!pipeline) {
+        return;
+    }
+    if (DrawHasNoEffect(pipeline, liverpool->regs)) {
+        ++g_stats.filtered;
         return;
     }
 
