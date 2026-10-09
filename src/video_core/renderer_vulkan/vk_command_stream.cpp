@@ -122,16 +122,24 @@ void CommandStream::pushDescriptorSetKHR(vk::PipelineBindPoint point, vk::Pipeli
     }
     // The writes point at arrays the caller reuses for the next draw: copy those too.
     size_t bytes = writes.size_bytes();
+    bool chained = false;
     for (const auto& write : writes) {
+        chained |= write.pNext != nullptr;
         bytes += write.descriptorCount *
                      std::max(sizeof(vk::DescriptorImageInfo), sizeof(vk::DescriptorBufferInfo)) +
                  16;
+    }
+    if (chained || bytes > MaxQueuedData) {
+        // Chained, or too much to copy into a chunk: record it in place, in its turn.
+        Drain();
+        target.pushDescriptorSetKHR(point, layout, set, static_cast<u32>(writes.size()),
+                                    writes.data());
+        return;
     }
     Reserve(bytes);
     auto* copy = const_cast<vk::WriteDescriptorSet*>(Copy(writes.data(), writes.size()));
     for (size_t i = 0; i < writes.size(); i++) {
         const auto& write = writes[i];
-        ASSERT_MSG(write.pNext == nullptr, "Chained descriptor writes are not queued");
         if (write.pImageInfo) {
             copy[i].pImageInfo = Copy(write.pImageInfo, write.descriptorCount);
         }
@@ -151,7 +159,11 @@ void CommandStream::beginRendering(const vk::RenderingInfo& info) {
         target.beginRendering(info);
         return;
     }
-    ASSERT_MSG(info.pNext == nullptr, "Chained rendering info is not queued");
+    if (info.pNext != nullptr) {
+        Drain();
+        target.beginRendering(info);
+        return;
+    }
     Reserve(sizeof(info) + (info.colorAttachmentCount + 2) * sizeof(vk::RenderingAttachmentInfo));
     auto* copy = const_cast<vk::RenderingInfo*>(Copy(&info, 1));
     copy->pColorAttachments = Copy(info.pColorAttachments, info.colorAttachmentCount);
@@ -169,10 +181,17 @@ void CommandStream::pipelineBarrier2(const vk::DependencyInfo& info) {
         target.pipelineBarrier2(info);
         return;
     }
-    ASSERT_MSG(info.pNext == nullptr, "Chained dependency info is not queued");
-    Reserve(sizeof(info) + info.memoryBarrierCount * sizeof(vk::MemoryBarrier2) +
-            info.bufferMemoryBarrierCount * sizeof(vk::BufferMemoryBarrier2) +
-            info.imageMemoryBarrierCount * sizeof(vk::ImageMemoryBarrier2));
+    const size_t bytes = sizeof(info) + info.memoryBarrierCount * sizeof(vk::MemoryBarrier2) +
+                         info.bufferMemoryBarrierCount * sizeof(vk::BufferMemoryBarrier2) +
+                         info.imageMemoryBarrierCount * sizeof(vk::ImageMemoryBarrier2);
+    // A chained structure cannot be copied blindly, and a very long barrier list (one entry per
+    // mip and layer of a large image) does not fit a chunk: both are recorded in place.
+    if (info.pNext != nullptr || bytes > MaxQueuedData) {
+        Drain();
+        target.pipelineBarrier2(info);
+        return;
+    }
+    Reserve(bytes);
     auto* copy = const_cast<vk::DependencyInfo*>(Copy(&info, 1));
     copy->pMemoryBarriers = Copy(info.pMemoryBarriers, info.memoryBarrierCount);
     copy->pBufferMemoryBarriers = Copy(info.pBufferMemoryBarriers, info.bufferMemoryBarrierCount);

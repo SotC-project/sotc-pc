@@ -246,6 +246,8 @@ private:
         std::unique_ptr<u8[]> aux{new u8[AuxBytes]};
     };
     static constexpr size_t NumChunks = 16;
+    /// Larger copies than this are not queued; the command is recorded in place instead.
+    static constexpr size_t MaxQueuedData = Chunk::AuxBytes / 4;
     static constexpr u32 PublishAfter = 16 * 1024;
 
     /// Makes sure the record about to be pushed, with `aux_bytes` of copied data, fits in the
