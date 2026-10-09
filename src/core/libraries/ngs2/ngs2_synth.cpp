@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -134,6 +136,7 @@ struct Voice {
     double phase{};
     float pitch = 1.0f;
     float last[MaxChannels]{};
+    float prev[MaxChannels]{}; // frame before `last`, for interpolation
     void* at9{};
     u64 decoded_samples{};
     u64 decoded_bytes{};
@@ -382,7 +385,9 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
         double(v.pitch) * (v.format.sampleRate ? v.format.sampleRate : SystemRate) / SystemRate;
     float next[MaxChannels];
     for (u32 n = 0; n < frames; ++n) {
-        // ponytail: zero-order hold resampling, switch to linear/sinc if aliasing is audible.
+        // Linear interpolation between the two source frames around the play position. Holding
+        // the last frame instead turned slowed-down sounds (stomps, falls) into a staircase,
+        // which is heard as a harsh crunch.
         while (v.phase >= 1.0) {
             if (!NextFrame(v, next, ch)) {
                 {
@@ -395,6 +400,7 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
                 }
                 // Out of data: the voice finishes and frees itself.
                 std::fill(std::begin(v.last), std::end(v.last), 0.0f);
+                std::fill(std::begin(v.prev), std::end(v.prev), 0.0f);
                 v.state = 0;
                 for (u32 c = 0; c < ch; ++c) {
                     std::fill(out + c * frames + n, out + (c + 1) * frames, 0.0f);
@@ -402,11 +408,13 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
                 v.phase = 1.0;
                 return ch;
             }
+            std::memcpy(v.prev, v.last, ch * sizeof(float));
             std::memcpy(v.last, next, ch * sizeof(float));
             v.phase -= 1.0;
         }
+        const float t = static_cast<float>(v.phase);
         for (u32 c = 0; c < ch; ++c) {
-            out[c * frames + n] = v.last[c];
+            out[c * frames + n] = v.prev[c] + (v.last[c] - v.prev[c]) * t;
         }
         v.phase += step;
     }
@@ -910,6 +918,18 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
         }
         if (master) {
             WriteOutput(*master, buffers[i], frames);
+            // Test aid: SOTC_AUDIODUMP=<file> appends the first two channels of every rendered grain
+            // as raw float32 (pre-limiter values would hide what the listener gets, so this is post).
+            static FILE* dump = [] {
+                const char* path = std::getenv("SOTC_AUDIODUMP");
+                return path ? std::fopen(path, "wb") : nullptr;
+            }();
+            if (dump && i == 0 && buffers[i].numChannels >= 2 && buffers[i].waveformType == PcmF32L) {
+                const float* out = static_cast<const float*>(buffers[i].buffer);
+                for (u32 n = 0; n < frames; ++n) {
+                    std::fwrite(out + n * buffers[i].numChannels, sizeof(float), 2, dump);
+                }
+            }
             // Temporary: output level meter, to confirm the synth produces signal.
             static float peak[4]{};
             static u32 playing_max = 0, renders = 0;
@@ -930,7 +950,22 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                     }
                 }
                 playing_max = std::max(playing_max, playing);
+                // Wall-clock gap between renders: a grain lasts 5.3 ms, so a long gap is a
+                // dropout the listener hears.
+                static auto last_render = std::chrono::steady_clock::now();
+                static double worst_gap_ms = 0;
+                static u32 late_renders = 0;
+                const auto render_now = std::chrono::steady_clock::now();
+                const double gap_ms =
+                    std::chrono::duration<double, std::milli>(render_now - last_render).count();
+                last_render = render_now;
+                worst_gap_ms = std::max(worst_gap_ms, gap_ms);
+                late_renders += gap_ms > 40.0;
                 if (++renders % 1000 == 0) {
+                    LOG_ERROR(Lib_Ngs2, "audio gaps/1000 grains: worst {:.0f} ms, over 40 ms: {}",
+                              worst_gap_ms, late_renders);
+                    worst_gap_ms = 0;
+                    late_renders = 0;
                     LOG_ERROR(Lib_Ngs2, "audio/1000 grains: peak out0 {:.3f} out1 {:.3f} out2 {:.3f}, "
                                         "max playing sampler voices {}",
                               peak[0], peak[1], peak[2], playing_max);
