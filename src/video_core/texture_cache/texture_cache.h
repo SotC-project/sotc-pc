@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
@@ -29,6 +30,11 @@ namespace VideoCore {
 
 class BufferCache;
 class PageManager;
+
+/// Button prompt style, following the input device the player last used.
+enum class PromptSet : u32 { PlayStation, Keyboard, Xbox };
+extern std::atomic<PromptSet> g_prompt_set;
+PromptSet ActivePromptSet();
 
 class TextureCache {
     static constexpr s64 DEFAULT_PRESSURE_GC_MEMORY = 1_GB + 512_MB;
@@ -317,6 +323,9 @@ private:
     /// Replaces a freshly uploaded image with one from user/sotc_textures, matched by the hash
     /// of its guest data. SOTC_TEXDUMP=1 writes candidates there instead.
     void ApplyTexturePack(Image& image);
+    /// Guest ranges of images the texture pack replaces in some prompt style.
+    std::vector<std::pair<VAddr, u64>> pack_ranges;
+    PromptSet pack_applied_set{PromptSet::PlayStation};
 
     /// Register image in the page table
     void RegisterImage(ImageId image);

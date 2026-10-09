@@ -42,6 +42,7 @@
 #include <core/emulator_settings.h>
 #include "core/libraries/keyboard/keyboard.h"
 #include "core/libraries/mouse/sdl_mouse.h"
+#include "video_core/texture_cache/texture_cache.h"
 
 CMRC_DECLARE(res);
 
@@ -471,6 +472,10 @@ void WindowSDL::WaitEvent() {
     case SDL_EVENT_MOUSE_WHEEL_OFF:
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
+        // Button prompts follow the device in use.
+        if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            VideoCore::g_prompt_set = VideoCore::PromptSet::Keyboard;
+        }
         OnKeyboardMouseInput(&event);
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
@@ -484,6 +489,22 @@ void WindowSDL::WaitEvent() {
     case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
     case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
     case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+            (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(event.gaxis.value) > 16000)) {
+            const SDL_JoystickID id = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
+                                          ? event.gbutton.which
+                                          : event.gaxis.which;
+            switch (SDL_GetGamepadTypeForID(id)) {
+            case SDL_GAMEPAD_TYPE_PS3:
+            case SDL_GAMEPAD_TYPE_PS4:
+            case SDL_GAMEPAD_TYPE_PS5:
+                VideoCore::g_prompt_set = VideoCore::PromptSet::PlayStation;
+                break;
+            default:
+                VideoCore::g_prompt_set = VideoCore::PromptSet::Xbox;
+                break;
+            }
+        }
         OnGamepadEvent(&event);
         break;
     case SDL_EVENT_QUIT:

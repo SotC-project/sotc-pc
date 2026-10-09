@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <optional>
+#include <fstream>
+#include <atomic>
+#include <array>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -918,31 +922,63 @@ void TextureCache::RefreshImage(Image& image) {
     ApplyTexturePack(image);
 }
 
+std::atomic<PromptSet> g_prompt_set{PromptSet::PlayStation};
+
+PromptSet ActivePromptSet() {
+    // user/sotc_textures/force.txt pins the style: keyboard, xbox or playstation.
+    static const std::optional<PromptSet> forced = []() -> std::optional<PromptSet> {
+        const auto path =
+            Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_textures" / "force.txt";
+        std::ifstream file{path};
+        std::string word;
+        file >> word;
+        if (word == "keyboard") {
+            return PromptSet::Keyboard;
+        } else if (word == "xbox") {
+            return PromptSet::Xbox;
+        } else if (word == "playstation") {
+            return PromptSet::PlayStation;
+        }
+        return std::nullopt;
+    }();
+    return forced.value_or(g_prompt_set.load(std::memory_order_relaxed));
+}
+
 void TextureCache::ApplyTexturePack(Image& image) {
     // File name: <hash of the guest data, 16 hex digits>.bin, holding the mip chain as
     // consecutive untiled levels in the image's own format.
     static const auto dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_textures";
     static const bool dumping = std::getenv("SOTC_TEXDUMP") != nullptr;
-    static const auto pack = [] {
-        std::unordered_map<u64, std::vector<u8>> files;
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-            const auto path = entry.path();
-            if (path.extension() != ".bin") {
-                continue;
+    // One set of replacements per prompt style (see PromptSet): <dir>/keyboard and <dir>/xbox.
+    // Loose files in <dir> itself count as keyboard glyphs. PlayStation prompts are the
+    // game's own textures, so that set stays empty.
+    using PackFiles = std::unordered_map<u64, std::vector<u8>>;
+    static const auto packs = [] {
+        std::array<PackFiles, 3> sets;
+        const auto load = [](const std::filesystem::path& from, PackFiles& files) {
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::directory_iterator(from, ec)) {
+                const auto path = entry.path();
+                if (path.extension() != ".bin") {
+                    continue;
+                }
+                Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read};
+                std::vector<u8> data(file.GetSize());
+                file.ReadRaw<u8>(data.data(), data.size());
+                files.emplace(std::strtoull(path.stem().string().c_str(), nullptr, 16),
+                              std::move(data));
             }
-            Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read};
-            std::vector<u8> data(file.GetSize());
-            file.ReadRaw<u8>(data.data(), data.size());
-            files.emplace(std::strtoull(path.stem().string().c_str(), nullptr, 16), std::move(data));
-        }
-        if (!files.empty()) {
-            LOG_INFO(Render, "Texture pack: {} replacement textures", files.size());
-        }
-        return files;
+        };
+        load(dir, sets[size_t(PromptSet::Keyboard)]);
+        load(dir / "keyboard", sets[size_t(PromptSet::Keyboard)]);
+        load(dir / "xbox", sets[size_t(PromptSet::Xbox)]);
+        LOG_INFO(Render, "Texture pack: {} keyboard and {} Xbox replacement textures",
+                 sets[size_t(PromptSet::Keyboard)].size(), sets[size_t(PromptSet::Xbox)].size());
+        return sets;
     }();
+    const bool pack_empty = std::ranges::all_of(packs, &PackFiles::empty);
     const auto& info = image.info;
-    if ((pack.empty() && !dumping) || info.size.width > 2048 || info.size.height > 2048 ||
+    if ((pack_empty && !dumping) || info.size.width > 2048 || info.size.height > 2048 ||
         info.size.depth != 1 || info.resources.layers != 1 || info.num_samples > 1 ||
         info.props.is_depth || info.num_bits == 0 || info.guest_size > 8_MB ||
         True(image.flags & ImageFlagBits::GpuModified)) {
@@ -973,6 +1009,11 @@ void TextureCache::ApplyTexturePack(Image& image) {
         };
     };
     if (dumping) {
+        // SOTC_TEXDUMP=<n> with n > 1 dumps only n x n textures (128 = button glyphs).
+        static const u32 only_size = u32(std::atoi(std::getenv("SOTC_TEXDUMP")));
+        if (only_size > 1 && (info.size.width != only_size || info.size.height != only_size)) {
+            return;
+        }
         static std::unordered_set<u64> dumped;
         if (!dumped.insert(hash).second) {
             return;
@@ -991,6 +1032,15 @@ void TextureCache::ApplyTexturePack(Image& image) {
         file.WriteRaw<u8>(download.mapped, size);
         return;
     }
+    // Remember every image some set replaces, so a change of prompt style can refresh it.
+    if (std::ranges::any_of(packs, [&](const PackFiles& files) { return files.contains(hash); })) {
+        const std::pair<VAddr, u64> range{info.guest_address, info.guest_size};
+        if (std::ranges::find(pack_ranges, range) == pack_ranges.end()) {
+            pack_ranges.push_back(range);
+        }
+    }
+    const PackFiles& pack = packs[size_t(ActivePromptSet())];
+    pack_applied_set = ActivePromptSet();
     const auto it = pack.find(hash);
     if (it == pack.end()) {
         return;
@@ -1248,6 +1298,14 @@ void TextureCache::GarbageCollectSamplers() {
 }
 
 void TextureCache::RunGarbageCollector() {
+    // The player picked up another input device: have the prompt glyphs uploaded again, which
+    // runs them through the texture pack of the new style.
+    if (pack_applied_set != ActivePromptSet() && !pack_ranges.empty()) {
+        pack_applied_set = ActivePromptSet();
+        for (const auto& [address, size] : pack_ranges) {
+            InvalidateMemory(address, size);
+        }
+    }
     GarbageCollectImages();
     GarbageCollectSamplers();
     ++gc_tick;
