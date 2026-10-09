@@ -12,6 +12,9 @@ enum class UnlockResult { Unlocked, AlreadyUnlocked, UnknownId, IsPlatinum };
 /// the platinum's id when this unlock completes the set, -1 otherwise.
 UnlockResult Unlock(s32 id, s32* platinum_id);
 
+/// Notification sound level, 0..1, from sotc_achievement_volume.txt (0-100) in the user folder.
+float NotificationVolume();
+
 void TogglePanel();
 bool IsPanelOpen();
 /// Draws the panel when open and handles the pad shortcut (L3 + R3); F2 arrives through the

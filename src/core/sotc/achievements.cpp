@@ -5,6 +5,7 @@
 // not ship, so the list below carries the published English texts. Icons in the package are plain
 // PNGs and are read from the game's own files.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -286,6 +287,17 @@ UnlockResult Unlock(s32 id, s32* platinum_id) {
     return UnlockResult::Unlocked;
 }
 
+float NotificationVolume() {
+    // Read each time: the popup is rare and the file may change between sessions.
+    std::ifstream in(Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                     "sotc_achievement_volume.txt");
+    int percent = 100;
+    if (in >> percent) {
+        return std::clamp(percent, 0, 100) / 100.0f;
+    }
+    return 1.0f;
+}
+
 void TogglePanel() {
     panel_open = !panel_open;
 }
@@ -297,13 +309,12 @@ bool IsPanelOpen() {
 void Draw() {
     using namespace ImGui;
 
-    const bool pad_combo =
-        (IsKeyDown(ImGuiKey_GamepadL3) && IsKeyPressed(ImGuiKey_GamepadR3, false)) ||
-        (IsKeyDown(ImGuiKey_GamepadR3) && IsKeyPressed(ImGuiKey_GamepadL3, false));
-    if (pad_combo) {
-        TogglePanel();
-    }
     if (!panel_open) {
+        return;
+    }
+    if (IsKeyPressed(ImGuiKey_Escape, false) || IsKeyPressed(ImGuiKey_F2, false) ||
+        IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+        panel_open = false;
         return;
     }
 
@@ -414,7 +425,7 @@ void Draw() {
         }
         EndChild();
         TextColored({0.62f, 0.64f, 0.58f, 1.0f},
-                    "F2 or L3 + R3: close     Up / Down, mouse wheel: scroll");
+                    "Esc / Circle: close     Up / Down, mouse wheel: scroll");
     }
     End();
     PopStyleVar(3);

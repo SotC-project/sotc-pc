@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <filesystem>
+#include <fstream>
+#include <string>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 #include <CLI/CLI.hpp>
+#include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_messagebox.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -22,6 +25,7 @@
 #include "core/emulator_state.h"
 #include "core/file_sys/fs.h"
 #include "core/ipc/ipc.h"
+#include "core/sotc/menu.h"
 #include "core/user_settings.h"
 #include "emulator.h"
 #include "imgui/big_picture/big_picture.h"
@@ -33,6 +37,7 @@
 #endif
 
 int main(int argc, char* argv[]) {
+    Sotc::Menu::WaitForPreviousInstance();
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
@@ -112,6 +117,39 @@ int main(int argc, char* argv[]) {
     app.allow_extras();
 
     // ---- No-args behavior ----
+    // Started bare (double click, shortcut): launch.ini next to the program names the game and
+    // the folder holding the user data. First line: path of eboot.bin. Second line: folder to
+    // run in.
+    static std::vector<std::string> launch_args;
+    static std::vector<char*> launch_argv;
+    if (argc == 1) {
+        std::filesystem::path program_dir;
+        if (const char* base = SDL_GetBasePath()) {
+            program_dir = base;
+        }
+        std::ifstream launch_file(program_dir / "launch.ini");
+        std::string game_line, folder_line;
+        if (launch_file && std::getline(launch_file, game_line) && !game_line.empty()) {
+            std::getline(launch_file, folder_line);
+            const auto trim = [](std::string& text) {
+                while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) {
+                    text.pop_back();
+                }
+            };
+            trim(game_line);
+            trim(folder_line);
+            if (!folder_line.empty()) {
+                std::error_code ec;
+                std::filesystem::current_path(folder_line, ec);
+            }
+            launch_args = {argv[0], "--game", game_line};
+            for (auto& arg : launch_args) {
+                launch_argv.push_back(arg.data());
+            }
+            argc = static_cast<int>(launch_argv.size());
+            argv = launch_argv.data();
+        }
+    }
     if (argc == 1) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "shadPS4",
                                  "This is a CLI application. Please use the '-b' flag for Big "

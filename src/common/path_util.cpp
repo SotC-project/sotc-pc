@@ -88,6 +88,35 @@ static std::optional<std::filesystem::path> GetBundleParentDirectory() {
 static auto UserPaths = [] {
     // Try the portable user directory first.
     auto user_dir = std::filesystem::current_path() / PORTABLE_DIR;
+#ifdef _WIN32
+    // Started bare (double click, shortcut without a start folder): launch.ini beside the
+    // program names, on its second line, the folder that holds this build's own "user" data.
+    // This runs before main, so main changing folder later would be too late, and falling
+    // through would land in the shared profile under AppData.
+    if (!std::filesystem::exists(user_dir)) {
+        wchar_t module_path[MAX_PATH * 4] = {0};
+        if (GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)))) {
+            std::ifstream launch(std::filesystem::path(module_path).parent_path() / "launch.ini");
+            std::string game_line, folder_line;
+            if (launch && std::getline(launch, game_line) && std::getline(launch, folder_line)) {
+                while (!folder_line.empty() &&
+                       (folder_line.back() == '\r' || folder_line.back() == ' ')) {
+                    folder_line.pop_back();
+                }
+                std::error_code ec;
+                if (!folder_line.empty()) {
+                    user_dir = std::filesystem::path(folder_line) / PORTABLE_DIR;
+                    std::filesystem::create_directories(user_dir, ec);
+                }
+                // A folder that cannot be used must not send this build to the shared profile.
+                if (!std::filesystem::exists(user_dir, ec)) {
+                    user_dir = std::filesystem::path(module_path).parent_path() / PORTABLE_DIR;
+                    std::filesystem::create_directories(user_dir, ec);
+                }
+            }
+        }
+    }
+#endif
     if (!std::filesystem::exists(user_dir)) {
         // If it doesn't exist, use the standard path for the platform instead.
         // NOTE: On Windows we currently just create the portable directory instead.

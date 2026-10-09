@@ -642,6 +642,10 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/libraries/np/trophy_ui.h
             src/core/sotc/achievements.cpp
             src/core/sotc/achievements.h
+            src/core/sotc/challenge.cpp
+            src/core/sotc/challenge.h
+            src/core/sotc/menu.cpp
+            src/core/sotc/menu.h
             src/core/libraries/np/np_party.cpp
             src/core/libraries/np/np_party.h
             src/core/libraries/np/np_auth.cpp

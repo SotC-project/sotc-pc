@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/sotc/challenge.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -734,6 +735,33 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
     }
 
+    // Challenge runs read the health bar off a thin strip of the game image.
+    std::optional<ScreenshotReadback> pending_hud_strip;
+    if (Sotc::Challenge::WantsHudStrip()) {
+        using namespace Sotc::Challenge;
+        const s32 x0 = static_cast<s32>(image_size.width * StripLeft);
+        const s32 y0 = static_cast<s32>(image_size.height * StripTop);
+        const u32 strip_width = static_cast<u32>(image_size.width * StripRight) - x0;
+        const u32 strip_height = static_cast<u32>(image_size.height * StripBottom) - y0;
+        auto& readback = pending_hud_strip.emplace(
+            instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{}, strip_width,
+            strip_height, view_info.format, false);
+        const vk::BufferImageCopy copy_region = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {x0, y0, 0},
+            .imageExtent = {strip_width, strip_height, 1},
+        };
+        runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+    }
+
     // Continue with host-side passes that draw the displayed (scaled) frame.
 
     runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -757,6 +785,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             [deferred_screenshot = std::move(pending_screenshot)]() {
                 SavePendingScreenshot(deferred_screenshot.value());
             });
+    }
+    if (pending_hud_strip) {
+        draw_scheduler.DeferPriorityOperation([strip = std::move(pending_hud_strip)]() {
+            std::vector<u8> rgba;
+            if (ConvertReadbackToRgba8(strip.value(), rgba)) {
+                Sotc::Challenge::OnHudStrip(rgba, strip->width, strip->height);
+            }
+        });
     }
 
     // Flush frame creation commands.

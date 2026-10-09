@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <string_view>
+#include "core/sotc/challenge.h"
 #include "common/logging/log.h"
 #include "core/file_sys/devices/logger.h"
 #include "core/libraries/kernel/file_system.h"
@@ -63,6 +64,7 @@ void Logger::log_flush() {
     if (std::string_view{buffer.data(), buffer.size()}.find("st_gameflow() starting game") !=
         std::string_view::npos) {
         Overlay::SetGameStarted();
+        Sotc::Challenge::OnGameStarted();
     }
     if (is_err) {
         LOG_ERROR(Tty, "[{}] {}", prefix, std::string_view{buffer});

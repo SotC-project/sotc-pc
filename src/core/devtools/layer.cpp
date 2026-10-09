@@ -3,6 +3,8 @@
 
 #include <atomic>
 #include "core/sotc/achievements.h"
+#include "core/sotc/challenge.h"
+#include "core/sotc/menu.h"
 #include "input/controller.h"
 #include "input/input_mouse.h"
 #include "sdl_window.h"
@@ -51,7 +53,8 @@ static std::atomic_bool menu_cursor = false;
 static std::atomic_bool panel_blocks_mouse = false;
 
 static void UpdateMenuCursor() {
-    const bool panel = show_quit_window || Sotc::Achievements::IsPanelOpen();
+    const bool panel =
+        show_quit_window || Sotc::Achievements::IsPanelOpen() || Sotc::Menu::IsOpen();
     panel_blocks_mouse = panel;
     const bool wanted = (panel || !game_started) &&
                         VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;
@@ -497,13 +500,15 @@ void L::Draw() {
         PopFont();
     }
 
+    Sotc::Menu::Draw();
     Sotc::Achievements::Draw();
+    Sotc::Challenge::Draw();
     UpdateMenuCursor();
 
     if (!game_started && !show_quit_window) {
         // Title menu: the game itself has no exit entry, so say how to leave.
         const ImVec2 size = GetIO().DisplaySize;
-        const char* hint = "Quit: F1  /  OPTIONS + SHARE      Achievements: F2  /  L3 + R3";
+        const char* hint = "Menu (free play, achievements, quit): F2  /  L3 + R3";
         // Bottom left: the game's own prompts sit bottom right.
         const float font_size = GetFontSize() * 1.4f;
         const ImVec2 pos{28.0f, size.y - font_size - 22.0f};

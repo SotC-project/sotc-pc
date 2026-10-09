@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <unordered_set>
+#include "core/sotc/menu.h"
 #include "common/assert.h"
 #include "common/string_util.h"
 #include "core/file_sys/backends/host_fs.h"
@@ -216,6 +218,23 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
         return mods_path;
     } else if (path_type == HostPathType::Patch) {
         return patch_path;
+    }
+
+    // Free play adds engine options to the file the game reads them from.
+    // The game asks for it in lower case.
+    const auto is_launch_options = [](std::string_view name) {
+        constexpr std::string_view wanted = "commandlineargs.txt";
+        return name.size() == wanted.size() &&
+               std::equal(name.begin(), name.end(), wanted.begin(), [](char a, char b) {
+                   return std::tolower(static_cast<unsigned char>(a)) == b;
+               });
+    };
+    if (is_launch_options(rel_path) && path_type != HostPathType::Base) {
+        const auto& current = std::filesystem::exists(mods_path) ? mods_path : host_path;
+        const auto replaced = Sotc::Menu::LaunchOptionsFile(current);
+        if (replaced != current) {
+            return replaced;
+        }
     }
 
     if ((corrected_path.starts_with("/app0") || corrected_path.starts_with("/hostapp")) &&
@@ -477,6 +496,14 @@ std::unique_ptr<IFile> MntPoints::Open(std::string_view guest_path,
 
     if (mode == Common::FS::FileAccessMode::Create) {
         return mount->backends.back()->Open(rel_copy, mode);
+    }
+
+    // Free play: the launch options file is served from its extended copy (see GetHostPath).
+    if (mode == Common::FS::FileAccessMode::Read && Common::ToLower(rel_copy) == "commandlineargs.txt") {
+        const auto host = GetHostPath(*corrected);
+        if (host.filename() == "CommandLineArgs.freeplay.txt") {
+            return std::make_unique<HostFile>(host, mode, true);
+        }
     }
 
     for (const auto& backend : mount->backends) {

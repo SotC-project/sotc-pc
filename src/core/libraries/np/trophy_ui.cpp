@@ -14,6 +14,7 @@
 #define MINIMP3_IMPLEMENTATION
 #include <minimp3.h>
 
+#include "core/sotc/achievements.h"
 #include "common/logging/formatter.h"
 #include "common/path_util.h"
 #include "core/emulator_settings.h"
@@ -334,7 +335,8 @@ void TrophyUI::PlayMp3(std::vector<unsigned char> mp3Data) {
 
     // make this louder than game stream
     SDL_SetAudioStreamGain(stream,
-                           static_cast<float>(EmulatorSettings.GetVolumeSlider() * 0.01f * 1.2f));
+                           static_cast<float>(EmulatorSettings.GetVolumeSlider() * 0.01f * 1.2f *
+                                                  Sotc::Achievements::NotificationVolume()));
     unsigned char* buffer_ptr = mp3Data.data();
     size_t remaining_size = mp3Data.size();
 
@@ -372,7 +374,8 @@ void TrophyUI::PlayWav(std::vector<unsigned char> wavData) {
 
     // make this louder than game stream
     SDL_SetAudioStreamGain(stream,
-                           static_cast<float>(EmulatorSettings.GetVolumeSlider() * 0.01f * 1.2f));
+                           static_cast<float>(EmulatorSettings.GetVolumeSlider() * 0.01f * 1.2f *
+                                                  Sotc::Achievements::NotificationVolume()));
     SDL_PutAudioStreamData(stream, audioBuf, audioLen);
     SDL_free(audioBuf);
 }

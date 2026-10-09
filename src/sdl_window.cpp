@@ -17,6 +17,8 @@
 #include <stb_image.h>
 
 #include "core/sotc/achievements.h"
+#include "core/sotc/challenge.h"
+#include "core/sotc/menu.h"
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -231,6 +233,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
+        } else if (action == "chal=win" || action == "chal=dead") {
+            // Test: end a challenge run.
+            Sotc::Challenge::DebugFinish(action == "chal=dead");
         } else if (action.starts_with("ach=")) {
             // Test: unlock an achievement as the game would.
             Sotc::Achievements::Unlock(std::stoi(action.substr(4)), nullptr);
@@ -485,6 +490,7 @@ void WindowSDL::WaitEvent() {
         // Button prompts follow the device in use.
         if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             VideoCore::g_prompt_set = VideoCore::PromptSet::Keyboard;
+            Sotc::Challenge::OnPlayerInput();
         }
         OnKeyboardMouseInput(&event);
         break;
@@ -504,6 +510,7 @@ void WindowSDL::WaitEvent() {
             const SDL_JoystickID id = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
                                           ? event.gbutton.which
                                           : event.gaxis.which;
+            Sotc::Challenge::OnPlayerInput();
             switch (SDL_GetGamepadTypeForID(id)) {
             case SDL_GAMEPAD_TYPE_PS3:
             case SDL_GAMEPAD_TYPE_PS4:
@@ -547,8 +554,12 @@ void WindowSDL::WaitEvent() {
         Overlay::ToggleSimpleFps();
         break;
     case SDL_EVENT_TOGGLE_FRIENDS:
-        // The friends hotkey (F2 by default) opens the achievements panel in this build.
-        Sotc::Achievements::TogglePanel();
+        // The friends hotkey (F2 by default) opens the PC menu in this build.
+        if (Sotc::Achievements::IsPanelOpen()) {
+            Sotc::Achievements::TogglePanel();
+        } else {
+            Sotc::Menu::Toggle();
+        }
         break;
     case SDL_EVENT_RELOAD_INPUTS:
         Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
@@ -668,6 +679,14 @@ Uint32 menuKeyUpCallback(void* key, Uint32 timer_id, Uint32 interval) {
 void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
 
+    // An open overlay panel takes the keyboard; releases still pass so nothing stays held.
+    // The menu hotkey itself goes through so it can close what it opened.
+    if (Overlay::PanelBlocksMouse() &&
+        ((event->type == SDL_EVENT_KEY_DOWN && event->key.key != SDLK_F2) ||
+         event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_WHEEL)) {
+        return;
+    }
+
     const bool is_mouse =
         event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP ||
         event->type == SDL_EVENT_MOUSE_WHEEL || event->type == SDL_EVENT_MOUSE_WHEEL_OFF;
@@ -731,6 +750,10 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
 void WindowSDL::OnGamepadEvent(const SDL_Event* event) {
     bool input_down = event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION ||
                       event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    // An open overlay panel takes the pad buttons too.
+    if (Overlay::PanelBlocksMouse() && event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        return;
+    }
     Input::InputEvent input_event = Input::InputBinding::GetInputEventFromSDLEvent(*event);
 
     // the touchpad button shouldn't be rebound to anything else,

@@ -13,6 +13,7 @@
 #include "core/emulator_settings.h"
 #include "core/libraries/libs.h"
 #include "core/sotc/achievements.h"
+#include "core/sotc/challenge.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_trophy.h"
@@ -947,6 +948,7 @@ int PS4_SYSV_ABI sceNpTrophyRegisterContext(OrbisNpTrophyContext context,
 int PS4_SYSV_ABI sceNpTrophyUnlockTrophy(OrbisNpTrophyContext context, OrbisNpTrophyHandle handle,
                                          OrbisNpTrophyId trophyId, OrbisNpTrophyId* platinumId) {
     LOG_INFO(Lib_NpTrophy, "Unlocking trophy id {}", trophyId);
+    Sotc::Challenge::OnTrophy(trophyId);
 
     if (context == ORBIS_NP_TROPHY_INVALID_CONTEXT)
         return ORBIS_NP_TROPHY_ERROR_INVALID_CONTEXT;
