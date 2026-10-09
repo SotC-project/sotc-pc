@@ -8,6 +8,9 @@
 #include <SDL3/SDL_events.h>
 #include <imgui.h>
 
+#include <filesystem>
+#include <string>
+#include "core/sotc/ui.h"
 #include "common/path_util.h"
 #include "core/debug_state.h"
 #include "core/devtools/layer.h"
@@ -103,6 +106,19 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
     // Big Picture
     FontStack::AddPrimaryUiFont(ImGui::GetIO().Fonts, 64.0f, EmulatorSettings.GetConsoleLanguage(),
                                 font_cfg, true);
+
+    // The overlay screens of this build use a serif face close to the game's own, taken from
+    // the system's fonts.
+    for (const char* name : {"GARA.TTF", "pala.ttf", "BKANT.TTF", "georgia.ttf", "times.ttf"}) {
+        const std::string font_path = std::string("C:\\Windows\\Fonts\\") + name;
+        if (std::filesystem::exists(font_path)) {
+            ImFontConfig serif_cfg{};
+            serif_cfg.OversampleH = 2;
+            serif_cfg.OversampleV = 2;
+            Sotc::Ui::SetSerif(io.Fonts->AddFontFromFileTTF(font_path.c_str(), 96.0f, &serif_cfg));
+            break;
+        }
+    }
 
     // Let the atlas size grow to the largest image the device can create,
     // floored to the power of two the packer requires.

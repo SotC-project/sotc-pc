@@ -646,6 +646,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/sotc/challenge.h
             src/core/sotc/menu.cpp
             src/core/sotc/menu.h
+            src/core/sotc/ui.cpp
+            src/core/sotc/ui.h
             src/core/sotc/watchdog.cpp
             src/core/sotc/watchdog.h
             src/core/libraries/np/np_party.cpp

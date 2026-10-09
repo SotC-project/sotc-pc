@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +19,7 @@
 
 #include "common/logging/log.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/ui.h"
 
 namespace Sotc::Challenge {
 
@@ -144,16 +146,6 @@ std::string FormatTime(double seconds) {
     const int total = static_cast<int>(seconds);
     return fmt::format("{}:{:02d}.{}", total / 60, total % 60,
                        static_cast<int>((seconds - total) * 10.0));
-}
-
-void TextCentered(ImDrawList* draw, float font_size, float center_x, float y, ImU32 color,
-                  const std::string& text) {
-    ImFont* font = ImGui::GetFont();
-    const ImVec2 size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, text.c_str());
-    const ImVec2 pos{center_x - size.x * 0.5f, y};
-    draw->AddText(font, font_size, {pos.x + 2.0f, pos.y + 2.0f}, IM_COL32(0, 0, 0, 200),
-                  text.c_str());
-    draw->AddText(font, font_size, pos, color, text.c_str());
 }
 
 } // namespace
@@ -318,67 +310,70 @@ void Draw() {
     }
     std::lock_guard lock{mutex};
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float scale = display.y / 720.0f;
+    const float scale = Ui::Scale();
     const float center = display.x * 0.5f;
     auto* draw = ImGui::GetForegroundDrawList();
-    const float base = ImGui::GetFontSize();
+    std::string difficulty = state.difficulty;
+    if (!difficulty.empty()) {
+        difficulty[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(difficulty[0])));
+    }
     const std::string title =
-        fmt::format("{}. {}  -  {}", state.colossus, Names[state.colossus - 1], state.difficulty);
+        fmt::format("{}  -  {}", Names[state.colossus - 1], difficulty);
 
     if (state.phase == Phase::Loading || state.phase == Phase::Ready) {
-        TextCentered(draw, base * 1.5f * scale, center, 26.0f * scale,
-                     IM_COL32(236, 232, 214, 240), "Challenge:  " + title);
-        TextCentered(draw, base * 1.2f * scale, center, 62.0f * scale,
-                     IM_COL32(196, 198, 184, 230),
-                     fmt::format("Time to beat {}   -   the clock starts on your first move",
-                                 FormatTime(state.limit)));
+        Ui::TextCentered(draw, 40.0f * scale, center, 40.0f * scale, Ui::TextBright,
+                         "Time Attack");
+        Ui::TextCentered(draw, 30.0f * scale, center, 92.0f * scale, Ui::TextNormal, title);
+        Ui::TextCentered(draw, 26.0f * scale, center, 134.0f * scale, Ui::TextNormal,
+                         fmt::format("Target time {}   -   the clock starts when you move",
+                                     FormatTime(state.limit)));
         return;
     }
     if (state.phase == Phase::Running) {
         const double elapsed = Elapsed();
         const bool over = elapsed > state.limit;
-        TextCentered(draw, base * 2.0f * scale, center, 22.0f * scale,
-                     over ? IM_COL32(226, 120, 96, 245) : IM_COL32(236, 232, 214, 245),
-                     FormatTime(elapsed));
-        TextCentered(draw, base * 1.1f * scale, center, 70.0f * scale,
-                     IM_COL32(196, 198, 184, 225),
-                     fmt::format("Time to beat {}     Damage taken {:.0f}%",
-                                 FormatTime(state.limit), state.damage * 100.0f));
+        Ui::TextCentered(draw, 56.0f * scale, center, 32.0f * scale,
+                         over ? IM_COL32(226, 120, 96, 255) : Ui::TextBright,
+                         FormatTime(elapsed));
+        Ui::TextCentered(draw, 26.0f * scale, center, 100.0f * scale, Ui::TextNormal,
+                         fmt::format("Target {}", FormatTime(state.limit)));
         return;
     }
 
-    // Results.
+    // Results, set out like a page of the game's menus.
     const bool died = state.phase == Phase::Died;
-    const ImVec2 size{620.0f * scale, 464.0f * scale};
-    const ImVec2 min{center - size.x * 0.5f, display.y * 0.5f - size.y * 0.5f};
-    const ImVec2 max{min.x + size.x, min.y + size.y};
-    draw->AddRectFilled(min, max, IM_COL32(30, 31, 28, 236), 4.0f);
-    draw->AddRect(min, max, IM_COL32(120, 124, 108, 255), 4.0f, 0, 2.0f);
-    float y = min.y + 22.0f * scale;
-    TextCentered(draw, base * 1.4f * scale, center, y, IM_COL32(196, 198, 184, 255), title);
-    y += 46.0f * scale;
-    TextCentered(draw, base * 1.9f * scale, center, y, IM_COL32(236, 232, 214, 255),
-                 died ? "Wander has fallen" : "Colossus defeated");
-    y += 64.0f * scale;
+    Ui::Veil(0.78f);
+    float y = display.y * 0.16f;
+    Ui::TextCentered(draw, 34.0f * scale, center, y, Ui::TextNormal, "Time Attack");
+    y += 56.0f * scale;
+    Ui::TextCentered(draw, 62.0f * scale, center, y, Ui::TextBright, title);
+    y += 104.0f * scale;
+    Ui::TextCentered(draw, 34.0f * scale, center, y, Ui::TextNormal,
+                     died ? "Wander has fallen" : "The colossus has fallen");
+    y += 70.0f * scale;
+    Ui::TextCentered(draw, 30.0f * scale, center, y, Ui::TextNormal, "Rank");
+    y += 30.0f * scale;
     const char* grade = Grade();
-    const ImU32 grade_color = died               ? IM_COL32(200, 70, 60, 255)
-                              : grade[0] == 'S'  ? IM_COL32(226, 190, 92, 255)
-                              : grade[0] == 'A'  ? IM_COL32(150, 190, 100, 255)
-                                                 : IM_COL32(210, 210, 200, 255);
-    TextCentered(draw, base * 6.0f * scale, center, y, grade_color, grade);
-    y += 150.0f * scale;
-    TextCentered(draw, base * 1.3f * scale, center, y, IM_COL32(220, 220, 208, 255),
-                 fmt::format("Time {}     Time to beat {}", FormatTime(state.final_time),
-                             FormatTime(state.limit)));
-    y += 34.0f * scale;
-    TextCentered(draw, base * 1.1f * scale, center, y, IM_COL32(190, 192, 180, 255),
-                 fmt::format("Typical player time {} (estimate)", FormatTime(state.average)));
-    y += 34.0f * scale;
-    TextCentered(draw, base * 1.3f * scale, center, y, IM_COL32(220, 220, 208, 255),
-                 fmt::format("Damage taken {:.0f}% of a health bar", state.damage * 100.0f));
-    y += 52.0f * scale;
-    TextCentered(draw, base * 1.05f * scale, center, y, IM_COL32(160, 162, 150, 255),
-                 "F2 or L3 + R3: menu (free play, quit)");
+    const ImU32 grade_color = died ? IM_COL32(196, 76, 64, 255)
+                              : grade[0] == 'S' ? IM_COL32(232, 204, 124, 255)
+                                                : Ui::TextBright;
+    Ui::TextCentered(draw, 210.0f * scale, center, y, grade_color, grade);
+    y += 250.0f * scale;
+    // Two columns: what it is, and the figure.
+    const float left = center - 250.0f * scale;
+    const float right = center + 250.0f * scale;
+    const float line = 50.0f * scale;
+    const float size = 34.0f * scale;
+    const auto row = [&](const char* label, const std::string& value) {
+        Ui::Text(draw, size, {left, y}, Ui::TextNormal, label);
+        Ui::TextRight(draw, size, right, y, Ui::TextBright, value);
+        y += line;
+    };
+    row("Time", FormatTime(state.final_time));
+    row("Target time", FormatTime(state.limit));
+    row("Average time", FormatTime(state.average));
+    row("Damage taken", fmt::format("{:.0f}%", state.damage * 100.0f));
+    Ui::Prompt(draw, display.x * 0.95f, display.y * 0.90f, "MENU", Ui::Action::Menu);
 }
 
 } // namespace Sotc::Challenge

@@ -23,6 +23,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/ui.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -125,8 +126,10 @@ void StartBattle() {
 
 struct Row {
     std::string label;
-    std::string value; // shown right aligned; empty for plain entries
+    std::string value;       // empty for plain entries
+    std::string description; // shown at the bottom while the row is selected
     bool enabled = true;
+    bool adjustable = false; // left / right changes the value
 };
 
 std::string OnOff(bool value) {
@@ -141,24 +144,39 @@ std::string Minutes(double seconds) {
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
     if (page == Page::Main) {
-        rows.push_back({"Free play", ">"});
-        rows.push_back({"Achievements", ">"});
+        rows.push_back({"Free Play", "", "Fight any colossus"});
+        rows.push_back({"Achievements", "", "View your achievements"});
         if (InFreePlay()) {
-            rows.push_back({"Return to the main game", ""});
+            rows.push_back({"Return to Main Game", "", "Leave free play and load your save"});
         }
-        rows.push_back({"Quit game", ""});
-        rows.push_back({"Close", ""});
+        rows.push_back({"Quit Game", "", "Close the game"});
+        rows.push_back({"Resume", "", "Return to the game"});
     } else {
-        rows.push_back({"Colossus", fmt::format("< {}. {} >", colossus + 1,
-                                                Challenge::ColossusName(colossus + 1))});
-        rows.push_back({"Difficulty", fmt::format("< {} >", Difficulties[difficulty])});
-        rows.push_back({"Challenge (timed, graded D to S+, F on death)", OnOff(challenge)});
-        rows.push_back({"All weapons and items", OnOff(all_items && !challenge), !challenge});
-        rows.push_back({"Take no damage", OnOff(no_damage && !challenge), !challenge});
-        rows.push_back({"Unlimited grip", OnOff(unlimited_grip && !challenge), !challenge});
-        rows.push_back({"Maximum attack damage", OnOff(max_damage && !challenge), !challenge});
-        rows.push_back({"Start battle (restarts the game)", ""});
-        rows.push_back({"Back", ""});
+        const std::string target = fmt::format(
+            "Target time {}{}", Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
+            Challenge::LimitIsEstimate(colossus + 1) ? " (approximate)" : "");
+        const char* helper_note = challenge ? "Not available in Time Attack" : "";
+        rows.push_back({"Colossus",
+                        fmt::format("{}. {}", colossus + 1, Challenge::ColossusName(colossus + 1)),
+                        "Choose the colossus to fight", true, true});
+        rows.push_back({"Difficulty", Difficulties[difficulty], "Choose the difficulty", true,
+                        true});
+        rows.push_back({"Time Attack", OnOff(challenge),
+                        "Timed battle, ranked from D to S+ on time and damage taken. " + target,
+                        true, true});
+        rows.push_back({"All Weapons and Items", OnOff(all_items && !challenge),
+                        challenge ? helper_note : "Start with every weapon and item", !challenge,
+                        true});
+        rows.push_back({"Invincibility", OnOff(no_damage && !challenge),
+                        challenge ? helper_note : "Wander takes no damage", !challenge, true});
+        rows.push_back({"Unlimited Grip", OnOff(unlimited_grip && !challenge),
+                        challenge ? helper_note : "The grip gauge never empties", !challenge,
+                        true});
+        rows.push_back({"Maximum Damage", OnOff(max_damage && !challenge),
+                        challenge ? helper_note : "Every sword strike deals full damage",
+                        !challenge, true});
+        rows.push_back({"Begin Battle", "", "The game restarts and loads the battle"});
+        rows.push_back({"Back", "", "Return to the previous menu"});
     }
     return rows;
 }
@@ -295,78 +313,76 @@ void Draw() {
         activate_row = selected;
         activate_direction = 1;
     }
-    const bool back = IsKeyPressed(ImGuiKey_Escape, false) || IsKeyPressed(ImGuiKey_Backspace, false) ||
+    const bool back = IsKeyPressed(ImGuiKey_Escape, false) ||
+                      IsKeyPressed(ImGuiKey_Backspace, false) ||
                       IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
 
+    // Laid out like the game's own menus: title top left, entries below it with a triangle on
+    // the selected one, values in a column to the right, prompts bottom right.
     const ImVec2 display = GetIO().DisplaySize;
-    const float scale = display.y / 720.0f;
-    const float width = (page == Page::Main ? 380.0f : 620.0f) * scale;
-    SetNextWindowPos({display.x * 0.5f, display.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
-    SetNextWindowSize({width, 0.0f}, ImGuiCond_Always);
-    PushStyleColor(ImGuiCol_WindowBg, IM_COL32(30, 31, 28, 240));
-    PushStyleColor(ImGuiCol_Border, IM_COL32(120, 124, 108, 255));
-    PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-    PushStyleVar(ImGuiStyleVar_WindowPadding, {20.0f * scale, 16.0f * scale});
-    PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
-    if (Begin("SotcMenu", nullptr,
-              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
-                  ImGuiWindowFlags_AlwaysAutoResize)) {
-        SetWindowFontScale(1.5f * scale);
-        TextColored({0.90f, 0.88f, 0.80f, 1.0f}, "%s",
-                    page == Page::Main ? "Shadow of the Colossus" : "Free play");
-        SetWindowFontScale(1.1f * scale);
-        Dummy({0.0f, 6.0f * scale});
-        auto* draw = GetWindowDrawList();
-        const float row_height = GetTextLineHeight() + 14.0f * scale;
-        for (int i = 0; i < count; i++) {
-            const Row& row = rows[i];
-            const ImVec2 origin = GetCursorScreenPos();
-            const float row_width = GetContentRegionAvail().x;
-            PushID(i);
-            if (InvisibleButton("row", {row_width, row_height}) && row.enabled) {
+    const float scale = Ui::Scale();
+    auto* draw = GetForegroundDrawList();
+    Ui::Veil(0.72f);
+    const float title_x = display.x * 0.15f;
+    const float label_x = display.x * 0.20f;
+    const float value_x = display.x * 0.56f;
+    float y = display.y * 0.24f;
+    Ui::Text(draw, 60.0f * scale, {title_x, y}, Ui::TextBright,
+             page == Page::Main ? "Shadow of the Colossus" : "Free Play");
+    y += 104.0f * scale;
+    const float row_height = 52.0f * scale;
+    const float text_size = 34.0f * scale;
+    const ImVec2 mouse = GetIO().MousePos;
+    const bool mouse_moved = GetIO().MouseDelta.x != 0.0f || GetIO().MouseDelta.y != 0.0f;
+    for (int i = 0; i < count; i++) {
+        const Row& row = rows[i];
+        const float row_y = y + row_height * i;
+        const bool hovered = mouse.x >= title_x && mouse.x <= display.x * 0.75f &&
+                             mouse.y >= row_y && mouse.y < row_y + row_height;
+        if (hovered && row.enabled) {
+            if (mouse_moved) {
+                selected = i;
+            }
+            if (IsMouseClicked(ImGuiMouseButton_Left)) {
                 selected = i;
                 activate_row = i;
-                activate_direction = 0;
-            }
-            if (IsItemHovered() && row.enabled &&
-                (GetIO().MouseDelta.x != 0.0f || GetIO().MouseDelta.y != 0.0f)) {
-                selected = i;
-            }
-            PopID();
-            if (i == selected) {
-                draw->AddRectFilled(origin, {origin.x + row_width, origin.y + row_height - 2.0f},
-                                    IM_COL32(74, 96, 52, 235), 3.0f);
-            }
-            const ImU32 color = !row.enabled   ? IM_COL32(110, 110, 104, 255)
-                                : i == selected ? IM_COL32(244, 240, 222, 255)
-                                                : IM_COL32(200, 200, 188, 255);
-            const float text_y = origin.y + 6.0f * scale;
-            draw->AddText({origin.x + 10.0f * scale, text_y}, color, row.label.c_str());
-            if (!row.value.empty()) {
-                const float value_width = CalcTextSize(row.value.c_str()).x;
-                draw->AddText({origin.x + row_width - value_width - 10.0f * scale, text_y}, color,
-                              row.value.c_str());
+                // A click on the left half of a value steps it back.
+                activate_direction = row.adjustable && mouse.x < value_x ? -1 : 0;
             }
         }
-        Dummy({0.0f, 4.0f * scale});
-        SetWindowFontScale(0.95f * scale);
-        if (page == Page::FreePlay) {
-            const bool hard = difficulty == 2;
-            TextColored({0.72f, 0.74f, 0.66f, 1.0f},
-                        "Time attack limit %s%s     Typical player time %s (estimate)",
-                        Minutes(Challenge::TimeLimit(colossus + 1, hard)).c_str(),
-                        Challenge::LimitIsEstimate(colossus + 1) ? " (estimate)" : "",
-                        Minutes(Challenge::AverageTime(colossus + 1)).c_str());
+        const ImU32 color =
+            !row.enabled ? Ui::TextDim : i == selected ? Ui::TextBright : Ui::TextNormal;
+        const float text_y = row_y + (row_height - Ui::TextSize(text_size, row.label).y) * 0.5f;
+        if (i == selected) {
+            Ui::Triangle(draw, {label_x - 22.0f * scale, row_y + row_height * 0.5f},
+                         16.0f * scale, true, Ui::TextBright);
         }
-        PushStyleColor(ImGuiCol_Text, IM_COL32(158, 163, 148, 255));
-        TextWrapped("Up / Down: choose    Left / Right: change    Enter / Cross: select    "
-                    "Esc / Circle: back");
-        PopStyleColor();
+        Ui::Text(draw, text_size, {label_x, text_y}, color, row.label);
+        if (!row.value.empty()) {
+            Ui::TextCentered(draw, text_size, value_x, text_y, color, row.value);
+            if (row.adjustable && row.enabled) {
+                const float arrow = 13.0f * scale;
+                Ui::Triangle(draw, {value_x - 190.0f * scale, row_y + row_height * 0.5f}, arrow,
+                             false, color);
+                Ui::Triangle(draw, {value_x + 190.0f * scale, row_y + row_height * 0.5f}, arrow,
+                             true, color);
+            }
+        }
     }
-    End();
-    PopStyleVar(3);
-    PopStyleColor(2);
+    const Row& current = rows[selected];
+    if (!current.description.empty()) {
+        Ui::TextCentered(draw, 28.0f * scale, display.x * 0.5f, display.y * 0.86f,
+                         Ui::TextNormal, current.description);
+    }
+    const float prompt_x = display.x * 0.95f;
+    float prompt_y = display.y * 0.865f;
+    if (current.adjustable) {
+        prompt_y += Ui::Prompt(draw, prompt_x, prompt_y, "CHANGE", Ui::Action::Change);
+    }
+    prompt_y += Ui::Prompt(draw, prompt_x, prompt_y, "BACK", Ui::Action::Back);
+    if (!current.adjustable) {
+        Ui::Prompt(draw, prompt_x, prompt_y, "CONFIRM", Ui::Action::Confirm);
+    }
 
     if (activate_row >= 0 && rows[activate_row].enabled) {
         Activate(activate_row, activate_direction);
