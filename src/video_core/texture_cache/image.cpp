@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+#include <fmt/format.h>
 #include <memory>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -131,6 +139,32 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     }
 
     image_uid = global_image_uid.Next();
+    // Diagnostic (SOTC_IMGSTAT=1): which images get created over and over.
+    if (static const bool stat = std::getenv("SOTC_IMGSTAT") != nullptr; stat) {
+        static std::map<std::string, u32> counts;
+        static auto last = std::chrono::steady_clock::now();
+        counts[fmt::format("{}x{}x{} L{} M{} S{} {} addr {:#x} depth {}", info.size.width,
+                           info.size.height, info.size.depth, info.resources.layers,
+                           info.resources.levels, info.num_samples,
+                           vk::to_string(info.pixel_format), info.guest_address,
+                           static_cast<int>(info.props.is_depth))]++;
+        if (const auto now = std::chrono::steady_clock::now(); now - last > std::chrono::seconds(6)) {
+            last = now;
+            std::vector<std::pair<u32, std::string>> top;
+            u32 total = 0;
+            for (const auto& [key, count] : counts) {
+                top.emplace_back(count, key);
+                total += count;
+            }
+            std::ranges::sort(top, std::greater<>());
+            std::string line;
+            for (size_t i = 0; i < top.size() && i < 8; i++) {
+                line += fmt::format(" | {}x {}", top[i].first, top[i].second);
+            }
+            LOG_ERROR(Render, "images created/6s: {} total{}", total, line);
+            counts.clear();
+        }
+    }
     vk::ImageCreateFlags flags{vk::ImageCreateFlagBits::eMutableFormat |
                                vk::ImageCreateFlagBits::eExtendedUsage};
     if (info.props.is_volume) {

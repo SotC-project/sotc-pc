@@ -34,6 +34,8 @@ class PageManager;
 /// Button prompt style, following the input device the player last used.
 enum class PromptSet : u32 { PlayStation, Keyboard, Xbox };
 extern std::atomic<PromptSet> g_prompt_set;
+/// Raised when the replacement glyph files on disk were regenerated; the cache reads them again.
+extern std::atomic<u32> g_pack_generation;
 PromptSet ActivePromptSet();
 
 class TextureCache {

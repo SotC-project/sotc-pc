@@ -17,6 +17,7 @@
 #include <iterator>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
@@ -28,6 +29,7 @@
 #include "common/singleton.h"
 #include "core/file_sys/fs.h"
 #include "input/input_handler.h"
+#include "video_core/texture_cache/texture_cache.h"
 #include "core/devtools/layer.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
@@ -441,6 +443,38 @@ void LoadBindings() {
     bindings_dirty = false;
 }
 
+/// Redraws the key pictures the game's hints use from the bindings file (glyphs.py, needs
+/// Python with Pillow), then has the texture cache read them again. Runs beside the game.
+void RegenerateGlyphs() {
+#ifdef _WIN32
+    std::error_code ec;
+    const auto script = std::filesystem::current_path(ec) / "glyphs.py";
+    if (!std::filesystem::exists(script, ec)) {
+        return;
+    }
+    const auto textures = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_textures";
+    std::wstring command = L"python.exe \"" + script.wstring() + L"\" \"" + textures.wstring() +
+                           L"\" --ini \"" + BindingsFile().wstring() + L"\"";
+    std::thread{[command]() mutable {
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process{};
+        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                            nullptr, nullptr, &startup, &process)) {
+            return;
+        }
+        WaitForSingleObject(process.hProcess, 30000);
+        DWORD exit_code = 1;
+        GetExitCodeProcess(process.hProcess, &exit_code);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        if (exit_code == 0) {
+            ++VideoCore::g_pack_generation;
+        }
+    }}.detach();
+#endif
+}
+
 /// Gives `output` the keyboard or mouse input `key` (taking it from any other action) and
 /// reloads the bindings.
 void Rebind(const std::string& output, const std::string& key) {
@@ -480,6 +514,7 @@ void Rebind(const std::string& output, const std::string& key) {
     }
     Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
     bindings_dirty = true;
+    RegenerateGlyphs();
 }
 
 std::string KeyLabel(const std::string& key) {

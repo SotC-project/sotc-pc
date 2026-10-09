@@ -923,6 +923,7 @@ void TextureCache::RefreshImage(Image& image) {
 }
 
 std::atomic<PromptSet> g_prompt_set{PromptSet::PlayStation};
+std::atomic<u32> g_pack_generation{0};
 
 PromptSet ActivePromptSet() {
     // user/sotc_textures/force.txt pins the style: keyboard, xbox or playstation.
@@ -953,7 +954,7 @@ void TextureCache::ApplyTexturePack(Image& image) {
     // Loose files in <dir> itself count as keyboard glyphs. PlayStation prompts are the
     // game's own textures, so that set stays empty.
     using PackFiles = std::unordered_map<u64, std::vector<u8>>;
-    static const auto packs = [] {
+    const auto load_packs = [] {
         std::array<PackFiles, 3> sets;
         const auto load = [](const std::filesystem::path& from, PackFiles& files) {
             std::error_code ec;
@@ -975,7 +976,14 @@ void TextureCache::ApplyTexturePack(Image& image) {
         LOG_INFO(Render, "Texture pack: {} keyboard and {} Xbox replacement textures",
                  sets[size_t(PromptSet::Keyboard)].size(), sets[size_t(PromptSet::Xbox)].size());
         return sets;
-    }();
+    };
+    // Read again whenever the files were regenerated (key bindings changed in the PC menu).
+    static u32 loaded_generation = g_pack_generation.load();
+    static auto packs = load_packs();
+    if (const u32 generation = g_pack_generation.load(); generation != loaded_generation) {
+        loaded_generation = generation;
+        packs = load_packs();
+    }
     const bool pack_empty = std::ranges::all_of(packs, &PackFiles::empty);
     const auto& info = image.info;
     if ((pack_empty && !dumping) || info.size.width > 2048 || info.size.height > 2048 ||
@@ -1317,7 +1325,10 @@ void TextureCache::GarbageCollectSamplers() {
 void TextureCache::RunGarbageCollector() {
     // The player picked up another input device: have the prompt glyphs uploaded again, which
     // runs them through the texture pack of the new style.
-    if (pack_applied_set != ActivePromptSet() && !pack_ranges.empty()) {
+    static u32 seen_generation = g_pack_generation.load();
+    const bool regenerated = seen_generation != g_pack_generation.load();
+    seen_generation = g_pack_generation.load();
+    if ((regenerated || pack_applied_set != ActivePromptSet()) && !pack_ranges.empty()) {
         pack_applied_set = ActivePromptSet();
         for (const auto& [address, size] : pack_ranges) {
             InvalidateMemory(address, size);
