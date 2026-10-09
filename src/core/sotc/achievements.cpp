@@ -27,6 +27,7 @@
 #include "core/file_sys/fs.h"
 #include "core/libraries/np/trophy_ui.h"
 #include "core/sotc/achievements.h"
+#include "core/sotc/ui.h"
 #include "imgui/imgui_texture.h"
 
 namespace Sotc::Achievements {
@@ -335,101 +336,85 @@ void Draw() {
         unlocked += when != 0;
     }
 
+    // Laid out like the game's own menus (see core/sotc/ui.h).
     const ImVec2 display = GetIO().DisplaySize;
-    const float scale = display.y / 1080.0f;
-    const ImVec2 size{std::min(display.x * 0.9f, 980.0f * scale), display.y * 0.82f};
-    SetNextWindowPos({display.x * 0.5f, display.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
-    SetNextWindowSize(size, ImGuiCond_Always);
-    // Weathered stone and moss, after the shrine walls.
-    PushStyleColor(ImGuiCol_WindowBg, IM_COL32(30, 31, 28, 238));
-    PushStyleColor(ImGuiCol_Border, IM_COL32(120, 124, 108, 255));
-    PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
-    PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(104, 138, 66, 255));
-    PushStyleColor(ImGuiCol_FrameBg, IM_COL32(58, 60, 54, 255));
-    PushStyleColor(ImGuiCol_Button, IM_COL32(70, 74, 64, 255));
-    PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(104, 138, 66, 255));
-    PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-    PushStyleVar(ImGuiStyleVar_WindowPadding, {22.0f * scale, 18.0f * scale});
-    PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
+    const float scale = Ui::Scale();
+    auto* draw = GetForegroundDrawList();
+    Ui::Veil(0.80f);
+    const float left = display.x * 0.15f;
+    const float right = display.x * 0.85f;
+    float top = display.y * 0.10f;
+    Ui::Text(draw, 60.0f * scale, {left, top}, Ui::TextBright, "Achievements");
+    Ui::TextRight(draw, 40.0f * scale, right, top + 14.0f * scale, Ui::TextNormal,
+                  fmt::format("{} / {}", unlocked, Entries.size()));
+    top += 92.0f * scale;
+    // Progress: a thin line, pale where earned.
+    draw->AddRectFilled({left, top}, {right, top + 3.0f * scale}, IM_COL32(90, 90, 84, 255));
+    draw->AddRectFilled({left, top},
+                        {left + (right - left) * unlocked / Entries.size(), top + 3.0f * scale},
+                        Ui::TextBright);
+    top += 26.0f * scale;
 
-    if (Begin("Achievements", nullptr,
-              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
-        SetWindowFontScale(2.0f * scale);
-        TextColored({0.90f, 0.88f, 0.80f, 1.0f}, "Achievements");
-        SetWindowFontScale(1.35f * scale);
-        SameLine();
-        const std::string count = fmt::format("{} / {}", unlocked, Entries.size());
-        const char* close_label = "Close";
-        const float close_width = CalcTextSize(close_label).x + GetStyle().FramePadding.x * 2.0f;
-        SetCursorPosX(GetWindowWidth() - GetStyle().WindowPadding.x - close_width);
-        if (Button(close_label)) {
-            panel_open = false;
-        }
-        ProgressBar(static_cast<float>(unlocked) / Entries.size(), {-1.0f, GetFrameHeight()},
-                    count.c_str());
-        Spacing();
-
-        const float icon = 84.0f * scale;
-        const float row = icon + 14.0f * scale;
-        const float footer = GetTextLineHeightWithSpacing() + 6.0f * scale;
-        if (BeginChild("list", {0.0f, -footer}, ImGuiChildFlags_None, ImGuiWindowFlags_NoNav)) {
-            const float step = row * 14.0f * GetIO().DeltaTime;
-            if (IsKeyDown(ImGuiKey_DownArrow) || IsKeyDown(ImGuiKey_GamepadDpadDown)) {
-                SetScrollY(GetScrollY() + step);
-            }
-            if (IsKeyDown(ImGuiKey_UpArrow) || IsKeyDown(ImGuiKey_GamepadDpadUp)) {
-                SetScrollY(GetScrollY() - step);
-            }
-            auto* draw = GetWindowDrawList();
-            for (size_t i = 0; i < Entries.size(); i++) {
-                const Entry& entry = Entries[i];
-                const bool done = unlock_time[i] != 0;
-                const ImVec2 origin = GetCursorScreenPos();
-                const float width = GetContentRegionAvail().x;
-                draw->AddRectFilled(origin, {origin.x + width, origin.y + row - 6.0f * scale},
-                                    done ? IM_COL32(62, 72, 50, 200) : IM_COL32(46, 47, 43, 200),
-                                    3.0f);
-                const ImVec2 icon_min{origin.x + 6.0f * scale, origin.y + 4.0f * scale};
-                const ImVec2 icon_max{icon_min.x + icon, icon_min.y + icon};
-                if (icons[i]) {
-                    draw->AddImage(icons[i].GetTexture().im_id, icon_min, icon_max, {0, 0}, {1, 1},
-                                   done ? IM_COL32_WHITE : IM_COL32(90, 90, 90, 255));
-                } else {
-                    draw->AddRectFilled(icon_min, icon_max, IM_COL32(70, 72, 66, 255));
-                }
-                const float text_x = icon_max.x + 14.0f * scale;
-                const float line = GetTextLineHeight();
-                draw->AddText({text_x, origin.y + 8.0f * scale},
-                              done ? IM_COL32(236, 232, 214, 255) : IM_COL32(186, 186, 176, 255),
-                              entry.name);
-                draw->AddText({text_x, origin.y + 8.0f * scale + line * 1.25f},
-                              done ? IM_COL32(196, 198, 184, 255) : IM_COL32(150, 150, 142, 255),
-                              entry.description);
-                std::string status = GradeName(entry.grade);
-                if (done) {
-                    const std::time_t when = static_cast<std::time_t>(unlock_time[i]);
-                    char date[32]{};
-                    if (const std::tm* local = std::localtime(&when)) {
-                        std::strftime(date, sizeof(date), "%Y-%m-%d %H:%M", local);
-                    }
-                    status += fmt::format("  -  unlocked {}", date);
-                } else {
-                    status += "  -  locked";
-                }
-                draw->AddText({text_x, origin.y + 8.0f * scale + line * 2.5f},
-                              done ? GradeColor(entry.grade) : IM_COL32(132, 132, 124, 255),
-                              status.c_str());
-                Dummy({width, row});
-            }
-        }
-        EndChild();
-        TextColored({0.62f, 0.64f, 0.58f, 1.0f},
-                    "Esc / Circle: close     Up / Down, mouse wheel: scroll");
+    const float bottom = display.y * 0.84f;
+    const float row = 108.0f * scale;
+    const float icon = 88.0f * scale;
+    static float scroll = 0.0f;
+    const float max_scroll = std::max(0.0f, row * Entries.size() - (bottom - top));
+    const float step = row * 9.0f * GetIO().DeltaTime;
+    if (IsKeyDown(ImGuiKey_DownArrow) || IsKeyDown(ImGuiKey_S) ||
+        IsKeyDown(ImGuiKey_GamepadDpadDown)) {
+        scroll += step;
     }
-    End();
-    PopStyleVar(3);
-    PopStyleColor(7);
+    if (IsKeyDown(ImGuiKey_UpArrow) || IsKeyDown(ImGuiKey_W) || IsKeyDown(ImGuiKey_GamepadDpadUp)) {
+        scroll -= step;
+    }
+    scroll -= GetIO().MouseWheel * row;
+    scroll = std::clamp(scroll, 0.0f, max_scroll);
+
+    draw->PushClipRect({0.0f, top}, {display.x, bottom}, true);
+    for (size_t i = 0; i < Entries.size(); i++) {
+        const float y = top + row * i - scroll;
+        if (y + row < top || y > bottom) {
+            continue;
+        }
+        const Entry& entry = Entries[i];
+        const bool done = unlock_time[i] != 0;
+        const ImVec2 icon_min{left, y + (row - icon) * 0.5f};
+        const ImVec2 icon_max{icon_min.x + icon, icon_min.y + icon};
+        if (icons[i]) {
+            draw->AddImage(icons[i].GetTexture().im_id, icon_min, icon_max, {0, 0}, {1, 1},
+                           done ? IM_COL32_WHITE : IM_COL32(86, 86, 86, 255));
+        }
+        const float text_x = icon_max.x + 26.0f * scale;
+        Ui::Text(draw, 36.0f * scale, {text_x, y + 14.0f * scale},
+                 done ? Ui::TextBright : Ui::TextNormal, entry.name);
+        Ui::Text(draw, 26.0f * scale, {text_x, y + 58.0f * scale},
+                 done ? Ui::TextNormal : Ui::TextDim, entry.description);
+        std::string status = GradeName(entry.grade);
+        if (done) {
+            const std::time_t when = static_cast<std::time_t>(unlock_time[i]);
+            char date[32]{};
+            if (const std::tm* local = std::localtime(&when)) {
+                std::strftime(date, sizeof(date), "%d %B %Y", local);
+            }
+            status += fmt::format("   -   {}", date);
+        }
+        Ui::TextRight(draw, 26.0f * scale, right, y + 22.0f * scale,
+                      done ? GradeColor(entry.grade) : Ui::TextDim, status);
+        draw->AddLine({left, y + row - 1.0f}, {right, y + row - 1.0f}, IM_COL32(70, 70, 66, 160));
+    }
+    draw->PopClipRect();
+    // Where the list stands, like the game's own scroll marker.
+    if (max_scroll > 0.0f) {
+        const float track_x = right + 34.0f * scale;
+        draw->AddLine({track_x, top}, {track_x, bottom}, Ui::TextNormal, 1.5f);
+        draw->AddCircleFilled({track_x, top + (bottom - top) * scroll / max_scroll}, 5.0f * scale,
+                              Ui::TextBright);
+    }
+    const float prompt_x = display.x * 0.95f;
+    float prompt_y = display.y * 0.865f;
+    prompt_y += Ui::Prompt(draw, prompt_x, prompt_y, "SCROLL", Ui::Action::Choose);
+    Ui::Prompt(draw, prompt_x, prompt_y, "BACK", Ui::Action::Back);
 }
 
 } // namespace Sotc::Achievements
