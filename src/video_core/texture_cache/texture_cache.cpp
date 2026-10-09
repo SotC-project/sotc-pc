@@ -1008,9 +1008,17 @@ void TextureCache::ApplyTexturePack(Image& image) {
                             std::max(info.size.height >> level, 1u), 1},
         };
     };
-    if (dumping) {
+    // Button glyphs are 128x128 RGBA with a full mip chain. One that no set replaces yet is
+    // saved once to <dir>/unknown, so the missing prompts can be drawn for it later.
+    const bool glyph_like = info.size.width == 128 && info.size.height == 128 &&
+                            info.resources.levels == 8 &&
+                            info.pixel_format == vk::Format::eR8G8B8A8Srgb;
+    const bool unknown_glyph =
+        !dumping && glyph_like &&
+        std::ranges::none_of(packs, [&](const PackFiles& files) { return files.contains(hash); });
+    if (dumping || unknown_glyph) {
         // SOTC_TEXDUMP=<n> with n > 1 dumps only n x n textures (128 = button glyphs).
-        static const u32 only_size = u32(std::atoi(std::getenv("SOTC_TEXDUMP")));
+        static const u32 only_size = dumping ? u32(std::atoi(std::getenv("SOTC_TEXDUMP"))) : 0;
         if (only_size > 1 && (info.size.width != only_size || info.size.height != only_size)) {
             return;
         }
@@ -1018,19 +1026,28 @@ void TextureCache::ApplyTexturePack(Image& image) {
         if (!dumped.insert(hash).second) {
             return;
         }
-        std::filesystem::create_directories(dir / "dump");
+        const char* folder = dumping ? "dump" : "unknown";
+        std::filesystem::create_directories(dir / folder);
+        if (unknown_glyph &&
+            std::filesystem::exists(dir / folder / fmt::format("{:016x}.raw", hash))) {
+            return;
+        }
         const u32 size = level_size(0);
         const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16);
         const auto copy = level_copy(0, download.offset);
         runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
         scheduler.Finish();
         download.Invalidate();
-        const auto name = fmt::format("{:016x}_{}x{}_m{}_{}.raw", hash, info.size.width,
-                                      info.size.height, info.resources.levels,
-                                      vk::to_string(info.pixel_format));
-        Common::FS::IOFile file{dir / "dump" / name, Common::FS::FileAccessMode::Create};
+        const auto name = unknown_glyph
+                              ? fmt::format("{:016x}.raw", hash)
+                              : fmt::format("{:016x}_{}x{}_m{}_{}.raw", hash, info.size.width,
+                                            info.size.height, info.resources.levels,
+                                            vk::to_string(info.pixel_format));
+        Common::FS::IOFile file{dir / folder / name, Common::FS::FileAccessMode::Create};
         file.WriteRaw<u8>(download.mapped, size);
-        return;
+        if (dumping) {
+            return;
+        }
     }
     // Remember every image some set replaces, so a change of prompt style can refresh it.
     if (std::ranges::any_of(packs, [&](const PackFiles& files) { return files.contains(hash); })) {
