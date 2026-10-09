@@ -80,12 +80,17 @@ void EmulateJoystick(GameController* controller, u32 interval) {
     float angle = atan2(d_y, d_x);
     float a_x = cos(angle) * output_speed, a_y = sin(angle) * output_speed;
 
+    // Centre the stick once when the mouse stops; writing zero on every poll would also wipe
+    // out a real gamepad's stick, which shares the axis.
+    static bool mouse_moving = false;
     if (d_x != 0 || d_y != 0) {
         controller->Axis(axis_x, GetAxis(-0x80, 0x7f, a_x), false);
         controller->Axis(axis_y, GetAxis(-0x80, 0x7f, a_y), false);
-    } else {
+        mouse_moving = true;
+    } else if (mouse_moving) {
         controller->Axis(axis_x, GetAxis(-0x80, 0x7f, 0), false);
         controller->Axis(axis_y, GetAxis(-0x80, 0x7f, 0), false);
+        mouse_moving = false;
     }
 }
 

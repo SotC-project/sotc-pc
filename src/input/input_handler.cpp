@@ -713,7 +713,16 @@ void ControllerOutput::AddUpdate(InputEvent event) {
         }
 
     } else if (axis != SDL_GAMEPAD_AXIS_INVALID) {
-        *new_param = (event.active ? event.axis_value : 0) + *new_param;
+        s32 value = event.active ? event.axis_value : 0;
+        // A resting stick still reports a few units of drift. Bindings to one axis are summed,
+        // so with a pad plugged in that drift took the edge off a full keyboard deflection and
+        // the game walked instead of running.
+        constexpr s32 resting_stick = 16;
+        if (event.input.type == InputType::Axis && axis != SDL_GAMEPAD_AXIS_LEFT_TRIGGER &&
+            axis != SDL_GAMEPAD_AXIS_RIGHT_TRIGGER && std::abs(value) <= resting_stick) {
+            value = 0;
+        }
+        *new_param = static_cast<s16>(std::clamp(value + *new_param, -127, 127));
     }
 }
 
