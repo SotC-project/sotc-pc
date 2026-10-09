@@ -21,7 +21,7 @@ Pipeline::~Pipeline() = default;
 
 void Pipeline::BindResources(DescriptorWrites& set_writes,
                              const Shader::PushData& push_data) const {
-    const auto cmdbuf = scheduler.CommandBuffer();
+    auto& cmdbuf = scheduler.Stream();
     const auto bind_point =
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
 
@@ -43,7 +43,7 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
         set_write.dstSet = desc_set;
     }
     instance.GetDevice().updateDescriptorSets(set_writes, {});
-    cmdbuf.bindDescriptorSets(bind_point, *pipeline_layout, 0, desc_set, {});
+    cmdbuf.bindDescriptorSets(bind_point, *pipeline_layout, 0, desc_set);
 }
 
 std::string Pipeline::GetDebugString() const {

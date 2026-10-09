@@ -737,8 +737,7 @@ void Runtime::FlushBarriers() {
     }
 
     scheduler.EndRendering();
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.pipelineBarrier2(dep_info);
+    scheduler.Stream().pipelineBarrier2(dep_info);
 
     memory_barrier.srcStageMask = vk::PipelineStageFlagBits2::eNone;
     memory_barrier.srcAccessMask = vk::AccessFlagBits2::eNone;

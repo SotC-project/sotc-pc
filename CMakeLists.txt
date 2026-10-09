@@ -1192,6 +1192,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_runtime.cpp
                src/video_core/renderer_vulkan/vk_runtime.h
                src/video_core/renderer_vulkan/vk_scheduler.cpp
+              src/video_core/renderer_vulkan/vk_command_stream.cpp
+              src/video_core/renderer_vulkan/vk_command_stream.h
                src/video_core/renderer_vulkan/vk_scheduler.h
                src/video_core/renderer_vulkan/vk_semaphore.cpp
                src/video_core/renderer_vulkan/vk_semaphore.h

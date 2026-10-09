@@ -10,6 +10,7 @@
 
 #include "common/interval_set.h"
 #include "common/unique_function.h"
+#include "video_core/renderer_vulkan/vk_command_stream.h"
 #include "video_core/amdgpu/regs_color.h"
 #include "video_core/amdgpu/regs_primitive.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
@@ -165,7 +166,7 @@ struct DynamicState {
     bool feedback_loop_enabled{};
 
     /// Commits the dynamic state to the provided command buffer.
-    void Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf);
+    void Commit(const Instance& instance, CommandStream& cmdbuf);
 
     /// Invalidates all dynamic state to be flushed into the next command buffer.
     void Invalidate() {
@@ -409,9 +410,23 @@ public:
         return dynamic_state;
     }
 
-    /// Returns the current command buffer.
+    /// Returns the current command buffer for direct use. Everything queued on the stream is
+    /// recorded first, so commands issued through the returned handle keep their place.
     vk::CommandBuffer CommandBuffer() const {
+        stream.Drain();
         return sessions.back().primary;
+    }
+
+    /// The current command buffer's handle, for comparing only: nothing may be recorded
+    /// through it without CommandBuffer()'s drain.
+    vk::CommandBuffer RawCommandBuffer() const {
+        return sessions.back().primary;
+    }
+
+    /// The queue for per-draw commands (see CommandStream), aimed at the current command buffer.
+    CommandStream& Stream() {
+        stream.SetTarget(sessions.back().primary);
+        return stream;
     }
 
     /// Returns the current command buffer tick.
@@ -463,6 +478,11 @@ private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    /// Upload command buffers are recorded by the GPU thread while the worker records the
+    /// primary one; a command pool may only be used by one thread at a time, so they get
+    /// their own.
+    CommandPool upload_pool;
+    mutable CommandStream stream;
     DynamicState dynamic_state;
     SessionFunc on_session{};
     SubmitFunc on_submit{};
