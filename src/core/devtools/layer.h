@@ -31,6 +31,7 @@ namespace Overlay {
 void ToggleSimpleFps();
 void SetSimpleFps(bool enabled);
 void ToggleQuitWindow();
+void SetGameStarted();
 void ShowVolume();
 
 void TextCentered(const std::string& text);

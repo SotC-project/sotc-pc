@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string_view>
 #include "common/logging/log.h"
 #include "core/file_sys/devices/logger.h"
 #include "core/libraries/kernel/file_system.h"
+#include "core/devtools/layer.h"
 
 namespace Core::Devices {
 
@@ -55,6 +57,12 @@ void Logger::log_flush() {
     std::scoped_lock lock{mtx};
     if (buffer.empty()) {
         return;
+    }
+    // The game announces the start of play on its console; the title-menu quit hint is shown
+    // until then.
+    if (std::string_view{buffer.data(), buffer.size()}.find("st_gameflow() starting game") !=
+        std::string_view::npos) {
+        Overlay::SetGameStarted();
     }
     if (is_err) {
         LOG_ERROR(Tty, "[{}] {}", prefix, std::string_view{buffer});

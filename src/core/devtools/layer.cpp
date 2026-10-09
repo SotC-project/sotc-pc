@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include "layer.h"
 
 #include <SDL3/SDL_events.h>
@@ -33,6 +34,7 @@ static bool show_simple_fps = false;
 static bool visibility_toggled = false;
 static float fps_anchor_width = FLT_MAX;
 static bool show_quit_window = false;
+static std::atomic_bool game_started = false;
 
 static bool show_volume = false;
 static float volume_start_time;
@@ -460,6 +462,19 @@ void L::Draw() {
         PopFont();
     }
 
+    if (!game_started && !show_quit_window) {
+        // Title menu: the game itself has no exit entry, so say how to leave.
+        const ImVec2 size = GetIO().DisplaySize;
+        const char* hint = "Quit: F1  /  OPTIONS + SHARE";
+        // Bottom left: the game's own prompts sit bottom right.
+        const float font_size = GetFontSize() * 1.4f;
+        const ImVec2 pos{28.0f, size.y - font_size - 22.0f};
+        auto* draw = GetForegroundDrawList();
+        draw->AddText(GetFont(), font_size, {pos.x + 1.0f, pos.y + 1.0f}, IM_COL32(0, 0, 0, 170),
+                      hint);
+        draw->AddText(GetFont(), font_size, pos, IM_COL32(235, 235, 235, 230), hint);
+    }
+
     if (show_quit_window) {
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -536,6 +551,10 @@ void SetSimpleFps(bool enabled) {
 
 void ToggleQuitWindow() {
     show_quit_window = !show_quit_window;
+}
+
+void SetGameStarted() {
+    game_started = true;
 }
 
 void ShowVolume() {
