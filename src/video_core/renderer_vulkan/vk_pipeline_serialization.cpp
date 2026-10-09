@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <SDL3/SDL.h>
+#include <fmt/format.h>
+#include "sdl_window.h"
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
@@ -9,6 +13,8 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+
+extern Frontend::WindowSDL* g_window;
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
@@ -339,10 +345,26 @@ void PipelineCache::WarmUp() {
 
     u32 num_pipelines{};
     u32 num_total_pipelines{};
+    // Loading a few thousand pipelines takes tens of seconds on the window's own thread. Keep
+    // answering the system meanwhile, or it marks the window as not responding, and say what
+    // is going on in the title bar.
+    auto last_pump = std::chrono::steady_clock::now();
 
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
             ++num_total_pipelines;
+            if (const auto now = std::chrono::steady_clock::now();
+                now - last_pump > std::chrono::milliseconds(100)) {
+                last_pump = now;
+                SDL_PumpEvents();
+                if (g_window) {
+                    SDL_SetWindowTitle(
+                        g_window->GetSDLWindow(),
+                        fmt::format("Shadow of the Colossus - loading shaders ({})",
+                                    num_total_pipelines)
+                            .c_str());
+                }
+            }
 
             Serialization::Archive ar{std::move(data)};
             Serialization::Reader pldata{ar};
@@ -369,6 +391,9 @@ void PipelineCache::WarmUp() {
         });
 
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
+    if (g_window) {
+        SDL_SetWindowTitle(g_window->GetSDLWindow(), "Shadow of the Colossus");
+    }
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);
