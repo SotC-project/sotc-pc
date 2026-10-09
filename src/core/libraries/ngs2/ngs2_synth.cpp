@@ -925,6 +925,15 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                 return path ? std::fopen(path, "wb") : nullptr;
             }();
             if (dump && i == 0 && buffers[i].numChannels >= 2 && buffers[i].waveformType == PcmF32L) {
+                static bool announced = false;
+                if (!announced) {
+                    announced = true;
+                    LOG_INFO(Lib_Ngs2, "Audio dump: first grain at {} ms, {} frames per grain",
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count(),
+                             frames);
+                }
                 const float* out = static_cast<const float*>(buffers[i].buffer);
                 for (u32 n = 0; n < frames; ++n) {
                     std::fwrite(out + n * buffers[i].numChannels, sizeof(float), 2, dump);

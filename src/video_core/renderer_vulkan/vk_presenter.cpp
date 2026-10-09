@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include "core/sotc/challenge.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
@@ -46,6 +50,8 @@
 #include <imgui.h>
 #include <stb_image_write.h>
 #include <vk_mem_alloc.h>
+
+std::atomic<int> g_sotc_record{0};
 
 namespace Vulkan {
 
@@ -735,6 +741,37 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
     }
 
+    // Footage capture (SOTC_RECORD=<file>, switched by the test script): the game image at a
+    // steady 30 frames per second, halved in size, appended as raw RGB24.
+    std::optional<ScreenshotReadback> pending_record;
+    if (g_sotc_record.load(std::memory_order_relaxed)) {
+        static auto next_frame = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_frame) {
+            next_frame += std::chrono::microseconds(33333);
+            if (next_frame < now) {
+                next_frame = now + std::chrono::microseconds(33333);
+            }
+            auto& readback = pending_record.emplace(
+                instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{},
+                image_size.width, image_size.height, view_info.format, false);
+            const vk::BufferImageCopy copy_region = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource{
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {readback.width, readback.height, 1},
+            };
+            runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+        }
+    }
+
     // Challenge runs read the health bar off a thin strip of the game image.
     std::optional<ScreenshotReadback> pending_hud_strip;
     if (Sotc::Challenge::WantsHudStrip()) {
@@ -785,6 +822,44 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             [deferred_screenshot = std::move(pending_screenshot)]() {
                 SavePendingScreenshot(deferred_screenshot.value());
             });
+    }
+    if (pending_record) {
+        draw_scheduler.DeferPriorityOperation([frame_data = std::move(pending_record)]() {
+            static FILE* file = [] {
+                const char* path = std::getenv("SOTC_RECORD");
+                return path ? std::fopen(path, "wb") : nullptr;
+            }();
+            std::vector<u8> rgba;
+            if (!file || !ConvertReadbackToRgba8(frame_data.value(), rgba)) {
+                return;
+            }
+            const u32 w = frame_data->width / 2, h = frame_data->height / 2;
+            static bool announced = false;
+            if (!announced) {
+                announced = true;
+                LOG_INFO(Render_Vulkan, "Recording {}x{} rgb24 at 30 fps, first frame at {} ms", w,
+                         h,
+                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count());
+            }
+            std::vector<u8> rgb(static_cast<size_t>(w) * h * 3);
+            const u32 stride = frame_data->width * 4;
+            for (u32 y = 0; y < h; y++) {
+                const u8* row0 = &rgba[static_cast<size_t>(y) * 2 * stride];
+                const u8* row1 = row0 + stride;
+                u8* out = &rgb[static_cast<size_t>(y) * w * 3];
+                for (u32 x = 0; x < w; x++) {
+                    for (u32 c = 0; c < 3; c++) {
+                        out[x * 3 + c] = static_cast<u8>((row0[x * 8 + c] + row0[x * 8 + 4 + c] +
+                                                          row1[x * 8 + c] + row1[x * 8 + 4 + c] +
+                                                          2) /
+                                                         4);
+                    }
+                }
+            }
+            std::fwrite(rgb.data(), 1, rgb.size(), file);
+        });
     }
     if (pending_hud_strip) {
         draw_scheduler.DeferPriorityOperation([strip = std::move(pending_hud_strip)]() {
