@@ -32,6 +32,11 @@ void ToggleSimpleFps();
 void SetSimpleFps(bool enabled);
 void ToggleQuitWindow();
 void SetGameStarted();
+/// True while the menu pointer is shown (keyboard and mouse in use, menu or panel on screen).
+bool MenuCursorActive();
+bool InTitleMenu();
+/// True while an overlay panel is open and mouse buttons belong to it, not to the game.
+bool PanelBlocksMouse();
 void ShowVolume();
 
 void TextCentered(const std::string& text);

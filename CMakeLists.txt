@@ -640,6 +640,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/libraries/np/np_trophy.h
             src/core/libraries/np/trophy_ui.cpp
             src/core/libraries/np/trophy_ui.h
+            src/core/sotc/achievements.cpp
+            src/core/sotc/achievements.h
             src/core/libraries/np/np_party.cpp
             src/core/libraries/np/np_party.h
             src/core/libraries/np/np_auth.cpp

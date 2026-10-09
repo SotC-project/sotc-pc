@@ -16,6 +16,7 @@
 #include <cmrc/cmrc.hpp>
 #include <stb_image.h>
 
+#include "core/sotc/achievements.h"
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -230,6 +231,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
+        } else if (action.starts_with("ach=")) {
+            // Test: unlock an achievement as the game would.
+            Sotc::Achievements::Unlock(std::stoi(action.substr(4)), nullptr);
         } else if (action.starts_with("key=")) {
             // A keyboard key or mouse button by its binding-file name, sent as SDL events so it
             // goes through the same binding layer as a real device.
@@ -240,7 +244,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 hold_ms = std::stoull(name.substr(star + 1));
                 name = name.substr(0, star);
             }
-            if (const auto key = Input::string_to_keyboard_key_map.find(name);
+            if (name == "wheelup" || name == "wheeldown") {
+                // A real wheel notch, as the mouse sends it.
+                SDL_Event wheel{};
+                wheel.type = SDL_EVENT_MOUSE_WHEEL;
+                wheel.wheel.y = name == "wheelup" ? 1.0f : -1.0f;
+                SDL_PushEvent(&wheel);
+            } else if (const auto key = Input::string_to_keyboard_key_map.find(name);
                 key != Input::string_to_keyboard_key_map.end()) {
                 const bool is_mouse = name.ends_with("button");
                 SDL_Event key_event{};
@@ -537,7 +547,8 @@ void WindowSDL::WaitEvent() {
         Overlay::ToggleSimpleFps();
         break;
     case SDL_EVENT_TOGGLE_FRIENDS:
-        ImGui::Friends::Toggle();
+        // The friends hotkey (F2 by default) opens the achievements panel in this build.
+        Sotc::Achievements::TogglePanel();
         break;
     case SDL_EVENT_RELOAD_INPUTS:
         Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
@@ -646,8 +657,55 @@ Uint32 wheelOffCallback(void* og_event, Uint32 timer_id, Uint32 interval) {
     return 0;
 }
 
+Uint32 menuKeyUpCallback(void* key, Uint32 timer_id, Uint32 interval) {
+    SDL_Event up{};
+    up.type = SDL_EVENT_KEY_UP;
+    up.key.key = static_cast<SDL_Keycode>(reinterpret_cast<uintptr_t>(key));
+    SDL_PushEvent(&up);
+    return 0;
+}
+
 void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
+
+    const bool is_mouse =
+        event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP ||
+        event->type == SDL_EVENT_MOUSE_WHEEL || event->type == SDL_EVENT_MOUSE_WHEEL_OFF;
+    if (is_mouse && Overlay::MenuCursorActive()) {
+        // An overlay panel owns the mouse while it is open; button releases still pass so
+        // nothing stays held.
+        if (Overlay::PanelBlocksMouse()) {
+            if (event->type != SDL_EVENT_MOUSE_BUTTON_UP) {
+                return;
+            }
+        } else if (Overlay::InTitleMenu()) {
+            // The title menu only knows pad buttons: left click confirms, right click goes
+            // back, the wheel moves the selection.
+            SDL_Event key{};
+            if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+                if (event->wheel.y == 0) {
+                    return;
+                }
+                key.type = SDL_EVENT_KEY_DOWN;
+                key.key.key = event->wheel.y > 0 ? SDLK_UP : SDLK_DOWN;
+                key.key.down = true;
+                SDL_AddTimer(60, menuKeyUpCallback,
+                             reinterpret_cast<void*>(static_cast<uintptr_t>(key.key.key)));
+            } else if (event->type == SDL_EVENT_MOUSE_WHEEL_OFF) {
+                return;
+            } else if (event->button.button == SDL_BUTTON_LEFT ||
+                       event->button.button == SDL_BUTTON_RIGHT) {
+                key.type = event->button.down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                key.key.key =
+                    event->button.button == SDL_BUTTON_LEFT ? SDLK_RETURN : SDLK_BACKSPACE;
+                key.key.down = event->button.down;
+            } else {
+                return;
+            }
+            OnKeyboardMouseInput(&key);
+            return;
+        }
+    }
 
     // get the event's id, if it's keyup or keydown
     const bool input_down = event->type == SDL_EVENT_KEY_DOWN ||

@@ -264,7 +264,7 @@ void TrophyUI::Draw() {
         }
 
         // Displays the name of the trophy
-        const std::string combinedString = "Trophy earned!\n" + trophy_name;
+        const std::string combinedString = "Achievement unlocked\n" + trophy_name;
         const float wrap_width =
             CalcWrapWidthForPos(GetCursorScreenPos(), (window_size.x - (60 * AdjustWidth)));
         SetWindowFontScale(1.2 * AdjustHeight);
@@ -288,7 +288,7 @@ void TrophyUI::Draw() {
         }
 
         ImGui::PushTextWrapPos(window_size.x - (60 * AdjustWidth));
-        TextWrapped("Trophy earned!\n%s", trophy_name.c_str());
+        TextWrapped("Achievement unlocked\n%s", trophy_name.c_str());
         ImGui::SameLine(window_size.x - (60 * AdjustWidth));
 
         // Displays the trophy icon

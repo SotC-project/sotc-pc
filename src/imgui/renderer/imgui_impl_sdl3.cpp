@@ -3,6 +3,8 @@
 
 // Based on imgui_impl_sdl3.cpp from Dear ImGui repository
 
+#include "core/devtools/layer.h"
+#include "imgui/renderer/sotc_cursor.h"
 #include <imgui.h>
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -42,6 +44,7 @@ struct SdlData {
     int mouse_buttons_down{};
     SDL_Cursor* mouse_cursors[ImGuiMouseCursor_COUNT]{};
     SDL_Cursor* mouse_last_cursor{};
+    SDL_Cursor* menu_cursor{};
     int mouse_pending_leave_frame{};
     ImVec2 prev_mouse_pos{0, 0};
     Uint64 lastCursorMoveTime{};
@@ -561,6 +564,13 @@ bool Init(SDL_Window* window) {
     CURSOR(Hand, POINTER);
     CURSOR(NotAllowed, NOT_ALLOWED);
 #undef CURSOR
+    // Menu pointer: a mossy stone shard instead of the system arrow.
+    if (SDL_Surface* surface = SDL_CreateSurfaceFrom(
+            SotcCursorSize, SotcCursorSize, SDL_PIXELFORMAT_RGBA32,
+            const_cast<unsigned char*>(SotcCursorPixels), SotcCursorSize * 4)) {
+        bd->menu_cursor = SDL_CreateColorCursor(surface, 2, 2);
+        SDL_DestroySurface(surface);
+    }
 
     // Set platform dependent data in viewport
     // Our mouse update function expect PlatformHandle to be filled for the main viewport
@@ -655,6 +665,15 @@ static void UpdateMouseCursor() {
     if (io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange)
         return;
     SdlData* bd = GetBackendData();
+
+    if (Overlay::MenuCursorActive() && bd->menu_cursor) {
+        if (bd->mouse_last_cursor != bd->menu_cursor) {
+            SDL_SetCursor(bd->menu_cursor);
+            bd->mouse_last_cursor = bd->menu_cursor;
+        }
+        SDL_ShowCursor();
+        return;
+    }
 
     s16 cursorState = EmulatorSettings.GetCursorState();
     ImGuiMouseCursor imgui_cursor = ImGui::GetMouseCursor();

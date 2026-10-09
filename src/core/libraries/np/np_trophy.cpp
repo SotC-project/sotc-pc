@@ -12,6 +12,7 @@
 #include "common/slot_vector.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/libs.h"
+#include "core/sotc/achievements.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_trophy.h"
@@ -982,8 +983,18 @@ int PS4_SYSV_ABI sceNpTrophyUnlockTrophy(OrbisNpTrophyContext context, OrbisNpTr
     pugi::xml_parse_result save_result = save_doc.load_file(ctx.xml_save_file.native().c_str());
 
     if (!save_result) {
-        LOG_ERROR(Lib_NpTrophy, "Failed to parse user trophy xml : {}", save_result.description());
-        return ORBIS_OK;
+        // No decrypted trophy package (needs a console key): the built-in achievement list takes
+        // the unlock instead.
+        switch (Sotc::Achievements::Unlock(trophyId, platinumId)) {
+        case Sotc::Achievements::UnlockResult::AlreadyUnlocked:
+            return ORBIS_NP_TROPHY_ERROR_TROPHY_ALREADY_UNLOCKED;
+        case Sotc::Achievements::UnlockResult::UnknownId:
+            return ORBIS_NP_TROPHY_ERROR_INVALID_TROPHY_ID;
+        case Sotc::Achievements::UnlockResult::IsPlatinum:
+            return ORBIS_NP_TROPHY_ERROR_PLATINUM_CANNOT_UNLOCK;
+        default:
+            return ORBIS_OK;
+        }
     }
     auto save_trophyconf = save_doc.child("trophyconf");
     for (const pugi::xml_node& node : save_trophyconf.children()) {

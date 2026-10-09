@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include "core/sotc/achievements.h"
+#include "input/controller.h"
+#include "input/input_mouse.h"
+#include "sdl_window.h"
+#include "video_core/texture_cache/texture_cache.h"
 #include "layer.h"
 
 #include <SDL3/SDL_events.h>
@@ -26,6 +31,12 @@
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 
+extern Frontend::WindowSDL* g_window;
+
+namespace Input {
+extern MouseMode mouse_mode;
+}
+
 using namespace ImGui;
 using namespace ::Core::Devtools;
 using L = ::Core::Devtools::Layer;
@@ -35,6 +46,30 @@ static bool visibility_toggled = false;
 static float fps_anchor_width = FLT_MAX;
 static bool show_quit_window = false;
 static std::atomic_bool game_started = false;
+// Pointer shown: keyboard and mouse in use, and a menu or overlay panel on screen.
+static std::atomic_bool menu_cursor = false;
+static std::atomic_bool panel_blocks_mouse = false;
+
+static void UpdateMenuCursor() {
+    const bool panel = show_quit_window || Sotc::Achievements::IsPanelOpen();
+    panel_blocks_mouse = panel;
+    const bool wanted = (panel || !game_started) &&
+                        VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;
+    if (menu_cursor.exchange(wanted) == wanted) {
+        return;
+    }
+    // Mouse look holds the pointer captured; release it while the pointer is shown.
+    SDL_RunOnMainThread(
+        [](void*) {
+            if (g_window) {
+                SDL_SetWindowRelativeMouseMode(g_window->GetSDLWindow(),
+                                               !menu_cursor &&
+                                                   std::getenv("SOTC_HEADLESS") == nullptr &&
+                                                   Input::mouse_mode == Input::MouseMode::Joystick);
+            }
+        },
+        nullptr, false);
+}
 
 static bool show_volume = false;
 static float volume_start_time;
@@ -462,10 +497,13 @@ void L::Draw() {
         PopFont();
     }
 
+    Sotc::Achievements::Draw();
+    UpdateMenuCursor();
+
     if (!game_started && !show_quit_window) {
         // Title menu: the game itself has no exit entry, so say how to leave.
         const ImVec2 size = GetIO().DisplaySize;
-        const char* hint = "Quit: F1  /  OPTIONS + SHARE";
+        const char* hint = "Quit: F1  /  OPTIONS + SHARE      Achievements: F2  /  L3 + R3";
         // Bottom left: the game's own prompts sit bottom right.
         const float font_size = GetFontSize() * 1.4f;
         const ImVec2 pos{28.0f, size.y - font_size - 22.0f};
@@ -555,6 +593,18 @@ void ToggleQuitWindow() {
 
 void SetGameStarted() {
     game_started = true;
+}
+
+bool MenuCursorActive() {
+    return menu_cursor;
+}
+
+bool InTitleMenu() {
+    return !game_started;
+}
+
+bool PanelBlocksMouse() {
+    return panel_blocks_mouse;
 }
 
 void ShowVolume() {
