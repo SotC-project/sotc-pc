@@ -367,7 +367,7 @@ void ProfileLoop(std::string path) {
         }
         return names.emplace(address, std::move(name)).first->second;
     };
-    std::map<std::string, int> exclusive, inclusive;
+    std::map<std::string, int> exclusive, inclusive, charged;
     int taken = 0;
     for (int n = 0; n < Samples; n++) {
         if (depths[n] == 0) {
@@ -375,11 +375,20 @@ void ProfileLoop(std::string path) {
         }
         taken++;
         std::set<std::string> once;
+        bool charged_done = false;
         for (int d = 0; d < depths[n]; d++) {
             const auto found = names.find(stacks[n][d]);
             const std::string& name = found != names.end() ? found->second : name_of(stacks[n][d]);
             if (d == 0) {
                 exclusive[name]++;
+            }
+            // Time spent in the driver or the system, charged to the function of ours that
+            // called into it, together with the module it ended up in.
+            if (!charged_done && name[0] != '[') {
+                charged_done = true;
+                const auto top = names.find(stacks[n][0]);
+                const std::string where = d == 0 ? "" : " -> " + top->second;
+                charged[name + where]++;
             }
             if (once.insert(name).second) {
                 inclusive[name]++;
@@ -405,6 +414,7 @@ void ProfileLoop(std::string path) {
     std::fprintf(out, "Thread %s, %d samples\n", wanted.c_str(), taken);
     dump("Exclusive (time in the function itself)", exclusive, 45);
     dump("Inclusive (time in the function and what it calls)", inclusive, 70);
+    dump("By our function, with the outside module the time was spent in", charged, 60);
     std::fclose(out);
 }
 

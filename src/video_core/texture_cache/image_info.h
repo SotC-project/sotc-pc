@@ -43,6 +43,8 @@ struct ImageInfo {
     ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr htile_address,
               AmdGpu::CbDbExtent hint, bool write_buffer = false) noexcept;
     ImageInfo(const AmdGpu::Image& sharp, const Shader::ImageResource& desc) noexcept;
+    /// The work of the constructor above, without its memo.
+    void BuildFromSharp(const AmdGpu::Image& sharp, bool is_depth) noexcept;
 
     bool IsTiled() const {
         return tile_mode != AmdGpu::TileMode::DisplayLinearAligned;

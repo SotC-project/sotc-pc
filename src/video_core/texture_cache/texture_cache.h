@@ -363,6 +363,10 @@ private:
         DeleteImage(image_id);
     }
 
+    /// Images set aside by ResolveDepthOverlap: the other kind (depth or float) of a surface
+    /// that flips between the two. Not registered while parked.
+    std::vector<ImageId> parked_twins;
+
     void GarbageCollectImages();
     void GarbageCollectSamplers();
 

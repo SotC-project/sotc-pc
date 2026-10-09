@@ -338,7 +338,32 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         auto new_info = requested_info;
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
         new_info.UpdateSize();
-        const auto new_image_id = slot_images.Insert(instance, runtime, slot_image_views, new_info);
+        // A surface the game uses as a depth target and as a plain float image in turn (a depth
+        // buffer read by a compute pass) flips between the two kinds every frame. Creating and
+        // destroying an image for each flip is slow, so the kind not in use is parked and taken
+        // back on the next flip; only the contents are copied across.
+        static const bool twins_enabled = std::getenv("SOTC_NO_TWINS") == nullptr;
+        const bool format_flip = twins_enabled &&
+                                 new_info.resources == cache_image.info.resources &&
+                                 new_info.size == cache_image.info.size &&
+                                 new_info.num_samples == cache_image.info.num_samples;
+        ImageId new_image_id{};
+        if (format_flip) {
+            const auto twin = std::ranges::find_if(parked_twins, [&](ImageId id) {
+                const ImageInfo& parked = slot_images[id].info;
+                return parked.guest_address == new_info.guest_address &&
+                       parked.pixel_format == new_info.pixel_format &&
+                       parked.size == new_info.size && parked.resources == new_info.resources &&
+                       parked.num_samples == new_info.num_samples;
+            });
+            if (twin != parked_twins.end()) {
+                new_image_id = *twin;
+                parked_twins.erase(twin);
+            }
+        }
+        if (!new_image_id) {
+            new_image_id = slot_images.Insert(instance, runtime, slot_image_views, new_info);
+        }
         RegisterImage(new_image_id);
 
         // Inherit image usage
@@ -354,8 +379,22 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         new_image.info.meta_info.htile_clear_mask = 0;
         runtime.CopyColorAndDepth(&cache_image, &new_image);
 
-        // Free the cache image.
-        FreeImage(cache_image_id);
+        if (format_flip) {
+            // Park the old kind instead of destroying it.
+            {
+                std::scoped_lock lk{slot_images[cache_image_id].mutex};
+                UntrackImage(cache_image_id);
+            }
+            UnregisterImage(cache_image_id);
+            parked_twins.push_back(cache_image_id);
+            if (parked_twins.size() > 8) {
+                DeleteImage(parked_twins.front());
+                parked_twins.erase(parked_twins.begin());
+            }
+        } else {
+            // Free the cache image.
+            FreeImage(cache_image_id);
+        }
         return new_image_id;
     }
 
