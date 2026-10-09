@@ -45,6 +45,9 @@
 
 CMRC_DECLARE(res);
 
+// Set by the video-out driver on the first flip.
+extern std::atomic<u64> g_first_flip_ms;
+
 namespace Frontend {
 
 using namespace Libraries::Pad;
@@ -136,7 +139,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         }
         return out;
     }();
-    static const u64 start = SDL_GetTicks();
+    // Script seconds are counted from the first presented frame plus the usual boot time, so
+    // a longer start-up (pipeline cache preload) does not shift the script against the game.
+    const u64 first_flip = g_first_flip_ms.load(std::memory_order_relaxed);
+    if (first_flip == 0) {
+        return interval;
+    }
+    static const u64 usual_boot_ms = [] {
+        const char* value = std::getenv("SOTC_SCRIPT_BOOT_MS");
+        return value ? u64(std::atoll(value)) : 9000ULL;
+    }();
+    const u64 start = first_flip > usual_boot_ms ? first_flip - usual_boot_ms : 0;
     static size_t next = 0;
     static u64 release_at = 0;
     static OrbisPadButtonDataOffset held{};

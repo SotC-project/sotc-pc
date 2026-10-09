@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <SDL3/SDL_timer.h>
 #include <chrono>
 #include "common/assert.h"
 #include "common/debug.h"
@@ -13,6 +15,9 @@
 #include "imgui/renderer/imgui_core.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+
+// Set on the first flip; read by the test driver in sdl_window.cpp.
+std::atomic<u64> g_first_flip_ms{0};
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
@@ -235,6 +240,11 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
+    // The scripted test driver counts its time from the first presented frame.
+    if (g_first_flip_ms.load(std::memory_order_relaxed) == 0) {
+        g_first_flip_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+        LOG_ERROR(Lib_VideoOut, "first flip {} ms after start", SDL_GetTicks());
+    }
     // Temporary: presented frames per second.
     static u32 flips = 0;
     static auto last = std::chrono::steady_clock::now();
