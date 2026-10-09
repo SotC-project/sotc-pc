@@ -179,6 +179,8 @@ private:
     bool attachment_feedback_loop{};
     bool needs_barrier{};
     std::vector<std::pair<VAddr, u32>> pending_mirrors;
+    bool mirrors_urgent{};
+    bool mirrors_flushed_this_frame{};
 };
 
 } // namespace Vulkan

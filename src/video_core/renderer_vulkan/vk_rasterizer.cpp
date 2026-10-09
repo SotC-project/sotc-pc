@@ -807,17 +807,17 @@ void Rasterizer::DispatchDirect() {
         return list;
     };
     static const std::vector<u64> mirror_skip = hash_list("SOTC_MIRROR_SKIP");
-    // Only 0x4defcf7f and 0x2e0f474b (culling) are read back by the game itself, and the camera
-    // block of 0x50784801 is read by the SRT walker. The other outputs stay on the GPU: uploads
-    // no longer overwrite them, and mirroring them costs a blocking round trip at every
-    // end-of-pipe event (17 per frame). SOTC_MIRROR_ALL=1 mirrors everything again.
-    static const std::vector<u64> mirror_only = [] {
-        auto list = hash_list("SOTC_MIRROR_ONLY");
-        if (list.empty() && !std::getenv("SOTC_MIRROR_ALL")) {
-            list = {0x4defcf7f, 0x2e0f474b, 0x50784801};
-        }
-        return list;
-    }();
+    // Every small output is mirrored: a page it shares with CPU-written data would otherwise be
+    // re-uploaded with stale bytes over it (frames stalling for seconds, device loss). But only
+    // 0x4defcf7f and 0x2e0f474b (culling) are read back by the game right after an end-of-pipe
+    // event, so only those make the next such event wait for the GPU; the rest ride along with
+    // that flush instead of costing a round trip each (17 per frame before).
+    // SOTC_MIRROR_ALL=1 flushes at every end-of-pipe event again; SOTC_MIRROR_ONLY=hash,hash
+    // mirrors nothing but those shaders' outputs.
+    static const std::vector<u64> mirror_only = hash_list("SOTC_MIRROR_ONLY");
+    static const bool flush_always = std::getenv("SOTC_MIRROR_ALL") != nullptr;
+    const bool urgent = flush_always || g_mirror_everything || cs.pgm_hash == 0x4defcf7f ||
+                        cs.pgm_hash == 0x2e0f474b;
     static std::unordered_map<u64, std::pair<u32, u64>> mirror_histogram;
     if (!g_bisect.active && std::ranges::find(g_bisect.hashes, u64(cs.pgm_hash)) == g_bisect.hashes.end()) {
         g_bisect.hashes.push_back(cs.pgm_hash);
@@ -864,6 +864,7 @@ void Rasterizer::DispatchDirect() {
     }
     g_stats.mirrors += u32(mirrors.size());
     pending_mirrors.insert(pending_mirrors.end(), mirrors.begin(), mirrors.end());
+    mirrors_urgent |= urgent && !mirrors.empty();
     for (const auto& [address, size] : mirrors) {
         buffer_cache.AddPendingMirror(address, size);
     }
@@ -935,6 +936,17 @@ void Rasterizer::FlushMirrors(u32 source) {
     if (pending_mirrors.empty() || !(mask & source)) {
         return;
     }
+    // An end-of-pipe event waits only for outputs the game reads; the rest ride along with the
+    // next such flush, or go at the end of a frame that had none.
+    if (source == 2 && !mirrors_urgent) {
+        return;
+    }
+    if (source == 8 && mirrors_flushed_this_frame) {
+        mirrors_flushed_this_frame = false;
+        return;
+    }
+    mirrors_urgent = false;
+    mirrors_flushed_this_frame = source != 8;
     ScopedNs timer{g_stats.ns_mirror};
     ++g_stats.flushes;
     ++g_stats.flush_source[std::countr_zero(source)];
