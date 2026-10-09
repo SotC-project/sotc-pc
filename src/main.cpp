@@ -26,6 +26,7 @@
 #include "core/file_sys/fs.h"
 #include "core/ipc/ipc.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/watchdog.h"
 #include "core/user_settings.h"
 #include "emulator.h"
 #include "imgui/big_picture/big_picture.h"
@@ -38,6 +39,7 @@
 
 int main(int argc, char* argv[]) {
     Sotc::Menu::WaitForPreviousInstance();
+    Sotc::Watchdog::Start();
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif

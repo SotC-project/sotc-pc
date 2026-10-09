@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
@@ -307,6 +309,66 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     return true;
 }
 
+namespace {
+
+/// A small window with a progress bar, shown while the saved pipelines load. The game's own
+/// window cannot draw yet at that point.
+class LoadingSplash {
+public:
+    explicit LoadingSplash(u32 total_) : total{std::max(total_, 1u)} {
+        const bool hidden = std::getenv("SOTC_HEADLESS") != nullptr;
+        window = SDL_CreateWindow("Shadow of the Colossus - preparing shaders", Width, Height,
+                                  SDL_WINDOW_ALWAYS_ON_TOP | (hidden ? SDL_WINDOW_HIDDEN : 0));
+        Update(0);
+    }
+
+    ~LoadingSplash() {
+        if (window) {
+            SDL_DestroyWindow(window);
+        }
+    }
+
+    void Update(u32 done) {
+        // Keep answering the system, or it marks the windows as not responding.
+        SDL_PumpEvents();
+        if (!window) {
+            return;
+        }
+        const u32 percent = std::min(done * 100 / total, 100u);
+        SDL_SetWindowTitle(window,
+                           fmt::format("Shadow of the Colossus - preparing shaders {}%", percent)
+                               .c_str());
+        SDL_Surface* surface = SDL_GetWindowSurface(window);
+        if (!surface) {
+            return;
+        }
+        const auto fill = [&](int x, int y, int w, int h, u8 r, u8 g, u8 b) {
+            const SDL_Rect rect{x, y, w, h};
+            SDL_FillSurfaceRect(surface, &rect, SDL_MapSurfaceRGB(surface, r, g, b));
+        };
+        // Weathered stone, a carved slot, moss filling it.
+        fill(0, 0, Width, Height, 30, 31, 28);
+        const int x = 28, y = 34, w = Width - 56, h = 28;
+        fill(x - 3, y - 3, w + 6, h + 6, 120, 124, 108);
+        fill(x, y, w, h, 46, 47, 43);
+        fill(x, y, static_cast<int>(static_cast<u64>(w) * done / total), h, 104, 138, 66);
+        SDL_UpdateWindowSurface(window);
+        if (const char* dump = std::getenv("SOTC_SPLASH_DUMP"); dump && !dumped && percent >= 50) {
+            dumped = true;
+            SDL_SaveBMP(surface, dump);
+        }
+    }
+
+private:
+    static constexpr int Width = 560;
+    static constexpr int Height = 96;
+    SDL_Window* window{};
+    u32 total;
+    bool dumped{};
+};
+
+} // namespace
+
 void PipelineCache::WarmUp() {
     if (!EmulatorSettings.IsPipelineCacheEnabled()) {
         return;
@@ -345,25 +407,22 @@ void PipelineCache::WarmUp() {
 
     u32 num_pipelines{};
     u32 num_total_pipelines{};
-    // Loading a few thousand pipelines takes tens of seconds on the window's own thread. Keep
-    // answering the system meanwhile, or it marks the window as not responding, and say what
-    // is going on in the title bar.
-    auto last_pump = std::chrono::steady_clock::now();
+    // Loading a few thousand pipelines takes tens of seconds on the window's own thread, and
+    // minutes the first time a new program file runs (the graphics driver compiles them all
+    // again). Show how far it is.
+    u32 expected_pipelines{};
+    Storage::DataBase::Instance().ForEachBlob(Storage::BlobType::PipelineKey,
+                                              [&](std::vector<u8>&&) { ++expected_pipelines; });
+    LoadingSplash splash{expected_pipelines};
+    auto last_update = std::chrono::steady_clock::now();
 
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
             ++num_total_pipelines;
             if (const auto now = std::chrono::steady_clock::now();
-                now - last_pump > std::chrono::milliseconds(100)) {
-                last_pump = now;
-                SDL_PumpEvents();
-                if (g_window) {
-                    SDL_SetWindowTitle(
-                        g_window->GetSDLWindow(),
-                        fmt::format("Shadow of the Colossus - loading shaders ({})",
-                                    num_total_pipelines)
-                            .c_str());
-                }
+                now - last_update > std::chrono::milliseconds(100)) {
+                last_update = now;
+                splash.Update(num_total_pipelines);
             }
 
             Serialization::Archive ar{std::move(data)};
@@ -391,9 +450,6 @@ void PipelineCache::WarmUp() {
         });
 
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
-    if (g_window) {
-        SDL_SetWindowTitle(g_window->GetSDLWindow(), "Shadow of the Colossus");
-    }
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);
