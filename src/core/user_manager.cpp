@@ -297,7 +297,9 @@ Users UserManager::CreateDefaultUsers() {
             std::filesystem::create_directory(user_dir / "trophy");
             std::filesystem::create_directory(user_dir / "inputs");
             if (u.user_id == 1000) {
-                TransferOption user_choice = AskMigrationOption();
+                // This build never had the older save layout the question is about; asking
+                // would only leave a new player staring at a dialog before the game appears.
+                TransferOption user_choice = TransferOption::Nothing;
                 CheckAndMigrateSaves(user_choice);
                 CheckAndMigrateTrophies(user_choice);
             }

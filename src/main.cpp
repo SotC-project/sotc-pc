@@ -25,6 +25,7 @@
 #include "core/emulator_state.h"
 #include "core/file_sys/fs.h"
 #include "core/ipc/ipc.h"
+#include "core/sotc/first_run.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/watchdog.h"
 #include "core/user_settings.h"
@@ -198,8 +199,40 @@ int main(int argc, char* argv[]) {
     // Initialize key manager
     KeyManager::GetInstance()->LoadFromFile();
 
+    // A new player: someone who has never played this install (no play time recorded and no
+    // save). Only they get settings chosen for their PC; checked before anything is loaded or
+    // created below.
+    bool new_player = false;
+    {
+        std::error_code ec;
+        const auto user_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir);
+        bool has_save = false;
+        if (std::filesystem::exists(user_dir / "home", ec)) {
+            for (const auto& entry :
+                 std::filesystem::recursive_directory_iterator(user_dir / "home", ec)) {
+                if (entry.is_regular_file(ec)) {
+                    has_save = true;
+                    break;
+                }
+            }
+        }
+        new_player = !has_save && !std::filesystem::exists(user_dir / "play_time.txt", ec);
+    }
+
     // Load configurations
     EmulatorSettings.Load();
+    // First start of a new player: choose graphics settings for this PC, then read them back.
+    {
+        if (gamePath) {
+            const auto game_dir = std::filesystem::path(*gamePath).parent_path();
+#ifdef _WIN32
+            _putenv_s("SOTC_GAME_DIR", game_dir.string().c_str());
+#endif
+        }
+        if (Sotc::FirstRun::ConfigureForThisPc(new_player)) {
+            EmulatorSettings.Load();
+        }
+    }
     UserSettings.Load();
 
     if (bigPicture) {

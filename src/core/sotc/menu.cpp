@@ -518,7 +518,7 @@ std::vector<Row> BuildRows() {
             rows.push_back({"Free Play", "", "Fight any colossus", true, false,
                             [](int) { GoTo(Page::FreePlay); }});
         }
-        rows.push_back({"Graphics and Settings", "", "Frame rate, display and detail options",
+        rows.push_back({"Settings", "", "Graphics, display, button icons and sound",
                         true, false, [](int) {
                             LoadOptions();
                             GoTo(Page::Graphics);
@@ -641,7 +641,7 @@ const char* PageTitle() {
     case Page::FreePlay:
         return "Free Play";
     case Page::Graphics:
-        return "Graphics and Settings";
+        return "Settings";
     case Page::Controls:
         return "Key Bindings";
     default:

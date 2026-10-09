@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <SDL3/SDL_timer.h>
 #include <chrono>
@@ -256,6 +258,14 @@ void VideoOutDriver::Flip(const Request& req) {
     const auto now = std::chrono::steady_clock::now();
     const double gap_ms = std::chrono::duration<double, std::milli>(now - previous).count();
     previous = now;
+    // Benchmark aid: SOTC_FRAMETIMES=<file> gets the time since the previous flip, one per line.
+    static FILE* frametimes = [] {
+        const char* path = std::getenv("SOTC_FRAMETIMES");
+        return path ? std::fopen(path, "w") : nullptr;
+    }();
+    if (frametimes) {
+        std::fprintf(frametimes, "%.3f %.3f\n", SDL_GetTicks() / 1000.0, gap_ms);
+    }
     worst_ms = std::max(worst_ms, gap_ms);
     hitches += gap_ms > 40.0;
     if (now - last >= std::chrono::seconds(3)) {

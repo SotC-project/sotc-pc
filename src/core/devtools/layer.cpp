@@ -4,6 +4,7 @@
 #include <atomic>
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/first_run.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/ui.h"
 #include "input/controller.h"
@@ -427,7 +428,7 @@ void L::SetupSettings() {
 }
 
 bool L::ShouldKeepDrawing() {
-    return DebugState.IsShowingDebugMenuBar();
+    return DebugState.IsShowingDebugMenuBar() || Sotc::FirstRun::OpeningActive();
 }
 
 void L::Draw() {
@@ -564,6 +565,8 @@ void L::Draw() {
             End();
         }
     }
+
+    Sotc::FirstRun::DrawOpeningMessages();
 
     PopID();
 }
