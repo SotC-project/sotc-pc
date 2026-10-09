@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <fmt/format.h>
+#include "core/sotc/watchdog.h"
 #include "common/arch.h"
 #include "common/assert.h"
 #include "common/decoder.h"
@@ -152,6 +153,8 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
         LOG_CRITICAL(Debug, "access {:#x} rsp {:#x} stack: {}",
                      pExp->ExceptionRecord->ExceptionInformation[1], pExp->ContextRecord->Rsp,
                      trace);
+        Sotc::Watchdog::WriteCrashStack(pExp->ContextRecord,
+                                        pExp->ExceptionRecord->ExceptionInformation[1]);
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 

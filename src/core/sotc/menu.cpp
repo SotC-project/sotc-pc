@@ -7,7 +7,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <map>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -18,7 +23,11 @@
 #include <imgui.h>
 
 #include "common/logging/log.h"
+#include "common/elf_info.h"
 #include "common/path_util.h"
+#include "common/singleton.h"
+#include "core/file_sys/fs.h"
+#include "input/input_handler.h"
 #include "core/devtools/layer.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
@@ -33,7 +42,7 @@ namespace Sotc::Menu {
 
 namespace {
 
-enum class Page { Main, FreePlay };
+enum class Page { Main, FreePlay, Graphics, Controls };
 
 std::atomic_bool open{false};
 Page page = Page::Main;
@@ -130,6 +139,7 @@ struct Row {
     std::string description; // shown at the bottom while the row is selected
     bool enabled = true;
     bool adjustable = false; // left / right changes the value
+    std::function<void(int)> act; // 0 = confirm, -1 / +1 = left / right
 };
 
 std::string OnOff(bool value) {
@@ -141,116 +151,501 @@ std::string Minutes(double seconds) {
     return fmt::format("{}:{:02d}", total / 60, total % 60);
 }
 
+std::string Capitalized(std::string text) {
+    if (!text.empty()) {
+        text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    }
+    return text;
+}
+
+void GoTo(Page next) {
+    page = next;
+    selected = 0;
+}
+
+void QuitGame() {
+    SDL_Event quit{};
+    quit.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&quit);
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+/// The value written after "key": in a flat JSON text, without quotes; empty when absent.
+std::string JsonValue(const std::string& text, const std::string& key) {
+    const auto at = text.find("\"" + key + "\"");
+    if (at == std::string::npos) {
+        return {};
+    }
+    auto start = text.find(':', at);
+    if (start == std::string::npos) {
+        return {};
+    }
+    start = text.find_first_not_of(" \t\"", start + 1);
+    const auto end = text.find_first_of(",\"\r\n}", start);
+    return text.substr(start, end - start);
+}
+
+// ---- Graphics and other settings ----
+// The same options Settings.bat offers. They are engine start options and program settings, read
+// when the game starts, so applying them writes them through Settings.ps1 and restarts.
+
+struct Option {
+    const char* label;
+    const char* param; // Settings.ps1 parameter
+    std::vector<std::string> values;
+    const char* description;
+    int index = 0;
+};
+
+std::vector<Option> options;
+std::string apply_error;
+
+const std::vector<std::string> OnOffValues{"off", "on"};
+
+Option* FindOption(std::string_view param) {
+    for (Option& option : options) {
+        if (param == option.param) {
+            return &option;
+        }
+    }
+    return nullptr;
+}
+
+void SetOption(std::string_view param, const std::string& value) {
+    if (Option* option = FindOption(param)) {
+        for (size_t i = 0; i < option->values.size(); i++) {
+            if (option->values[i] == value) {
+                option->index = static_cast<int>(i);
+            }
+        }
+    }
+}
+
+void LoadOptions() {
+    options = {
+        {"Preset", "Preset", {"custom", "low", "medium", "high", "ultra"},
+         "Sets the detail options below together"},
+        {"Frame Rate Limit", "Fps", {"30", "60", "90", "120", "144", "165", "240", "uncapped"},
+         "Highest frame rate the game will run at"},
+        {"VSync", "VSync", OnOffValues, "Removes tearing; holds the frame rate to the display's"},
+        {"Fullscreen", "Fullscreen", OnOffValues, "Fill the screen instead of a window"},
+        {"Window Size", "Window", {"720p", "1080p", "1440p", "4k"}, "Size of the game window"},
+        {"FSR Upscaling", "Upscaling", OnOffValues, "Sharper picture when the window is larger than 1080p"},
+        {"Shadows", "Shadows", OnOffValues, "Sun and spot shadows"},
+        {"Motion Blur", "MotionBlur", OnOffValues, "Blur on fast movement"},
+        {"Bloom", "Bloom", OnOffValues, "Glow around bright light"},
+        {"Depth of Field", "DepthOfField", OnOffValues, "Soft focus in the distance and in cutscenes"},
+        {"Vignette", "Vignette", OnOffValues, "Darkened picture corners"},
+        {"Fur", "Fur", OnOffValues, "Fur on the colossi"},
+        {"Fog", "Fog", OnOffValues, "Distance fog"},
+        {"Mist Particles", "MistParticles", OnOffValues,
+         "Drifting mist. Renders far too bright in this build; best left off"},
+        {"Texture Filtering", "TextureFiltering", {"1x", "2x", "4x", "8x", "16x"},
+         "Sharpness of surfaces seen at an angle"},
+        {"Draw Distance", "DrawDistance", {"reduced", "full"},
+         "How far small objects are drawn. Full costs frame rate"},
+        {"Texture Detail", "TextureDetail", {"low", "normal", "high"}, "Sharpness of textures"},
+        {"Sharpening", "Sharpening", {"off", "normal", "strong"}, "Sharpening of the final picture"},
+        {"Button Icons", "Prompts", {"auto", "keyboard", "xbox", "playstation"},
+         "Auto follows the device you are using"},
+        {"Achievement Sound", "AchievementVolume", {"0", "25", "50", "75", "100"},
+         "Loudness of the achievement sound, percent"},
+    };
+    // Defaults, as Settings.ps1 has them, for options no file names yet.
+    for (const char* param : {"Shadows", "MotionBlur", "Bloom", "DepthOfField", "Vignette", "Fur", "Fog"}) {
+        SetOption(param, "on");
+    }
+    SetOption("TextureFiltering", "4x");
+    SetOption("TextureDetail", "normal");
+    SetOption("Sharpening", "normal");
+    const auto user = Common::FS::GetUserPath(Common::FS::PathType::UserDir);
+    const std::string graphics = ReadText(user / "sotc_graphics.json");
+    for (Option& option : options) {
+        const std::string value = JsonValue(graphics, option.param);
+        if (!value.empty()) {
+            SetOption(option.param, value);
+        }
+    }
+    const std::string config = ReadText(user / "config.json");
+    const int clock = std::atoi(JsonValue(config, "vblank_frequency").c_str());
+    // The game shows every second tick of the frame clock, so the clock runs at twice the limit.
+    SetOption("Fps", clock >= 1000 || clock <= 0 ? "uncapped" : std::to_string(clock / 2));
+    SetOption("VSync", JsonValue(config, "present_mode") == "Fifo" ? "on" : "off");
+    SetOption("Fullscreen", JsonValue(config, "full_screen") == "true" ? "on" : "off");
+    SetOption("Upscaling", JsonValue(config, "fsr_enabled") == "true" ? "on" : "off");
+    const int height = std::atoi(JsonValue(config, "window_height").c_str());
+    SetOption("Window", height >= 2160 ? "4k" : height >= 1440 ? "1440p" : height >= 1080 ? "1080p" : "720p");
+    const std::string forced = ReadText(user / "sotc_textures" / "force.txt");
+    SetOption("Prompts", "auto");
+    for (const char* set : {"keyboard", "xbox", "playstation"}) {
+        if (forced.rfind(set, 0) == 0) {
+            SetOption("Prompts", set);
+        }
+    }
+    const std::string volume = ReadText(user / "sotc_achievement_volume.txt");
+    SetOption("AchievementVolume", "100");
+    if (!volume.empty()) {
+        const int percent = std::clamp(std::atoi(volume.c_str()), 0, 100);
+        SetOption("AchievementVolume", std::to_string((percent + 12) / 25 * 25));
+    }
+    apply_error.clear();
+}
+
+/// What each preset sets, as Settings.ps1 defines them.
+void ApplyPreset(const std::string& preset) {
+    struct Values {
+        const char* name;
+        const char *shadows, *blur, *dof, *fur, *filtering, *distance, *detail;
+    };
+    static constexpr Values Presets[]{
+        {"low", "off", "off", "off", "off", "2x", "reduced", "low"},
+        {"medium", "on", "off", "on", "on", "4x", "reduced", "normal"},
+        {"high", "on", "on", "on", "on", "8x", "full", "normal"},
+        {"ultra", "on", "on", "on", "on", "16x", "full", "high"},
+    };
+    for (const Values& values : Presets) {
+        if (preset == values.name) {
+            SetOption("Shadows", values.shadows);
+            SetOption("MotionBlur", values.blur);
+            SetOption("DepthOfField", values.dof);
+            SetOption("Fur", values.fur);
+            SetOption("TextureFiltering", values.filtering);
+            SetOption("DrawDistance", values.distance);
+            SetOption("TextureDetail", values.detail);
+            SetOption("Bloom", "on");
+            SetOption("Vignette", "on");
+            SetOption("Fog", "on");
+            SetOption("MistParticles", "off");
+            SetOption("Sharpening", "normal");
+        }
+    }
+}
+
+/// Writes the chosen options through Settings.ps1 and restarts the game with them.
+void ApplyOptions() {
+#ifdef _WIN32
+    std::error_code ec;
+    const auto script = std::filesystem::current_path(ec) / "Settings.ps1";
+    if (!std::filesystem::exists(script, ec)) {
+        apply_error = "Settings.ps1 was not found next to the game";
+        return;
+    }
+    auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
+    const auto game_dir = mnt->GetHostPath("/app0");
+    std::wstring command = L"pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"" +
+                           script.wstring() + L"\" -GameDir \"" + game_dir.wstring() + L"\"";
+    for (const Option& option : options) {
+        if (std::string_view{option.param} == "Preset") {
+            continue; // its effect is already in the options it sets
+        }
+        const std::string value = option.values[option.index];
+        command += L" -" + std::wstring(option.param, option.param + std::strlen(option.param)) +
+                   L" " + std::wstring(value.begin(), value.end());
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                        nullptr, nullptr, &startup, &process)) {
+        apply_error = "PowerShell 7 (pwsh) could not be started";
+        return;
+    }
+    WaitForSingleObject(process.hProcess, 30000);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code != 0) {
+        apply_error = "The settings could not be saved";
+        return;
+    }
+    const char* freeplay = std::getenv("SOTC_FREEPLAY");
+    const char* challenge_spec = std::getenv("SOTC_CHALLENGE");
+    Relaunch(freeplay ? freeplay : "", challenge_spec ? challenge_spec : "");
+#else
+    apply_error = "Only available on Windows";
+#endif
+}
+
+// ---- Key bindings ----
+
+struct Binding {
+    const char* label;
+    const char* output; // name in the input file
+    std::string key;    // current keyboard or mouse input
+};
+
+std::vector<Binding> bindings{
+    {"Move Forward", "axis_left_y_minus"}, {"Move Back", "axis_left_y_plus"},
+    {"Move Left", "axis_left_x_minus"},    {"Move Right", "axis_left_x_plus"},
+    {"Jump", "cross"},                     {"Attack", "square"},
+    {"Grab / Use / Pray", "r2"},           {"Crouch / Roll", "circle"},
+    {"Raise Sword / Aim", "r1"},           {"Mount / Spur Agro", "triangle"},
+    {"View Colossus", "l2"},               {"Camera Focus", "l1"},
+    {"Change Sword", "pad_right"},         {"Change Ranged Weapon", "pad_left"},
+    {"Unequip", "pad_up"},                 {"Photo Mode", "pad_down"},
+    {"World Map", "touchpad_center"},      {"Pause", "options"},
+    {"Zoom (R3)", "r3"},                   {"L3", "l3"},
+};
+std::atomic<int> capture_row{-1};
+std::atomic_bool bindings_dirty{true};
+std::mutex bindings_mutex;
+
+std::filesystem::path BindingsFile() {
+    return Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "input_config" /
+           (std::string(Common::ElfInfo::Instance().GameSerial()) + ".ini");
+}
+
+/// Splits "output = input  # note" into its two names; false for other lines.
+bool ParseBindingLine(const std::string& line, std::string& output, std::string& input) {
+    std::string text = line.substr(0, line.find('#'));
+    const auto equals = text.find('=');
+    if (equals == std::string::npos) {
+        return false;
+    }
+    const auto trim = [](std::string value) {
+        const auto first = value.find_first_not_of(" \t\r");
+        const auto last = value.find_last_not_of(" \t\r");
+        return first == std::string::npos ? std::string{} : value.substr(first, last - first + 1);
+    };
+    output = trim(text.substr(0, equals));
+    input = trim(text.substr(equals + 1));
+    return !output.empty() && !input.empty();
+}
+
+bool IsKeyboardInput(const std::string& name) {
+    return Input::string_to_keyboard_key_map.contains(name);
+}
+
+void LoadBindings() {
+    std::lock_guard lock{bindings_mutex};
+    for (Binding& binding : bindings) {
+        binding.key.clear();
+    }
+    std::ifstream file(BindingsFile());
+    std::string line, output, input;
+    while (std::getline(file, line)) {
+        if (!ParseBindingLine(line, output, input) || !IsKeyboardInput(input)) {
+            continue;
+        }
+        for (Binding& binding : bindings) {
+            if (output == binding.output && binding.key.empty()) {
+                binding.key = input;
+            }
+        }
+    }
+    bindings_dirty = false;
+}
+
+/// Gives `output` the keyboard or mouse input `key` (taking it from any other action) and
+/// reloads the bindings.
+void Rebind(const std::string& output, const std::string& key) {
+    const auto path = BindingsFile();
+    std::vector<std::string> lines;
+    {
+        std::ifstream file(path);
+        std::string line;
+        while (std::getline(file, line)) {
+            lines.push_back(line);
+        }
+    }
+    std::vector<std::string> kept;
+    size_t insert_at = std::string::npos;
+    std::string line_output, line_input;
+    for (const std::string& line : lines) {
+        if (ParseBindingLine(line, line_output, line_input) && IsKeyboardInput(line_input) &&
+            (line_output == output || line_input == key)) {
+            if (line_output == output && insert_at == std::string::npos) {
+                insert_at = kept.size();
+            }
+            continue;
+        }
+        kept.push_back(line);
+    }
+    const std::string added = output + " = " + key;
+    if (insert_at == std::string::npos) {
+        kept.push_back(added);
+    } else {
+        kept.insert(kept.begin() + insert_at, added);
+    }
+    {
+        std::ofstream file(path, std::ios::trunc);
+        for (const std::string& line : kept) {
+            file << line << "\n";
+        }
+    }
+    Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
+    bindings_dirty = true;
+}
+
+std::string KeyLabel(const std::string& key) {
+    static const std::map<std::string, std::string> Names{
+        {"leftbutton", "Left Mouse"},   {"rightbutton", "Right Mouse"},
+        {"middlebutton", "Middle Mouse"}, {"mousewheelup", "Wheel Up"},
+        {"mousewheeldown", "Wheel Down"}, {"lshift", "Left Shift"},
+        {"rshift", "Right Shift"},       {"lctrl", "Left Ctrl"},
+        {"rctrl", "Right Ctrl"},         {"lalt", "Left Alt"},
+        {"space", "Space"},              {"enter", "Enter"},
+        {"escape", "Esc"},               {"tab", "Tab"},
+        {"backspace", "Backspace"},      {"up", "Up"},
+        {"down", "Down"},                {"left", "Left"},
+        {"right", "Right"},
+    };
+    if (key.empty()) {
+        return "-";
+    }
+    if (const auto it = Names.find(key); it != Names.end()) {
+        return it->second;
+    }
+    std::string upper = key;
+    for (char& c : upper) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return upper;
+}
+
+// ---- Pages ----
+
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
     if (page == Page::Main) {
-        rows.push_back({"Free Play", "", "Fight any colossus"});
-        rows.push_back({"Achievements", "", "View your achievements"});
-        if (InFreePlay()) {
-            rows.push_back({"Return to Main Game", "", "Leave free play and load your save"});
+        // Free play is offered from the title screen, and while a free play battle is on.
+        if (Overlay::InTitleMenu() || InFreePlay()) {
+            rows.push_back({"Free Play", "", "Fight any colossus", true, false,
+                            [](int) { GoTo(Page::FreePlay); }});
         }
-        rows.push_back({"Quit Game", "", "Close the game"});
-        rows.push_back({"Resume", "", "Return to the game"});
-    } else {
+        rows.push_back({"Graphics and Settings", "", "Frame rate, display and detail options",
+                        true, false, [](int) {
+                            LoadOptions();
+                            GoTo(Page::Graphics);
+                        }});
+        rows.push_back({"Key Bindings", "", "Choose the keys and mouse buttons", true, false,
+                        [](int) {
+                            bindings_dirty = true;
+                            GoTo(Page::Controls);
+                        }});
+        rows.push_back({"Achievements", "", "View your achievements", true, false, [](int) {
+                            open = false;
+                            if (!Achievements::IsPanelOpen()) {
+                                Achievements::TogglePanel();
+                            }
+                        }});
+        if (InFreePlay()) {
+            rows.push_back({"Return to Title", "", "Leave free play; the game restarts", true,
+                            false, [](int) { Relaunch("", ""); }});
+        }
+        rows.push_back({"Quit Game", "", "Close the game", true, false, [](int) { QuitGame(); }});
+        rows.push_back({"Resume", "", "Return to the game", true, false,
+                        [](int) { open = false; }});
+    } else if (page == Page::FreePlay) {
         const std::string target = fmt::format(
             "Target time {}{}", Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
             Challenge::LimitIsEstimate(colossus + 1) ? " (approximate)" : "");
-        const char* helper_note = challenge ? "Not available in Time Attack" : "";
+        const char* helper_note = "Not available in Time Attack";
+        const auto step = [](int direction) { return direction == 0 ? 1 : direction; };
         rows.push_back({"Colossus",
                         fmt::format("{}. {}", colossus + 1, Challenge::ColossusName(colossus + 1)),
-                        "Choose the colossus to fight", true, true});
+                        "Choose the colossus to fight", true, true,
+                        [step](int d) { colossus = (colossus + step(d) + 16) % 16; }});
         rows.push_back({"Difficulty", Difficulties[difficulty], "Choose the difficulty", true,
-                        true});
+                        true, [step](int d) { difficulty = (difficulty + step(d) + 3) % 3; }});
         rows.push_back({"Time Attack", OnOff(challenge),
                         "Timed battle, ranked from D to S+ on time and damage taken. " + target,
-                        true, true});
+                        true, true, [](int) { challenge = !challenge; }});
         rows.push_back({"All Weapons and Items", OnOff(all_items && !challenge),
                         challenge ? helper_note : "Start with every weapon and item", !challenge,
-                        true});
+                        true, [](int) { all_items = !all_items; }});
         rows.push_back({"Invincibility", OnOff(no_damage && !challenge),
-                        challenge ? helper_note : "Wander takes no damage", !challenge, true});
+                        challenge ? helper_note : "Wander takes no damage", !challenge, true,
+                        [](int) { no_damage = !no_damage; }});
         rows.push_back({"Unlimited Grip", OnOff(unlimited_grip && !challenge),
                         challenge ? helper_note : "The grip gauge never empties", !challenge,
-                        true});
+                        true, [](int) { unlimited_grip = !unlimited_grip; }});
         rows.push_back({"Maximum Damage", OnOff(max_damage && !challenge),
                         challenge ? helper_note : "Every sword strike deals full damage",
-                        !challenge, true});
-        rows.push_back({"Begin Battle", "", "The game restarts and loads the battle"});
-        rows.push_back({"Back", "", "Return to the previous menu"});
+                        !challenge, true, [](int) { max_damage = !max_damage; }});
+        rows.push_back({"Begin Battle", "", "The game restarts and loads the battle", true, false,
+                        [](int d) {
+                            if (d == 0) {
+                                StartBattle();
+                            }
+                        }});
+        rows.push_back({"Back", "", "Return to the previous menu", true, false, [](int d) {
+                            if (d == 0) {
+                                GoTo(Page::Main);
+                            }
+                        }});
+    } else if (page == Page::Graphics) {
+        for (size_t i = 0; i < options.size(); i++) {
+            Option& option = options[i];
+            rows.push_back({option.label, Capitalized(option.values[option.index]),
+                            option.description, true, true, [i](int d) {
+                                Option& changed = options[i];
+                                const int count = static_cast<int>(changed.values.size());
+                                changed.index = (changed.index + (d == 0 ? 1 : d) + count) % count;
+                                const std::string_view param{changed.param};
+                                if (param == "Preset") {
+                                    ApplyPreset(changed.values[changed.index]);
+                                } else if (param != "Fps" && param != "VSync" &&
+                                           param != "Fullscreen" && param != "Window" &&
+                                           param != "Upscaling" && param != "Prompts" &&
+                                           param != "AchievementVolume") {
+                                    SetOption("Preset", "custom");
+                                }
+                            }});
+        }
+        rows.push_back({"Apply and Restart", "",
+                        apply_error.empty() ? "Saves the settings; the game restarts to use them"
+                                            : apply_error,
+                        true, false, [](int d) {
+                            if (d == 0) {
+                                ApplyOptions();
+                            }
+                        }});
+        rows.push_back({"Back", "", "Leave without saving", true, false, [](int d) {
+                            if (d == 0) {
+                                GoTo(Page::Main);
+                            }
+                        }});
+    } else {
+        if (bindings_dirty) {
+            LoadBindings();
+        }
+        std::lock_guard lock{bindings_mutex};
+        for (size_t i = 0; i < bindings.size(); i++) {
+            const bool capturing = capture_row == static_cast<int>(i);
+            rows.push_back({bindings[i].label,
+                            capturing ? "Press a key or mouse button" : KeyLabel(bindings[i].key),
+                            capturing ? "Esc cancels" : "Select, then press the new key or button",
+                            true, false, [i](int d) {
+                                if (d == 0) {
+                                    capture_row = static_cast<int>(i);
+                                }
+                            }});
+        }
+        rows.push_back({"Back", "", "Changes are saved as you make them", true, false, [](int d) {
+                            if (d == 0) {
+                                GoTo(Page::Main);
+                            }
+                        }});
     }
     return rows;
 }
 
-/// direction: 0 = confirm, -1 / +1 = left / right.
-void Activate(int row, int direction) {
-    if (page == Page::Main) {
-        int index = row;
-        if (!InFreePlay() && index >= 2) {
-            index++; // skip the absent "return" entry
-        }
-        if (direction != 0) {
-            return;
-        }
-        switch (index) {
-        case 0:
-            page = Page::FreePlay;
-            selected = 0;
-            break;
-        case 1:
-            open = false;
-            if (!Achievements::IsPanelOpen()) {
-                Achievements::TogglePanel();
-            }
-            break;
-        case 2:
-            Relaunch("", "");
-            break;
-        case 3: {
-            SDL_Event quit{};
-            quit.type = SDL_EVENT_QUIT;
-            SDL_PushEvent(&quit);
-            break;
-        }
-        default:
-            open = false;
-            break;
-        }
-        return;
-    }
-    const int step = direction == 0 ? 1 : direction;
-    switch (row) {
-    case 0:
-        colossus = (colossus + step + 16) % 16;
-        break;
-    case 1:
-        difficulty = (difficulty + step + 3) % 3;
-        break;
-    case 2:
-        challenge = !challenge;
-        break;
-    case 3:
-        all_items = !all_items;
-        break;
-    case 4:
-        no_damage = !no_damage;
-        break;
-    case 5:
-        unlimited_grip = !unlimited_grip;
-        break;
-    case 6:
-        max_damage = !max_damage;
-        break;
-    case 7:
-        if (direction == 0) {
-            StartBattle();
-        }
-        break;
+const char* PageTitle() {
+    switch (page) {
+    case Page::FreePlay:
+        return "Free Play";
+    case Page::Graphics:
+        return "Graphics and Settings";
+    case Page::Controls:
+        return "Key Bindings";
     default:
-        if (direction == 0) {
-            page = Page::Main;
-            selected = 0;
-        }
-        break;
+        return "Shadow of the Colossus";
     }
 }
 
@@ -258,14 +653,48 @@ void Activate(int row, int direction) {
 
 void Toggle() {
     if (!open) {
-        page = Page::Main;
-        selected = 0;
+        GoTo(Page::Main);
     }
+    capture_row = -1;
     open = !open;
 }
 
 bool IsOpen() {
     return open;
+}
+
+bool CaptureInput(const SDL_Event* event) {
+    const int row = capture_row;
+    if (row < 0 || !open) {
+        return false;
+    }
+    std::string key;
+    if (event->type == SDL_EVENT_KEY_DOWN) {
+        if (event->key.key == SDLK_ESCAPE) {
+            capture_row = -1;
+            return true;
+        }
+        for (const auto& [name, code] : Input::string_to_keyboard_key_map) {
+            if (code == event->key.key && !name.ends_with("button") &&
+                !name.starts_with("mousewheel")) {
+                key = name;
+                break;
+            }
+        }
+    } else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        key = event->button.button == SDL_BUTTON_LEFT     ? "leftbutton"
+              : event->button.button == SDL_BUTTON_RIGHT  ? "rightbutton"
+              : event->button.button == SDL_BUTTON_MIDDLE ? "middlebutton"
+                                                          : "";
+    } else if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        key = event->wheel.y > 0 ? "mousewheelup" : event->wheel.y < 0 ? "mousewheeldown" : "";
+    }
+    if (!key.empty() && IsKeyboardInput(key)) {
+        Rebind(bindings[row].output, key);
+        capture_row = -1;
+    }
+    // While waiting for a key, nothing else gets the input.
+    return true;
 }
 
 void Draw() {
@@ -283,6 +712,7 @@ void Draw() {
 
     const std::vector<Row> rows = BuildRows();
     const int count = static_cast<int>(rows.size());
+    const bool capturing = capture_row >= 0;
     const auto step_to_enabled = [&](int direction) {
         for (int i = 0; i < count; i++) {
             selected = (selected + direction + count) % count;
@@ -291,31 +721,33 @@ void Draw() {
             }
         }
     };
-    if (IsKeyPressed(ImGuiKey_DownArrow) || IsKeyPressed(ImGuiKey_GamepadDpadDown) ||
-        IsKeyPressed(ImGuiKey_S)) {
-        step_to_enabled(1);
-    }
-    if (IsKeyPressed(ImGuiKey_UpArrow) || IsKeyPressed(ImGuiKey_GamepadDpadUp) ||
-        IsKeyPressed(ImGuiKey_W)) {
-        step_to_enabled(-1);
+    int activate_row = -1, activate_direction = 0;
+    bool back = false;
+    if (!capturing) {
+        if (IsKeyPressed(ImGuiKey_DownArrow) || IsKeyPressed(ImGuiKey_GamepadDpadDown) ||
+            IsKeyPressed(ImGuiKey_S)) {
+            step_to_enabled(1);
+        }
+        if (IsKeyPressed(ImGuiKey_UpArrow) || IsKeyPressed(ImGuiKey_GamepadDpadUp) ||
+            IsKeyPressed(ImGuiKey_W)) {
+            step_to_enabled(-1);
+        }
+        if (IsKeyPressed(ImGuiKey_Enter, false) || IsKeyPressed(ImGuiKey_Space, false) ||
+            IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) {
+            activate_row = selected;
+        } else if (IsKeyPressed(ImGuiKey_LeftArrow) || IsKeyPressed(ImGuiKey_GamepadDpadLeft) ||
+                   IsKeyPressed(ImGuiKey_A)) {
+            activate_row = selected;
+            activate_direction = -1;
+        } else if (IsKeyPressed(ImGuiKey_RightArrow) || IsKeyPressed(ImGuiKey_GamepadDpadRight) ||
+                   IsKeyPressed(ImGuiKey_D)) {
+            activate_row = selected;
+            activate_direction = 1;
+        }
+        back = IsKeyPressed(ImGuiKey_Escape, false) || IsKeyPressed(ImGuiKey_Backspace, false) ||
+               IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
     }
     selected = std::clamp(selected, 0, count - 1);
-    int activate_row = -1, activate_direction = 0;
-    if (IsKeyPressed(ImGuiKey_Enter, false) || IsKeyPressed(ImGuiKey_Space, false) ||
-        IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) {
-        activate_row = selected;
-    } else if (IsKeyPressed(ImGuiKey_LeftArrow) || IsKeyPressed(ImGuiKey_GamepadDpadLeft) ||
-               IsKeyPressed(ImGuiKey_A)) {
-        activate_row = selected;
-        activate_direction = -1;
-    } else if (IsKeyPressed(ImGuiKey_RightArrow) || IsKeyPressed(ImGuiKey_GamepadDpadRight) ||
-               IsKeyPressed(ImGuiKey_D)) {
-        activate_row = selected;
-        activate_direction = 1;
-    }
-    const bool back = IsKeyPressed(ImGuiKey_Escape, false) ||
-                      IsKeyPressed(ImGuiKey_Backspace, false) ||
-                      IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
 
     // Laid out like the game's own menus: title top left, entries below it with a triangle on
     // the selected one, values in a column to the right, prompts bottom right.
@@ -325,28 +757,37 @@ void Draw() {
     Ui::Veil(0.72f);
     const float title_x = display.x * 0.15f;
     const float label_x = display.x * 0.20f;
-    const float value_x = display.x * 0.56f;
-    float y = display.y * 0.24f;
-    Ui::Text(draw, 60.0f * scale, {title_x, y}, Ui::TextBright,
-             page == Page::Main ? "Shadow of the Colossus" : "Free Play");
-    y += 104.0f * scale;
-    const float row_height = 52.0f * scale;
+    const float value_x = display.x * 0.58f;
+    float y = display.y * 0.17f;
+    Ui::Text(draw, 60.0f * scale, {title_x, y}, Ui::TextBright, PageTitle());
+    y += 100.0f * scale;
+    const float row_height = 50.0f * scale;
     const float text_size = 34.0f * scale;
+    // Long pages scroll to keep the selection in view.
+    constexpr int MaxVisible = 11;
+    static int first_visible = 0;
+    if (count <= MaxVisible) {
+        first_visible = 0;
+    } else {
+        first_visible = std::clamp(first_visible, std::max(0, selected - MaxVisible + 1),
+                                   std::min(selected, count - MaxVisible));
+    }
+    const int last_visible = std::min(count, first_visible + MaxVisible);
     const ImVec2 mouse = GetIO().MousePos;
     const bool mouse_moved = GetIO().MouseDelta.x != 0.0f || GetIO().MouseDelta.y != 0.0f;
-    for (int i = 0; i < count; i++) {
+    for (int i = first_visible; i < last_visible; i++) {
         const Row& row = rows[i];
-        const float row_y = y + row_height * i;
-        const bool hovered = mouse.x >= title_x && mouse.x <= display.x * 0.75f &&
+        const float row_y = y + row_height * (i - first_visible);
+        const bool hovered = mouse.x >= title_x && mouse.x <= display.x * 0.80f &&
                              mouse.y >= row_y && mouse.y < row_y + row_height;
-        if (hovered && row.enabled) {
+        if (hovered && row.enabled && !capturing) {
             if (mouse_moved) {
                 selected = i;
             }
             if (IsMouseClicked(ImGuiMouseButton_Left)) {
                 selected = i;
                 activate_row = i;
-                // A click on the left half of a value steps it back.
+                // A click left of a value steps it back.
                 activate_direction = row.adjustable && mouse.x < value_x ? -1 : 0;
             }
         }
@@ -362,12 +803,21 @@ void Draw() {
             Ui::TextCentered(draw, text_size, value_x, text_y, color, row.value);
             if (row.adjustable && row.enabled) {
                 const float arrow = 13.0f * scale;
-                Ui::Triangle(draw, {value_x - 190.0f * scale, row_y + row_height * 0.5f}, arrow,
+                Ui::Triangle(draw, {value_x - 200.0f * scale, row_y + row_height * 0.5f}, arrow,
                              false, color);
-                Ui::Triangle(draw, {value_x + 190.0f * scale, row_y + row_height * 0.5f}, arrow,
+                Ui::Triangle(draw, {value_x + 200.0f * scale, row_y + row_height * 0.5f}, arrow,
                              true, color);
             }
         }
+    }
+    if (count > MaxVisible) {
+        // Where the list stands, like the game's own scroll marker.
+        const float track_x = display.x * 0.82f;
+        const float track_bottom = y + row_height * MaxVisible;
+        draw->AddLine({track_x, y}, {track_x, track_bottom}, Ui::TextNormal, 1.5f);
+        draw->AddCircleFilled(
+            {track_x, y + (track_bottom - y) * first_visible / (count - MaxVisible)},
+            5.0f * scale, Ui::TextBright);
     }
     const Row& current = rows[selected];
     if (!current.description.empty()) {
@@ -384,14 +834,13 @@ void Draw() {
         Ui::Prompt(draw, prompt_x, prompt_y, "CONFIRM", Ui::Action::Confirm);
     }
 
-    if (activate_row >= 0 && rows[activate_row].enabled) {
-        Activate(activate_row, activate_direction);
+    if (activate_row >= 0 && rows[activate_row].enabled && rows[activate_row].act) {
+        rows[activate_row].act(activate_direction);
     } else if (back) {
-        if (page == Page::FreePlay) {
-            page = Page::Main;
-            selected = 0;
-        } else {
+        if (page == Page::Main) {
             open = false;
+        } else {
+            GoTo(Page::Main);
         }
     }
 }

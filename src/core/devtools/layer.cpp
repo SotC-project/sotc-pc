@@ -5,6 +5,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/ui.h"
 #include "input/controller.h"
 #include "input/input_mouse.h"
 #include "sdl_window.h"
@@ -506,16 +507,12 @@ void L::Draw() {
     UpdateMenuCursor();
 
     if (!game_started && !show_quit_window) {
-        // Title menu: the game itself has no exit entry, so say how to leave.
-        const ImVec2 size = GetIO().DisplaySize;
-        const char* hint = "Menu (free play, achievements, quit): F2  /  L3 + R3";
-        // Bottom left: the game's own prompts sit bottom right.
-        const float font_size = GetFontSize() * 1.4f;
-        const ImVec2 pos{28.0f, size.y - font_size - 22.0f};
-        auto* draw = GetForegroundDrawList();
-        draw->AddText(GetFont(), font_size, {pos.x + 1.0f, pos.y + 1.0f}, IM_COL32(0, 0, 0, 170),
-                      hint);
-        draw->AddText(GetFont(), font_size, pos, IM_COL32(235, 235, 235, 230), hint);
+        // Title screen: free play and the PC settings are reached from here.
+        if (!Sotc::Menu::IsOpen() && !Sotc::Achievements::IsPanelOpen()) {
+            const ImVec2 size = GetIO().DisplaySize;
+            Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
+                             "FREE PLAY  /  SETTINGS", Sotc::Ui::Action::Menu);
+        }
     }
 
     if (show_quit_window) {

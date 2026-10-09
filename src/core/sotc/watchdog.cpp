@@ -123,6 +123,59 @@ void DumpAllThreads(const std::filesystem::path& path, int waited_seconds) {
 } // namespace
 #endif
 
+void WriteCrashStack(void* context_record, unsigned long long fault_address) {
+#ifdef _WIN32
+    const auto path = Common::FS::GetUserPath(Common::FS::PathType::LogDir) / "crash_stack.txt";
+    FILE* out = _wfopen(path.c_str(), L"w");
+    if (!out) {
+        return;
+    }
+    const HANDLE process = GetCurrentProcess();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(process, nullptr, TRUE);
+    CONTEXT context = *static_cast<CONTEXT*>(context_record);
+    std::fprintf(out, "Crash at %llx, access to %llx. Call stack of the faulting thread:\n",
+                 static_cast<unsigned long long>(context.Rip), fault_address);
+    STACKFRAME64 frame{};
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrFrame.Mode = AddrModeFlat;
+    frame.AddrStack.Offset = context.Rsp;
+    frame.AddrStack.Mode = AddrModeFlat;
+    for (int i = 0; i < 48; i++) {
+        if (i > 0 &&
+            (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, GetCurrentThread(), &frame, &context,
+                          nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr) ||
+             frame.AddrPC.Offset == 0)) {
+            break;
+        }
+        const DWORD64 address = frame.AddrPC.Offset;
+        char buffer[sizeof(SYMBOL_INFO) + 512]{};
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = 511;
+        DWORD64 displacement = 0;
+        const bool named = SymFromAddr(process, address, &displacement, symbol);
+        IMAGEHLP_MODULE64 module{};
+        module.SizeOfStruct = sizeof(module);
+        const bool has_module = SymGetModuleInfo64(process, address, &module);
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD line_displacement = 0;
+        const bool has_line = SymGetLineFromAddr64(process, address, &line_displacement, &line);
+        std::fprintf(out, "  %s+0x%llx  %s", has_module ? module.ModuleName : "?",
+                     has_module ? address - module.BaseOfImage : address,
+                     named ? symbol->Name : "");
+        if (has_line) {
+            std::fprintf(out, "  (%s:%lu)", line.FileName, line.LineNumber);
+        }
+        std::fprintf(out, "\n");
+    }
+    std::fclose(out);
+#endif
+}
+
 void Start() {
 #ifdef _WIN32
     int seconds = 120;

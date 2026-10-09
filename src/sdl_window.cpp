@@ -684,6 +684,9 @@ Uint32 menuKeyUpCallback(void* key, Uint32 timer_id, Uint32 interval) {
 void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
 
+    if (Sotc::Menu::CaptureInput(event)) {
+        return;
+    }
     // An open overlay panel takes the keyboard; releases still pass so nothing stays held.
     // The menu hotkey itself goes through so it can close what it opened.
     if (Overlay::PanelBlocksMouse() &&

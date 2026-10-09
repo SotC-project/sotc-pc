@@ -4,11 +4,15 @@
 
 #include <filesystem>
 
+union SDL_Event;
+
 namespace Sotc::Menu {
 
 /// Opens or closes the PC menu (F2, L3 + R3): free play, achievements, quit.
 void Toggle();
 bool IsOpen();
+/// While the key bindings page waits for a key: takes the event and returns true.
+bool CaptureInput(const SDL_Event* event);
 /// Draws the menu when open and handles the pad shortcut. Call once per frame.
 void Draw();
 
