@@ -476,9 +476,12 @@ void WriteOutput(const Voice& v, const OrbisNgs2RenderBufferInfo& info, u32 fram
     const bool is_float = info.waveformType == PcmF32L;
     for (u32 n = 0; n < frames; ++n) {
         for (u32 c = 0; c < ch; ++c) {
-            const float s =
-                c < MaxChannels && v.bus_used ? std::clamp(v.bus[c * MaxGrain + n], -1.0f, 1.0f)
-                                              : 0.0f;
+            // Peaks reach about 1.3 in busy scenes; bend them over above 0.8 instead of
+            // clipping them flat, which is audible as crackle.
+            float s = c < MaxChannels && v.bus_used ? v.bus[c * MaxGrain + n] : 0.0f;
+            if (const float mag = std::abs(s); mag > 0.8f) {
+                s = std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s);
+            }
             if (is_float) {
                 static_cast<float*>(info.buffer)[n * ch + c] = s;
             } else {

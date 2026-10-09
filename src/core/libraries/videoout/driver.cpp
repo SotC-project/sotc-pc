@@ -238,11 +238,22 @@ void VideoOutDriver::Flip(const Request& req) {
     // Temporary: presented frames per second.
     static u32 flips = 0;
     static auto last = std::chrono::steady_clock::now();
+    // Also the longest gap between two flips and how many exceeded 40 ms (visible hitches).
+    static auto previous = last;
+    static double worst_ms = 0;
+    static u32 hitches = 0;
     ++flips;
-    if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(3)) {
-        LOG_ERROR(Lib_VideoOut, "fps {:.1f}",
-                  flips / std::chrono::duration<double>(now - last).count());
+    const auto now = std::chrono::steady_clock::now();
+    const double gap_ms = std::chrono::duration<double, std::milli>(now - previous).count();
+    previous = now;
+    worst_ms = std::max(worst_ms, gap_ms);
+    hitches += gap_ms > 40.0;
+    if (now - last >= std::chrono::seconds(3)) {
+        LOG_ERROR(Lib_VideoOut, "fps {:.1f} worst {:.0f} ms hitches {}",
+                  flips / std::chrono::duration<double>(now - last).count(), worst_ms, hitches);
         flips = 0;
+        worst_ms = 0;
+        hitches = 0;
         last = now;
     }
     // Update HDR status before presenting.
