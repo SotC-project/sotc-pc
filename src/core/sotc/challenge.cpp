@@ -246,7 +246,9 @@ void OnHudStrip(std::span<const u8> rgba, u32 width, u32 height) {
     if (visible) {
         const bool first = !state.bar_seen;
         state.bar_seen = true;
-        state.full_length = std::max(state.full_length, length);
+        // Free play starts at full health, so the first sight of the bar is its full length;
+        // the glowing tip may add a little later.
+        state.full_length = first ? length : std::max(state.full_length, std::min(length, state.full_length * 1.04f));
         const float health = std::clamp(length / state.full_length, 0.0f, 1.0f);
         const double hidden_for =
             first ? 0.0 : std::chrono::duration<double>(now - state.last_visible).count();
