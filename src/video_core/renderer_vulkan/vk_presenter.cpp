@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <process.h>
+#include <string>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -680,6 +682,54 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
     return {};
 }
 
+/// Footage capture: appends one frame, halved in size, as raw RGB24 to the SOTC_RECORD file.
+static void WriteRecordFrame(const ScreenshotReadback& frame) {
+    static FILE* file = [] {
+        // %p in the name becomes the process number, so a relaunched game (free play) writes its
+        // own file.
+        const char* env = std::getenv("SOTC_RECORD");
+        if (!env) {
+            return static_cast<FILE*>(nullptr);
+        }
+        std::string path = env;
+        if (const auto at = path.find("%p"); at != std::string::npos) {
+            path.replace(at, 2, std::to_string(_getpid()));
+        }
+        return std::fopen(path.c_str(), "wb");
+    }();
+    std::vector<u8> rgba;
+    if (!file || !ConvertReadbackToRgba8(frame, rgba)) {
+        return;
+    }
+    const u32 w = frame.width / 2, h = frame.height / 2;
+    static bool announced = false;
+    if (!announced) {
+        announced = true;
+        LOG_INFO(Render_Vulkan, "Recording {}x{} rgb24 at 30 fps, first frame at {} ms", w,
+                 h,
+                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count());
+    }
+    std::vector<u8> rgb(static_cast<size_t>(w) * h * 3);
+    const u32 stride = frame.width * 4;
+    for (u32 y = 0; y < h; y++) {
+        const u8* row0 = &rgba[static_cast<size_t>(y) * 2 * stride];
+        const u8* row1 = row0 + stride;
+        u8* out = &rgb[static_cast<size_t>(y) * w * 3];
+        for (u32 x = 0; x < w; x++) {
+            for (u32 c = 0; c < 3; c++) {
+                out[x * 3 + c] = static_cast<u8>((row0[x * 8 + c] + row0[x * 8 + 4 + c] +
+                                                  row1[x * 8 + c] + row1[x * 8 + 4 + c] +
+                                                  2) /
+                                                 4);
+            }
+        }
+    }
+    std::fwrite(rgb.data(), 1, rgb.size(), file);
+    std::fflush(file);
+}
+
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
     auto desc = VideoCore::TextureCache::ImageDesc{attribute, cpu_address};
@@ -754,7 +804,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // Footage capture (SOTC_RECORD=<file>, switched by the test script): the game image at a
     // steady 30 frames per second, halved in size, appended as raw RGB24.
     std::optional<ScreenshotReadback> pending_record;
-    if (g_sotc_record.load(std::memory_order_relaxed)) {
+    if (g_sotc_record.load(std::memory_order_relaxed) == 1) {
         static auto next_frame = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_frame) {
@@ -835,40 +885,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     if (pending_record) {
         draw_scheduler.DeferPriorityOperation([frame_data = std::move(pending_record)]() {
-            static FILE* file = [] {
-                const char* path = std::getenv("SOTC_RECORD");
-                return path ? std::fopen(path, "wb") : nullptr;
-            }();
-            std::vector<u8> rgba;
-            if (!file || !ConvertReadbackToRgba8(frame_data.value(), rgba)) {
-                return;
-            }
-            const u32 w = frame_data->width / 2, h = frame_data->height / 2;
-            static bool announced = false;
-            if (!announced) {
-                announced = true;
-                LOG_INFO(Render_Vulkan, "Recording {}x{} rgb24 at 30 fps, first frame at {} ms", w,
-                         h,
-                         std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::system_clock::now().time_since_epoch())
-                             .count());
-            }
-            std::vector<u8> rgb(static_cast<size_t>(w) * h * 3);
-            const u32 stride = frame_data->width * 4;
-            for (u32 y = 0; y < h; y++) {
-                const u8* row0 = &rgba[static_cast<size_t>(y) * 2 * stride];
-                const u8* row1 = row0 + stride;
-                u8* out = &rgb[static_cast<size_t>(y) * w * 3];
-                for (u32 x = 0; x < w; x++) {
-                    for (u32 c = 0; c < 3; c++) {
-                        out[x * 3 + c] = static_cast<u8>((row0[x * 8 + c] + row0[x * 8 + 4 + c] +
-                                                          row1[x * 8 + c] + row1[x * 8 + 4 + c] +
-                                                          2) /
-                                                         4);
-                    }
-                }
-            }
-            std::fwrite(rgb.data(), 1, rgb.size(), file);
+            WriteRecordFrame(frame_data.value());
         });
     }
     if (pending_hud_strip) {
@@ -1003,6 +1020,20 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     const auto cmdbuf = scheduler.CommandBuffer();
     const u32 capture_with_overlays_count = VideoCore::ConsumeWithOverlaysScreenshotRequests();
     std::optional<ScreenshotReadback> pending_screenshot;
+    // Footage with the overlay in it ("rec=ui" in the test script): the finished picture at 30
+    // frames per second.
+    bool record_this_frame = false;
+    if (g_sotc_record.load(std::memory_order_relaxed) == 2 && capture_with_overlays_count == 0) {
+        static auto next_frame = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_frame) {
+            next_frame += std::chrono::microseconds(33333);
+            if (next_frame < now) {
+                next_frame = now + std::chrono::microseconds(33333);
+            }
+            record_this_frame = true;
+        }
+    }
 
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
@@ -1112,10 +1143,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
         ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
 
-        if (capture_with_overlays_count > 0) {
+        if (capture_with_overlays_count > 0 || record_this_frame) {
             auto& readback = pending_screenshot.emplace(
                 instance, ScreenshotKind::WithOverlays,
-                BuildScreenshotPaths(ScreenshotKind::WithOverlays, capture_with_overlays_count),
+                record_this_frame ? std::vector<std::filesystem::path>{}
+                                  : BuildScreenshotPaths(ScreenshotKind::WithOverlays,
+                                                         capture_with_overlays_count),
                 extent.width, extent.height,
                 swapchain.GetHDR() ? vk::Format::eA2B10G10R10UnormPack32
                                    : swapchain.GetSurfaceFormat().format,
@@ -1182,9 +1215,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // Flush vulkan commands.
     if (pending_screenshot) {
-        scheduler.DeferPriorityOperation([deferred_screenshot = std::move(pending_screenshot)]() {
-            SavePendingScreenshot(deferred_screenshot.value());
-        });
+        scheduler.DeferPriorityOperation(
+            [deferred_screenshot = std::move(pending_screenshot), record_this_frame]() {
+                if (record_this_frame) {
+                    WriteRecordFrame(deferred_screenshot.value());
+                } else {
+                    SavePendingScreenshot(deferred_screenshot.value());
+                }
+            });
     }
 
     SubmitInfo info{};

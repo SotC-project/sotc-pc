@@ -237,9 +237,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
-        } else if (action == "rec=start" || action == "rec=stop") {
-            // Footage capture on or off (see SOTC_RECORD in the presenter).
-            g_sotc_record = action == "rec=start" ? 1 : 0;
+        } else if (action == "rec=start" || action == "rec=stop" || action == "rec=ui") {
+            // Footage capture: the game picture, the finished picture with overlays, or off
+            // (see SOTC_RECORD in the presenter).
+            g_sotc_record = action == "rec=start" ? 1 : action == "rec=ui" ? 2 : 0;
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
