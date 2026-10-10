@@ -79,6 +79,11 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
         std::max<s64>(std::min(device_local_memory - min_vacancy_critical, min_spacing_critical),
                       min_critical_floor));
     trigger_gc_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
+    // This game needs about 5 GB of graphics memory for what is on screen (3.5 GB of geometry
+    // and other buffers, the rest render targets and the textures in view). On a large card the
+    // limits above let unused textures pile up to 9.5-12.7 GB; hold the game to less.
+    pressure_gc_memory = std::min<u64>(pressure_gc_memory, 7_GB);
+    critical_gc_memory = std::min<u64>(critical_gc_memory, 9_GB);
 }
 
 TextureCache::~TextureCache() = default;
@@ -1154,6 +1159,8 @@ void TextureCache::RegisterImage(ImageId image_id) {
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
     total_used_memory += Common::AlignUp(image.info.guest_size, 1024);
+    ++num_registered_images;
+    registered_guest_bytes += image.info.guest_size;
     image_lru_cache.Insert(image, gc_tick);
     const auto& info = image.info;
     ASSERT_MSG((info.guest_address & 0xff) == 0, "Trying to register an unaligned image");
@@ -1173,6 +1180,8 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     image.flags &= ~ImageFlagBits::Registered;
     image_lru_cache.Free(image);
     total_used_memory -= Common::AlignUp(image.info.guest_size, 1024);
+    --num_registered_images;
+    registered_guest_bytes -= image.info.guest_size;
     ForEachPage(image.info.guest_address, image.info.guest_size, [this, image_id](u64 page) {
         const auto page_it = page_table.find(page);
         ASSERT_MSG(page_it, "Unregistering unregistered page={:#x}", page << Traits::PAGE_BITS);

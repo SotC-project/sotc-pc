@@ -39,6 +39,17 @@ extern std::atomic<u32> g_pack_generation;
 PromptSet ActivePromptSet();
 
 class TextureCache {
+public:
+    /// For the memory line of the periodic statistics: image count, guest bytes, the device
+    /// usage the collector last saw and the usage at which it starts to free images.
+    struct MemoryStats {
+        u64 images, guest_bytes, used, trigger, pressure, critical;
+    };
+    MemoryStats GetMemoryStats() const {
+        return {num_registered_images, registered_guest_bytes, total_used_memory,
+                trigger_gc_memory, pressure_gc_memory, critical_gc_memory};
+    }
+
     static constexpr s64 DEFAULT_PRESSURE_GC_MEMORY = 1_GB + 512_MB;
     static constexpr s64 DEFAULT_CRITICAL_GC_MEMORY = 3_GB;
     static constexpr s64 TARGET_GC_THRESHOLD = 8_GB;
@@ -386,6 +397,9 @@ private:
     absl::flat_hash_map<u64, SamplerId> samplers;
     absl::flat_hash_set<ImageId> download_images;
     u64 total_used_memory = 0;
+    /// Registered images and the size of the game data they were made from.
+    u64 num_registered_images = 0;
+    u64 registered_guest_bytes = 0;
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;

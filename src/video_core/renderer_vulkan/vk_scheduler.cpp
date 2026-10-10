@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <string_view>
 #include <thread>
 #include <SDL3/SDL.h>
 #include "common/logging/log.h"
@@ -44,9 +45,14 @@ void HandleDeviceLost(const char* where) {
         }
     }
     if (!std::getenv("SOTC_HEADLESS")) {
+        const bool memory = std::string_view{where}.contains("memory");
         MessageBoxW(nullptr,
-                    L"The graphics driver stopped responding and Windows reset it, so the game "
-                    L"had to close.\n\nEverything up to your last save is kept.",
+                    memory ? L"The graphics card had no memory left for the game, so it had to "
+                             L"close. Closing other programs that use the graphics card "
+                             L"helps.\n\nEverything up to your last save is kept."
+                           : L"The graphics driver stopped responding and Windows reset it, so "
+                             L"the game had to close.\n\nEverything up to your last save is "
+                             L"kept.",
                     L"Shadow of the Colossus", 0x30 | 0x40000 | 0x10000);
     }
 #endif

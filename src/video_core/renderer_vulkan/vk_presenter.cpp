@@ -569,10 +569,19 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
 
     VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
                                      &unsafe_image, &frame->allocation, nullptr);
+    // Graphics memory can be short for a moment (seen right after Windows reset the driver, with
+    // the card almost empty). Wait for it instead of giving up at once.
+    for (int attempt = 0; result != VK_SUCCESS && attempt < 20; attempt++) {
+        LOG_WARNING(Render_Vulkan, "Frame image not allocated ({}), trying again",
+                    vk::to_string(vk::Result{result}));
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
+                                &unsafe_image, &frame->allocation, nullptr);
+    }
     if (result != VK_SUCCESS) [[unlikely]] {
         LOG_CRITICAL(Render_Vulkan, "Failed allocating texture with error {}",
                      vk::to_string(vk::Result{result}));
-        UNREACHABLE();
+        HandleDeviceLost("out of graphics memory");
     }
     frame->image = vk::Image{unsafe_image};
     SetObjectName(device, frame->image, "Frame image #{}", frame->id);

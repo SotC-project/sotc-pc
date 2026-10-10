@@ -198,6 +198,7 @@ struct DrawStats {
     u64 ns_stage[8]{};
     u64 ns_bind_buffers{}, ns_bind_textures{};
     u64 tsc_stage3{};
+    bool want_memory{}; // the statistics were just printed; the caller adds the memory line
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     u64 last_tsc = __rdtsc();
     void Tick() {
@@ -218,6 +219,7 @@ struct DrawStats {
             *value = u64(double(*value) * scale);
         }
         last = now;
+        want_memory = true;
         LOG_ERROR(Render, "stats/3s: drawn {} indirect {} dispatch {} filtered {} no_pipeline {} "
                           "bind_failed {} max_indices {} mirrors {} submits {}",
                   drawn, indirect, dispatch, filtered, no_pipeline, bind_failed, verts_max, mirrors,
@@ -337,6 +339,16 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     scheduler.PopPendingOperations();
     SubmitPeriodically(scheduler);
     g_stats.Tick();
+    if (g_stats.want_memory) {
+        g_stats.want_memory = false;
+        const auto mem = texture_cache.GetMemoryStats();
+        LOG_ERROR(Render,
+                  "memory MB: device {} | images {} from {} of game data | buffers resident {} | "
+                  "collector starts at {}, pressure {}, critical {}",
+                  instance.GetDeviceMemoryUsage() >> 20, mem.images, mem.guest_bytes >> 20,
+                  buffer_cache.ResidentBytes() >> 20, mem.trigger >> 20, mem.pressure >> 20,
+                  mem.critical >> 20);
+    }
     VideoCore::StartThreadSampler();
 
     if (!FilterDraw()) {

@@ -113,7 +113,15 @@ public:
         pending_mirror_ranges.Add(device_addr, size);
     }
 
+    /// GPU memory holding copies of game memory, in bytes. It only grows: a block the game
+    /// once used as a buffer stays resident.
+    u64 ResidentBytes() const {
+        return resident_bytes;
+    }
+
 private:
+    u64 resident_bytes{};
+
     struct ArenaBinds {
         const Buffer* arena;
         boost::container::small_vector<vk::SparseMemoryBind, 32> binds;
