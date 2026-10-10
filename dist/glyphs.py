@@ -19,7 +19,7 @@ GLYPHS = {
     'cc10ab8a4ccb5c32': 'LMB',    # square: attack
     'cd10bb02a59e9d9d': 'RMB',    # R2: grab
     '59acf8ac22bce6e6': 'WASD',   # left stick: move
-    '957207112e25fe2c': 'MMB',    # R1: aim, raise the sword
+    '957207112e25fe2c': 'Q',      # R1: aim, raise the sword
     '8ed179fdd7069c2a': 'Mouse',  # right stick: camera
     '833e70d22ee964a8': 'Z',      # L1: camera focus, previous page
     '0c0501623942a092': 'V',      # L3
