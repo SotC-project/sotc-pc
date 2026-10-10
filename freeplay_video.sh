@@ -1,11 +1,15 @@
 #!/bin/bash
-# Records the free play flow with the runtime's own frame capture (no screen recorder):
-# title menu > Free Play > options > Begin Battle > the battle. The game restarts itself for the
-# battle, so two raw files are written and joined: ./freeplay_video.sh <out.mp4>
+# Records the free play flow with sound, using the runtime's own frame and audio capture (no
+# screen recorder): title menu > Free Play > options > Begin Battle > the battle. The game
+# restarts itself for the battle, so each of the two processes writes its own picture and sound
+# files, which are joined afterwards.
+# Usage: ./freeplay_video.sh <out.mp4>     (CAP=<folder on a fast disk>, default E:/sotc-capture)
 out=$1
+cap=${CAP:-E:/sotc-capture}
 cd /d/sotc-pc/testrun || exit 1
 for ((w = 0; w < 120; w++)); do [ "$(tasklist | grep -ci "i3.exe")" = "0" ] && break; sleep 5; done
 if [ "$(tasklist | grep -ciE "shadps4|ShadowOfTheColossus|i3.exe|SnippingTool")" != "0" ]; then echo "REFUSED: a game instance or the screen recorder is running"; exit 1; fi
+mkdir -p "$cap" && rm -f "$cap"/rec_* "$cap"/aud_* "$cap"/part_*
 sd=user/home/1000/savedata
 marker=user/home/1000/.test_owns_savedata
 if [ -e "$marker" ]; then [ -d "$sd" ] && mv "$sd" "$sd.bak$(date +%s)"
@@ -14,18 +18,23 @@ touch "$marker"
 cp -r "$sd.fixture" "$sd"
 f="/d/Games/CUSA08809T-mods/CommandLineArgs.txt"
 cp "$f" "$f.bak"; printf '+nointro\r\n+skipSplash=true\r\n' >> "$f"
-rm -f rec_*.raw
-# First instance: into the field, pause > Quit Game > Yes to reach the title menu, then record.
+# First instance: into the field, pause > Quit Game > Yes to reach the title menu, then record:
+# down to Free Play, open it, change a few options, Begin Battle.
 first="40:key=escape,43:key=down,44:key=down,45:key=down,47:key=enter,49:key=left,50:key=enter"
 first="$first,68:rec=ui,71:key=down,72:key=down,73:key=down,75:key=enter"
 first="$first,78:key=right,79:key=right,81:key=down,82:key=right,84:key=down,85:key=right,87:key=left"
 first="$first,89:key=down,90:key=right,92:key=down,93:key=down,94:key=down,95:key=down,97:key=enter,101:rec=stop,106:quit"
-# Second instance (the battle): record from the start, move, look, swing, then stop.
-second="4:rec=ui,40:key=w*5000,46:mouse=40*1500,49:key=w*5000,55:key=leftbutton,57:key=leftbutton,59:key=space,62:mouse=-40*1500,66:key=w*4000,72:rec=stop,74:quit"
-env SOTC_HEADLESS=1 SOTC_MUTE=1 SOTC_SCRIPT="$first" SOTC_SCRIPT_NEXT="$second" SOTC_RECORD="rec_%p.raw" \
+# Second instance (the battle): record from the start; once Wander can move, a short run toward
+# the colossus, sword raised to the light, camera turns, the view of the colossus, swings, a roll
+# and a jump. The moves are short so he stays on the platform.
+second="4:rec=ui,43:key=w*2500,46:mouse=40*1200,48:key=q*3500,52:mouse=-40*1200,54:key=r*2500"
+second="$second,57:key=w*2000,60:key=leftbutton,61:key=leftbutton,62:key=leftbutton,64:key=a*700,64:key=c"
+second="$second,66:mouse=40*900,68:key=space,70:key=q*2500,73:mouse=-40*900,76:rec=stop,78:quit"
+env SOTC_HEADLESS=1 SOTC_MUTE=1 SOTC_SCRIPT="$first" SOTC_SCRIPT_NEXT="$second" \
+    SOTC_RECORD="$cap/rec_%p.raw" SOTC_RECORD_FULL=1 SOTC_RECORD_FPS=30 SOTC_AUDIODUMP="$cap/aud_%p.f32" \
     ../runtime/Build/x64-Clang-RelWithDebInfo/shadps4.exe -f false --game "D:/Games/CUSA08809T/eboot.bin" > /dev/null 2>&1 &
 sleep 20
-for ((i = 0; i < 230; i++)); do
+for ((i = 0; i < 240; i++)); do
     [ "$(tasklist | grep -ci "shadps4.exe")" = "0" ] && break
     [ "$(tasklist | grep -ci ShadowOfTheColossus)" != "0" ] && { echo "ABORTED: the user's game started"; break; }
     sleep 1
@@ -36,9 +45,25 @@ mv "$f.bak" "$f"
 [ -d "$sd" ] && mv "$sd" "$sd.bak$(date +%s)"
 [ -d "$sd.user" ] && cp -r "$sd.user" "$sd"
 rm -f "$marker"
-ls -la --time-style=long-iso rec_*.raw
-# Oldest file first: the menu, then the battle.
-list=$(ls -tr rec_*.raw)
-rm -f rec_all.raw; for r in $list; do cat "$r" >> rec_all.raw; done
-ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgb24 -s 960x540 -r 30 -i rec_all.raw -vf scale=1280:720:flags=lanczos -c:v libx264 -crf 20 -pix_fmt yuv420p "$out" && ls -la "$out"
-rm -f rec_all.raw
+ls -la --time-style=long-iso "$cap"
+# One part per process, oldest first: picture plus the sound from the sample the picture began at.
+n=0; parts=()
+for v in $(ls -tr "$cap"/rec_*.raw); do
+    pid=${v##*rec_}; pid=${pid%.raw}
+    read -r _ skip < "$v.ms"
+    a="$cap/aud_$pid.f32"
+    part="$cap/part_$n.mp4"
+    ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgb24 -s 1920x1080 -r 30 -i "$v" \
+        -f f32le -ar 48000 -ac 2 -i "$a" \
+        -filter_complex "[1:a]atrim=start_sample=${skip:-0},asetpts=PTS-STARTPTS[a]" -map 0:v -map "[a]" -shortest \
+        -c:v libx264 -preset medium -crf 17 -pix_fmt yuv420p -c:a aac -b:a 192k "$part" && parts+=("$part")
+    echo "part $n: pid $pid, sound skipped ${skip:-0} samples"
+    n=$((n + 1))
+done
+if [ "${#parts[@]}" = "2" ]; then
+    ffmpeg -y -loglevel error -i "${parts[0]}" -i "${parts[1]}" \
+        -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]" -map "[v]" -map "[a]" \
+        -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out" && ls -la "$out"
+else
+    echo "expected two parts, got ${#parts[@]}"
+fi

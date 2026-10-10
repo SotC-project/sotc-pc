@@ -21,6 +21,8 @@ GLYPHS = {
     '59acf8ac22bce6e6': 'WASD',   # left stick: move
     '957207112e25fe2c': 'MMB',    # R1: aim, raise the sword
     '8ed179fdd7069c2a': 'Mouse',  # right stick: camera
+    '833e70d22ee964a8': 'Z',      # L1: camera focus, previous page
+    '0c0501623942a092': 'V',      # L3
 }
 # Xbox pad: face buttons by letter and colour, triggers by name. The d-pad glyphs fit as they are.
 XBOX = {
@@ -31,6 +33,8 @@ XBOX = {
     'cc10ab8a4ccb5c32': ('X', (70, 140, 235)),
     'cd10bb02a59e9d9d': ('RT', (235, 235, 235)),
     '957207112e25fe2c': ('RB', (235, 235, 235)),
+    '833e70d22ee964a8': ('LB', (235, 235, 235)),
+    '0c0501623942a092': ('LS', (235, 235, 235)),
 }
 SIZE = 128
 
@@ -106,7 +110,7 @@ BUTTON_GLYPHS = {
     'triangle': '25b54a4ac0e4e967', 'cross': 'dbb1926987bdbf8e', 'circle': 'f87d7fa10c4d64d9',
     'l2': '8359520e683c7c4c', 'pad_down': 'c0b33fa3aace5af6', 'pad_left': '6ff0fae0c49fb077',
     'pad_right': '202c5bb2cb1587f9', 'square': 'cc10ab8a4ccb5c32', 'r2': 'cd10bb02a59e9d9d',
-    'r1': '957207112e25fe2c',
+    'r1': '957207112e25fe2c', 'l1': '833e70d22ee964a8', 'l3': '0c0501623942a092',
 }
 STICK_GLYPH = '59acf8ac22bce6e6'
 MOVE_OUTPUTS = ('axis_left_y_minus', 'axis_left_x_minus', 'axis_left_y_plus', 'axis_left_x_plus')
