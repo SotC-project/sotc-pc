@@ -19,11 +19,11 @@ namespace Sotc::Screens {
 
 namespace {
 
-// Textures drawn on that screen and on no other; found with SOTC_TEXUSE runs.
-constexpr std::array<u64, 0> TitleMenuTextures{};
-// (The third texture only the pause menu drew in that run is the roll button's picture, which
-// play hints show as well, so it is left out.)
-constexpr std::array<u64, 2> PauseMenuTextures{0x3e6ebf384eebcdcdULL, 0x53539718d28a642fULL};
+// Found with SOTC_TEXUSE runs. The first is drawn by every menu of the game (title menu, its
+// difficulty list, pause menu) and never in play, subtitles included; the second by the pause
+// menu only. So the title menu is "a menu without the pause menu's texture".
+constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
+constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
 
 std::atomic<u64> title_seen_ms{0};
 std::atomic<u64> pause_seen_ms{0};
@@ -51,7 +51,8 @@ bool Contains(const std::array<u64, N>& list, u64 hash) {
 void TextureUsed(u64 content_hash) {
     if (Contains(TitleMenuTextures, content_hash)) {
         title_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
-    } else if (Contains(PauseMenuTextures, content_hash)) {
+    }
+    if (Contains(PauseMenuTextures, content_hash)) {
         pause_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
     }
     static const bool recording = std::getenv("SOTC_TEXUSE") != nullptr;
@@ -62,7 +63,7 @@ void TextureUsed(u64 content_hash) {
 }
 
 bool TitleMenu() {
-    return Recent(title_seen_ms);
+    return Recent(title_seen_ms) && !Recent(pause_seen_ms);
 }
 
 bool PauseMenu() {

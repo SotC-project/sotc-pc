@@ -59,7 +59,8 @@ static void UpdateMenuCursor() {
     const bool panel =
         show_quit_window || Sotc::Achievements::IsPanelOpen() || Sotc::Menu::IsOpen();
     panel_blocks_mouse = panel;
-    const bool wanted = (panel || !game_started || Sotc::Screens::PauseMenu()) &&
+    const bool wanted = (panel || !game_started || Sotc::Screens::PauseMenu() ||
+                         Sotc::Screens::TitleMenu()) &&
                         VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;
     if (menu_cursor.exchange(wanted) == wanted) {
         return;
@@ -515,7 +516,7 @@ void L::Draw() {
         const bool title = Sotc::Screens::KnowsTitleMenu() ? Sotc::Screens::TitleMenu()
                                                            : !game_started;
         const ImVec2 size = GetIO().DisplaySize;
-        if (title && !game_started) {
+        if (title) {
             Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
                              "FREE PLAY  /  SETTINGS", Sotc::Ui::Action::Menu);
         } else if (Sotc::Screens::PauseMenu()) {
@@ -613,7 +614,8 @@ bool MenuCursorActive() {
 }
 
 bool InTitleMenu() {
-    return !game_started;
+    // Also after Quit to Main Menu, when a game was started earlier in this session.
+    return !game_started || Sotc::Screens::TitleMenu();
 }
 
 bool PanelBlocksMouse() {
