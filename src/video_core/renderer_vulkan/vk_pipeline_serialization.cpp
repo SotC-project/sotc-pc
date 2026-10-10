@@ -2,8 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
-#include <cstdlib>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
 #include "sdl_window.h"
@@ -26,6 +33,75 @@ static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
 
 namespace Vulkan {
+
+/// Worker threads for the pipeline preload. Nearly all of the time goes to the graphics driver
+/// compiling each pipeline, and the driver does that for several pipelines at once.
+struct PreloadPool {
+    explicit PreloadPool(u32 num_threads) {
+        for (u32 i = 0; i < num_threads; i++) {
+            threads.emplace_back([this] {
+                while (true) {
+                    std::function<void()> job;
+                    {
+                        std::unique_lock lock{mutex};
+                        wake.wait(lock, [&] { return stopping || !jobs.empty(); });
+                        if (jobs.empty()) {
+                            return;
+                        }
+                        job = std::move(jobs.front());
+                        jobs.pop_front();
+                    }
+                    space.notify_one();
+                    job();
+                    completed.fetch_add(1, std::memory_order_release);
+                }
+            });
+        }
+    }
+
+    ~PreloadPool() {
+        {
+            std::scoped_lock lock{mutex};
+            stopping = true;
+        }
+        wake.notify_all();
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+
+    /// Queues a job; waits while the queue is long, so the pending data stays small.
+    void Submit(std::function<void()>&& job) {
+        {
+            std::unique_lock lock{mutex};
+            space.wait(lock, [&] { return jobs.size() < threads.size() * 4; });
+            jobs.push_back(std::move(job));
+        }
+        ++submitted;
+        wake.notify_one();
+    }
+
+    struct Built {
+        GraphicsPipelineKey key;
+        std::unique_ptr<GraphicsPipeline> pipeline;
+    };
+    struct BuiltCompute {
+        ComputePipelineKey key;
+        std::unique_ptr<ComputePipeline> pipeline;
+    };
+
+    std::vector<std::thread> threads;
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::condition_variable space;
+    std::deque<std::function<void()>> jobs;
+    bool stopping{};
+    u32 submitted{};
+    std::atomic<u32> completed{};
+    /// One entry per queued pipeline; a deque keeps the entries in place while it grows.
+    std::deque<Built> built;
+    std::deque<BuiltCompute> built_compute;
+};
 
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata) {
@@ -167,9 +243,20 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
 
-    it.value() =
-        std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile, *pipeline_cache,
-                                          compute_key, *infos[0], modules[0], sdata, true);
+    if (preload_pool) {
+        auto& built = preload_pool->built_compute.emplace_back();
+        built.key = compute_key;
+        preload_pool->Submit(
+            [this, &built, key = compute_key, info = infos[0], module = modules[0], sdata]() mutable {
+                built.pipeline = std::make_unique<ComputePipeline>(
+                    instance, scheduler, desc_heap, profile, *pipeline_cache, key, *info, module,
+                    sdata, true);
+            });
+    } else {
+        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                       *pipeline_cache, compute_key, *infos[0],
+                                                       modules[0], sdata, true);
+    }
 
     infos.fill(nullptr);
     modules.fill(nullptr);
@@ -242,9 +329,26 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
     ASSERT(is_new);
 
-    it.value() = std::make_unique<GraphicsPipeline>(
-        instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-        runtime_infos, fetch_shader, modules, sdata, true);
+    if (preload_pool) {
+        // Everything the constructor reads is copied, because the members below are reused for
+        // the next pipeline. The shader infos themselves stay where they are for good.
+        auto& built = preload_pool->built.emplace_back();
+        built.key = graphics_key;
+        preload_pool->Submit(
+            [this, &built, key = graphics_key, job_infos = infos, job_runtime_infos = runtime_infos,
+             job_modules = modules,
+             job_fetch = fetch_shader ? std::optional{*fetch_shader} : std::nullopt,
+             job_sdata = std::move(sdata)]() mutable {
+                built.pipeline = std::make_unique<GraphicsPipeline>(
+                    instance, scheduler, desc_heap, profile, key, *pipeline_cache, job_infos,
+                    job_runtime_infos, job_fetch ? &*job_fetch : nullptr, job_modules, job_sdata,
+                    true);
+            });
+    } else {
+        it.value() = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
+            runtime_infos, fetch_shader, modules, sdata, true);
+    }
 
     infos.fill(nullptr);
     modules.fill(nullptr);
@@ -319,6 +423,9 @@ public:
         const bool hidden = std::getenv("SOTC_HEADLESS") != nullptr;
         window = SDL_CreateWindow("Shadow of the Colossus - preparing shaders", Width, Height,
                                   SDL_WINDOW_ALWAYS_ON_TOP | (hidden ? SDL_WINDOW_HIDDEN : 0));
+        if (window && !hidden) {
+            SDL_RaiseWindow(window);
+        }
         Update(0);
     }
 
@@ -416,13 +523,34 @@ void PipelineCache::WarmUp() {
     LoadingSplash splash{expected_pipelines};
     auto last_update = std::chrono::steady_clock::now();
 
+    // Two threads are left for the rest of the system. SOTC_PRELOAD_THREADS=0 builds every
+    // pipeline on this thread, as before.
+    u32 num_threads = std::clamp(std::thread::hardware_concurrency(), 3u, 18u) - 2;
+    if (const char* setting = std::getenv("SOTC_PRELOAD_THREADS")) {
+        num_threads = std::min<u32>(std::atoi(setting), 32);
+    }
+    std::optional<PreloadPool> pool;
+    if (num_threads > 0) {
+        pool.emplace(num_threads);
+        preload_pool = &*pool;
+    }
+    const auto start_time = std::chrono::steady_clock::now();
+    // Pipelines finished so far: built ones when the pool builds them, otherwise visited ones.
+    const auto progress = [&] {
+        if (!pool) {
+            return num_total_pipelines;
+        }
+        const u32 waiting = pool->submitted - pool->completed.load(std::memory_order_acquire);
+        return num_total_pipelines - std::min(waiting, num_total_pipelines);
+    };
+
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
             ++num_total_pipelines;
             if (const auto now = std::chrono::steady_clock::now();
                 now - last_update > std::chrono::milliseconds(100)) {
                 last_update = now;
-                splash.Update(num_total_pipelines);
+                splash.Update(progress());
             }
 
             Serialization::Archive ar{std::move(data)};
@@ -449,7 +577,24 @@ void PipelineCache::WarmUp() {
             }
         });
 
-    LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
+    if (pool) {
+        while (pool->completed.load(std::memory_order_acquire) != pool->submitted) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            splash.Update(progress());
+        }
+        preload_pool = nullptr;
+        for (auto& built : pool->built) {
+            graphics_pipelines.at(built.key) = std::move(built.pipeline);
+        }
+        for (auto& built : pool->built_compute) {
+            compute_pipelines.at(built.key) = std::move(built.pipeline);
+        }
+        pool.reset();
+    }
+
+    LOG_INFO(Render, "Preloaded {} pipelines in {:.1f} s on {} threads", num_pipelines,
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count(),
+             std::max(num_threads, 1u));
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);

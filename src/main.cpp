@@ -42,6 +42,16 @@ int main(int argc, char* argv[]) {
     Sotc::Menu::WaitForPreviousInstance();
     Sotc::Watchdog::Start();
 #ifdef _WIN32
+    // Started from a shortcut or by double click, the console window is this program's own and
+    // shows nothing but log lines, which reads as a failed start while the shaders load. Drop
+    // it; the log file holds the same text. A console shared with a shell is left alone.
+    if (DWORD owners[2]; GetConsoleProcessList(owners, 2) == 1) {
+        FreeConsole();
+        const HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                       nullptr, OPEN_EXISTING, 0, nullptr);
+        SetStdHandle(STD_OUTPUT_HANDLE, nul);
+        SetStdHandle(STD_ERROR_HANDLE, nul);
+    }
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
