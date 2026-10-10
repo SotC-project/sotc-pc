@@ -75,11 +75,17 @@ for v in $(ls -tr "$cap"/rec_*.raw); do
 done
 if [ "${#parts[@]}" = "2" ]; then
     joined="$cap/joined.mp4"
-    ffmpeg -y -loglevel error -i "${parts[0]}" -i "${parts[1]}"         -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]" -map "[v]" -map "[a]"         -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p -c:a aac -b:a 192k "$joined"
+    ffmpeg -y -loglevel error -i "${parts[0]}" -i "${parts[1]}"         -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][j];[j]volume=-2dB[a]" -map "[v]" -map "[a]"         -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p -c:a aac -b:a 192k "$joined"
     # The black wait after Begin Battle (restart and load) is cut to about four seconds: two kept
     # after the picture goes black, two before it returns, with the sound faded in at the join.
-    read -r bs be < <(ffmpeg -hide_banner -nostats -i "$joined" -vf "blackdetect=d=5:pix_th=0.06" -an -f null - 2>&1 |
-        sed -n 's/.*black_start:\([0-9.]*\) black_end:\([0-9.]*\).*/\1 \2/p' | head -1)
+    # The wait runs from the end of the first part (which closes on about four seconds of
+    # black after Begin Battle) to where the second part's picture appears. It is measured in
+    # the parts, not in the joined film: the menu pages are dark enough to count as black.
+    d0=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${parts[0]}")
+    e1=$(ffmpeg -hide_banner -nostats -i "${parts[1]}" -vf "blackdetect=d=3:pix_th=0.06" -an -f null - 2>&1 |
+        sed -n 's/.*black_start:0 black_end:\([0-9.]*\).*/\1/p' | head -1)
+    bs=""; be=""
+    [ -n "$d0" ] && [ -n "$e1" ] && { bs=$(python -c "print($d0 - 4)"); be=$(python -c "print($d0 + $e1)"); }
     echo "black wait from ${bs:-?} s to ${be:-?} s"
     if [ -n "$bs" ] && [ -n "$be" ]; then
         a=$(python -c "print($bs + 2)"); b=$(python -c "print($be - 2)")
