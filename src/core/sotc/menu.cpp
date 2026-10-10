@@ -735,6 +735,32 @@ void OpenSettings() {
     open = true;
 }
 
+namespace {
+std::atomic<int> flow_starts{0};
+std::atomic<u64> second_start_ms{0};
+} // namespace
+
+void OnGameFlowStart() {
+    if (++flow_starts == 2) {
+        second_start_ms = SDL_GetTicks();
+    }
+}
+
+bool StartCovered() {
+    static const bool free_play = InFreePlay();
+    if (!free_play) {
+        return false;
+    }
+    const u64 now = SDL_GetTicks();
+    // Never for longer than a start can take, whatever the game does.
+    if (now > 90000) {
+        return false;
+    }
+    const u64 second = second_start_ms.load();
+    // The game's own loading screen is up shortly after the second announcement.
+    return second == 0 || now - second < 700;
+}
+
 void HotkeyToggle() {
     if (open || InFreePlay()) {
         Toggle();

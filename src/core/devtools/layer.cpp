@@ -512,6 +512,11 @@ void L::Draw() {
 
     // Free play, the achievements and the PC settings are lines of the game's own menus.
     Sotc::MenuExt::Draw();
+    if (Sotc::Menu::StartCovered()) {
+        // A free play battle: black until the colossus's own loading screen is up.
+        GetForegroundDrawList()->AddRectFilled({0.0f, 0.0f}, GetIO().DisplaySize,
+                                               IM_COL32(0, 0, 0, 255));
+    }
 
     if (show_quit_window) {
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();

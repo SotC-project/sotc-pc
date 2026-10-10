@@ -280,6 +280,7 @@ void VideoOutDriver::Flip(const Request& req) {
         const u32 upload_kb = Sotc::Hitch::texture_kb.exchange(0);
         const u32 buffer_kb = Sotc::Hitch::buffer_kb.exchange(0);
         const u32 freed = Sotc::Hitch::images_freed.exchange(0);
+        const u32 sync_kb = Sotc::Hitch::buffer_sync_kb.exchange(0);
         const u32 gpu_us = Sotc::Hitch::gpu_busy_us.exchange(0);
         const u32 faults = Sotc::Hitch::memory_faults.exchange(0);
         const u32 read_kb = Sotc::Hitch::file_read_kb.exchange(0);
@@ -300,11 +301,11 @@ void VideoOutDriver::Flip(const Request& req) {
         if (gap_ms > 40.0) {
             LOG_ERROR(Lib_VideoOut,
                       "hitch {:.0f} ms: {} pipelines built in {} ms, {} textures uploaded ({} MB), "
-                      "{} MB of buffers allocated, {} images freed | renderer busy {} ms, {} "
+                      "{} MB of buffers allocated ({} MB re-uploaded), {} images freed | renderer busy {} ms, {} "
                       "memory faults, files read {} KB in {} ms | draws {:.0f} ms (buffers {:.0f}, "
                       "textures {:.0f}), compute {:.0f} ms, copy-back {:.0f} ms",
                       gap_ms, pipelines, pipeline_us / 1000, uploads, upload_kb >> 10,
-                      buffer_kb >> 10, freed, gpu_us / 1000, faults, read_kb, read_us / 1000,
+                      buffer_kb >> 10, sync_kb >> 10, freed, gpu_us / 1000, faults, read_kb, read_us / 1000,
                       stage_ms[0], stage_ms[2], stage_ms[3], stage_ms[1], stage_ms[4]);
         }
     }

@@ -412,6 +412,7 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
         });
     });
     if (!copies.empty()) {
+        Sotc::Hitch::buffer_sync_kb += u32(total_size_bytes >> 10);
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
         for (auto& copy : copies) {
             memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);

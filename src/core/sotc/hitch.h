@@ -16,6 +16,7 @@ inline std::atomic<u32> pipeline_us{0};       ///< time that took, microseconds
 inline std::atomic<u32> texture_uploads{0};   ///< textures filled from game memory
 inline std::atomic<u32> texture_kb{0};        ///< their size
 inline std::atomic<u32> buffer_kb{0};         ///< graphics memory newly allocated for buffers
+inline std::atomic<u32> buffer_sync_kb{0};    ///< game-written buffer data uploaded again
 inline std::atomic<u32> images_freed{0};
 inline std::atomic<u32> gpu_busy_us{0};       ///< time the command processor spent working
 inline std::atomic<u32> memory_faults{0};     ///< writes and reads caught on tracked game memory

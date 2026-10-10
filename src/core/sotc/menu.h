@@ -17,6 +17,12 @@ void OpenSettings();
 /// The menu hotkey (F2, L3 + R3). It only works during a free play battle, where the result
 /// screen points to it; everywhere else the menu is reached from the game's menus.
 void HotkeyToggle();
+/// The game announced the start of play on its console. A free play battle boots into the
+/// starting field first and warps to the colossus a moment later, announcing play twice.
+void OnGameFlowStart();
+/// True from the start of a free play battle's process until the warp to the colossus is under
+/// way: the picture is kept black meanwhile, so the starting field and the warp are not seen.
+bool StartCovered();
 /// While the key bindings page waits for a key: takes the event and returns true.
 bool CaptureInput(const SDL_Event* event);
 /// Draws the menu when open and handles the pad shortcut. Call once per frame.
