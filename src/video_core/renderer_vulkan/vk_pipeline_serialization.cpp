@@ -7,15 +7,20 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
 #include "sdl_window.h"
+#include "common/path_util.h"
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
+#include "core/sotc/prep_screen.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
 #include "video_core/cache_storage.h"
@@ -417,63 +422,6 @@ namespace {
 
 /// A small window with a progress bar, shown while the saved pipelines load. The game's own
 /// window cannot draw yet at that point.
-class LoadingSplash {
-public:
-    explicit LoadingSplash(u32 total_) : total{std::max(total_, 1u)} {
-        const bool hidden = std::getenv("SOTC_HEADLESS") != nullptr;
-        window = SDL_CreateWindow("Shadow of the Colossus - preparing shaders", Width, Height,
-                                  SDL_WINDOW_ALWAYS_ON_TOP | (hidden ? SDL_WINDOW_HIDDEN : 0));
-        if (window && !hidden) {
-            SDL_RaiseWindow(window);
-        }
-        Update(0);
-    }
-
-    ~LoadingSplash() {
-        if (window) {
-            SDL_DestroyWindow(window);
-        }
-    }
-
-    void Update(u32 done) {
-        // Keep answering the system, or it marks the windows as not responding.
-        SDL_PumpEvents();
-        if (!window) {
-            return;
-        }
-        const u32 percent = std::min(done * 100 / total, 100u);
-        SDL_SetWindowTitle(window,
-                           fmt::format("Shadow of the Colossus - preparing shaders {}%", percent)
-                               .c_str());
-        SDL_Surface* surface = SDL_GetWindowSurface(window);
-        if (!surface) {
-            return;
-        }
-        const auto fill = [&](int x, int y, int w, int h, u8 r, u8 g, u8 b) {
-            const SDL_Rect rect{x, y, w, h};
-            SDL_FillSurfaceRect(surface, &rect, SDL_MapSurfaceRGB(surface, r, g, b));
-        };
-        // Weathered stone, a carved slot, moss filling it.
-        fill(0, 0, Width, Height, 30, 31, 28);
-        const int x = 28, y = 34, w = Width - 56, h = 28;
-        fill(x - 3, y - 3, w + 6, h + 6, 120, 124, 108);
-        fill(x, y, w, h, 46, 47, 43);
-        fill(x, y, static_cast<int>(static_cast<u64>(w) * done / total), h, 104, 138, 66);
-        SDL_UpdateWindowSurface(window);
-        if (const char* dump = std::getenv("SOTC_SPLASH_DUMP"); dump && !dumped && percent >= 50) {
-            dumped = true;
-            SDL_SaveBMP(surface, dump);
-        }
-    }
-
-private:
-    static constexpr int Width = 560;
-    static constexpr int Height = 96;
-    SDL_Window* window{};
-    u32 total;
-    bool dumped{};
-};
-
 } // namespace
 
 void PipelineCache::WarmUp() {
@@ -521,8 +469,48 @@ void PipelineCache::WarmUp() {
     // restart of the PC, with no window answering the system yet.
     const u32 expected_pipelines =
         Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey);
-    LoadingSplash splash{expected_pipelines};
-    Storage::DataBase::Instance().LoadPack([&] { splash.Update(0); });
+
+    // Preparing is offered at every start until it has been done once for this program file
+    // and graphics driver; from then on it runs unasked, and takes seconds.
+    const std::string signature =
+        fmt::format("{} gpu {:x}:{:x} driver {:x}", Sotc::PrepScreen::ProgramSignature(),
+                    instance.GetVendorID(), instance.GetDeviceID(), instance.GetDriverVersion());
+    const auto marker =
+        Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_shaders_prepared.txt";
+    std::string marked;
+    std::getline(std::ifstream{marker}, marked);
+    const bool prepared_before = marked == signature;
+
+    // The screen fills the game window; with nothing saved there is nothing to show.
+    std::optional<Sotc::PrepScreen::Screen> screen;
+    if (expected_pipelines != 0) {
+        screen.emplace();
+    }
+    // SOTC_SHADER_PREP=prepare, skip or ask settles it for test runs.
+    const std::string_view forced = std::getenv("SOTC_SHADER_PREP") ?: "";
+    bool prepare = true;
+    if (forced == "skip") {
+        prepare = false;
+    } else if (screen && (forced == "ask" || (forced.empty() && !prepared_before))) {
+        prepare = screen->Ask() == Sotc::PrepScreen::Choice::Prepare;
+    }
+    if (!prepare) {
+        // Every pipeline is then compiled when the game first uses it. The store is closed, so
+        // this session neither reads nor changes what was saved.
+        LOG_INFO(Render, "Shader preparation skipped: {} saved pipelines stay unloaded",
+                 expected_pipelines);
+        Storage::DataBase::Instance().Close();
+        return;
+    }
+    const auto show = [&](u32 done) {
+        if (screen) {
+            screen->Progress(done, expected_pipelines, !prepared_before);
+        } else {
+            SDL_PumpEvents();
+        }
+    };
+    show(0);
+    Storage::DataBase::Instance().LoadPack([&] { show(0); });
     auto last_update = std::chrono::steady_clock::now();
 
     // Two threads are left for the rest of the system. SOTC_PRELOAD_THREADS=0 builds every
@@ -552,7 +540,7 @@ void PipelineCache::WarmUp() {
             if (const auto now = std::chrono::steady_clock::now();
                 now - last_update > std::chrono::milliseconds(100)) {
                 last_update = now;
-                splash.Update(progress());
+                show(progress());
             }
 
             Serialization::Archive ar{std::move(data)};
@@ -582,7 +570,7 @@ void PipelineCache::WarmUp() {
     if (pool) {
         while (pool->completed.load(std::memory_order_acquire) != pool->submitted) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            splash.Update(progress());
+            show(progress());
         }
         preload_pool = nullptr;
         for (auto& built : pool->built) {
@@ -603,6 +591,9 @@ void PipelineCache::WarmUp() {
     }
 
     Storage::DataBase::Instance().FinishPreload();
+    if (!prepared_before) {
+        std::ofstream{marker} << signature << std::endl;
+    }
 }
 
 void PipelineCache::Sync() {

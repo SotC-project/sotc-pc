@@ -245,6 +245,7 @@ void VideoOutDriver::Flip(const Request& req) {
     // The scripted test driver counts its time from the first presented frame.
     if (g_first_flip_ms.load(std::memory_order_relaxed) == 0) {
         g_first_flip_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+        LOG_INFO(Lib_VideoOut, "First frame {} ms after start", g_first_flip_ms.load());
         LOG_ERROR(Lib_VideoOut, "first flip {} ms after start", SDL_GetTicks());
     }
     // Temporary: presented frames per second.

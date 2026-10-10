@@ -648,6 +648,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/sotc/first_run.cpp
             src/core/sotc/first_run.h
             src/core/sotc/menu.h
+            src/core/sotc/prep_screen.cpp
+            src/core/sotc/prep_screen.h
             src/core/sotc/ui.cpp
             src/core/sotc/ui.h
             src/core/sotc/watchdog.cpp
