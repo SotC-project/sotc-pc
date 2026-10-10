@@ -32,6 +32,8 @@ unchanged on the runtime, which translates its system and graphics calls to Wind
 | `dist\glyphs.py`, `dist\glyphs\` | Draws the keyboard and Xbox button pictures that replace the PlayStation ones; the pictures are drawn by the script, not taken from the game |
 | `dist\user\config.json`, `dist\user\input_config\` | Default settings and key bindings |
 | `dist\ini_update.py` | Brings an older bindings file up to date |
+| `cursor_art.py` | Draws the menu pointer (a stone arrowhead) into the runtime's source |
+| `publish_filter.py` | The filter applied to the runtime before it is published |
 | `test.sh`, `bossarena.sh`, `preptest.ps1`, `memwatch.ps1`, `freeplay_video.sh` and the other scripts | Scripted test runs, measurements and captures on a separate test profile |
 | `showcase\BENCHMARK.md`, `PERFORMANCE.md`, `NOTES.txt` | Measurements and notes |
 | `upstream\*.patch` | Two small general fixes kept apart from the game-specific work |
@@ -41,9 +43,8 @@ unchanged on the runtime, which translates its system and graphics calls to Wind
 - Any file of the game: program, assets, saves, texture or memory dumps, trophy data.
 - PlayStation system software, modules, keys or firmware.
 - Shader and pipeline caches, logs, built programs, screenshots and video.
-- The program icon used on the author's PC (it was drawn after another artist's work), and the
-  names and descriptions of the game's trophies. The published runtime shows "Trophy 1",
-  "Trophy 2", ... in the achievements panel instead.
+- The program icon used on the author's PC (it was drawn after another artist's work). The
+  published runtime uses shadPS4's icon.
 
 ## Known limits
 
