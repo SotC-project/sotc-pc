@@ -65,6 +65,10 @@ struct State {
     Clock::time_point last_visible{};
     Clock::time_point last_probe{};
     Clock::time_point last_log{};
+    // The colossus's introduction plays between black bars; the strip read for the health bar
+    // lies inside the lower one. While it is pure black the player has no control yet.
+    bool strip_seen = false;
+    bool letterboxed = true;
 };
 
 std::mutex mutex;
@@ -186,7 +190,7 @@ bool WantsHudStrip() {
         return false;
     }
     std::lock_guard lock{mutex};
-    if (state.phase != Phase::Running) {
+    if (state.phase != Phase::Running && state.phase != Phase::Ready) {
         return false;
     }
     const auto now = Clock::now();
@@ -200,6 +204,15 @@ bool WantsHudStrip() {
 void OnHudStrip(std::span<const u8> rgba, u32 width, u32 height) {
     if (width == 0 || height == 0 || rgba.size() < static_cast<size_t>(width) * height * 4) {
         return;
+    }
+    {
+        bool black = true;
+        for (size_t i = 0, n = static_cast<size_t>(width) * height; i < n && black; i++) {
+            black = rgba[i * 4] < 8 && rgba[i * 4 + 1] < 8 && rgba[i * 4 + 2] < 8;
+        }
+        std::lock_guard lock{mutex};
+        state.strip_seen = true;
+        state.letterboxed = black;
     }
     // Columns that hold the bar's saturated red in any row.
     int best_start = -1, best_end = -1, run_start = -1, gap = 0;
@@ -287,7 +300,8 @@ void OnPlayerInput() {
         return;
     }
     std::lock_guard lock{mutex};
-    if (state.phase == Phase::Ready) {
+    // Not during the introduction: the clock starts with the first input once the player can move.
+    if (state.phase == Phase::Ready && state.strip_seen && !state.letterboxed) {
         state.phase = Phase::Running;
         state.start = Clock::now();
         LOG_INFO(Lib_NpTrophy, "Challenge started: colossus {} ({}), limit {:.0f} s",
@@ -384,7 +398,12 @@ void Draw() {
     };
 
     if (state.phase == Phase::Loading || state.phase == Phase::Ready) {
-        plate(26.0f * scale, (state.phase == Phase::Ready ? 250.0f : 210.0f) * scale, 300.0f * scale);
+        // Nothing over the colossus's introduction: the card waits, like the clock, until the
+        // black bars are gone and the player can move.
+        if (state.phase == Phase::Loading || !state.strip_seen || state.letterboxed) {
+            return;
+        }
+        plate(26.0f * scale, 250.0f * scale, 300.0f * scale);
         float y = 44.0f * scale;
         Caption(draw, 24.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
         y += 40.0f * scale;
