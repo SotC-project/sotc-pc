@@ -351,6 +351,12 @@ struct DynamicState {
 using SessionFunc = Common::UniqueFunction<void>;
 using SubmitFunc = Common::UniqueFunction<void, SubmitInfo&>;
 
+/// The graphics driver reported the device as lost (it hung and Windows reset it). Nothing
+/// more can be drawn: takes the game window off the screen, tells the player and ends the
+/// program in order. Returns only to callers on other threads while that is under way, by
+/// never returning at all.
+[[noreturn]] void HandleDeviceLost(const char* where);
+
 class Scheduler {
 public:
     explicit Scheduler(const Instance& instance);

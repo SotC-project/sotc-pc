@@ -30,6 +30,7 @@
 #include "core/file_sys/fs.h"
 #include "input/input_handler.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/renderer_vulkan/vk_presenter.h"
 #include "core/devtools/layer.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
@@ -39,6 +40,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+extern std::unique_ptr<Vulkan::Presenter> presenter;
 
 namespace Sotc::Menu {
 
@@ -236,7 +239,8 @@ void LoadOptions() {
         {"VSync", "VSync", OnOffValues, "Removes tearing; holds the frame rate to the display's"},
         {"Fullscreen", "Fullscreen", OnOffValues, "Fill the screen instead of a window"},
         {"Window Size", "Window", {"720p", "1080p", "1440p", "4k"}, "Size of the game window"},
-        {"FSR Upscaling", "Upscaling", OnOffValues, "Sharper picture when the window is larger than 1080p"},
+        {"FSR Upscaling", "Upscaling", OnOffValues,
+         "Sharper picture when the window is larger than 1080p. Switches at once"},
         {"Shadows", "Shadows", OnOffValues, "Sun and spot shadows"},
         {"Motion Blur", "MotionBlur", OnOffValues, "Blur on fast movement"},
         {"Bloom", "Bloom", OnOffValues, "Glow around bright light"},
@@ -387,6 +391,7 @@ std::vector<Binding> bindings{
     {"Jump", "cross"},                     {"Attack", "square"},
     {"Grab / Use / Pray", "r2"},           {"Crouch / Roll", "circle"},
     {"Raise Sword / Aim", "r1"},           {"Mount / Spur Agro", "triangle"},
+    {"Walk / Run", "walk_toggle"},
     {"View Colossus", "l2"},               {"Camera Focus", "l1"},
     {"Change Sword", "pad_right"},         {"Change Ranged Weapon", "pad_left"},
     {"Unequip", "pad_up"},                 {"Photo Mode", "pad_down"},
@@ -623,6 +628,11 @@ std::vector<Row> BuildRows() {
                                 const int count = static_cast<int>(changed.values.size());
                                 changed.index = (changed.index + (d == 0 ? 1 : d) + count) % count;
                                 const std::string_view param{changed.param};
+                                if (param == "Upscaling" && presenter) {
+                                    // The runtime's own filter, so it can switch while playing.
+                                    presenter->GetFsrSettingsRef().enable =
+                                        changed.values[changed.index] == "on";
+                                }
                                 if (param == "Preset") {
                                     ApplyPreset(changed.values[changed.index]);
                                 } else if (param != "Fps" && param != "VSync" &&

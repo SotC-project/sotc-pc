@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <SDL3/SDL_video.h>
 #include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -63,6 +65,9 @@ Frontend::WindowSDL* g_window = nullptr;
 namespace Libraries::Kernel {
 extern char const* g_environment[64];
 }
+
+/// Set when the program is closing, see Scheduler::SubmitExecution.
+extern std::atomic_bool g_exiting;
 
 namespace Core {
 
@@ -712,6 +717,11 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         window->WaitEvent();
     }
 
+    // Closing: the window goes at once, and the renderer stops handing work to the graphics
+    // driver. Before, the picture stayed black for seconds while the settings were saved, and
+    // the driver could report a lost device to a renderer that was still drawing.
+    g_exiting.store(true);
+    SDL_HideWindow(window->GetSDLWindow());
     std::quick_exit(0);
 }
 

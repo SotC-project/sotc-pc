@@ -26,6 +26,7 @@ Uint32 mouse_polling_id = 0;
 MouseMode mouse_mode = MouseMode::Off;
 // Motion added to the real mouse movement per poll; set by the scripted test driver.
 float test_mouse_delta[2] = {0.0f, 0.0f};
+bool mouse_invert_x = false, mouse_invert_y = false;
 
 // Switches mouse to a set mode or turns mouse emulation off if it was already in that mode.
 // Returns whether the mode is turned on.
@@ -40,6 +41,11 @@ bool ToggleMouseModeTo(MouseMode m) {
 
 void SetMouseToJoystick(int joystick) {
     mouse_joystick_binding = joystick;
+}
+
+void SetMouseInvert(bool x, bool y) {
+    mouse_invert_x = x;
+    mouse_invert_y = y;
 }
 
 void SetMouseParams(float mdo, float ms, float mso) {
@@ -72,6 +78,12 @@ void EmulateJoystick(GameController* controller, u32 interval) {
     SDL_GetRelativeMouseState(&d_x, &d_y);
     d_x += test_mouse_delta[0];
     d_y += test_mouse_delta[1];
+    if (mouse_invert_x) {
+        d_x = -d_x;
+    }
+    if (mouse_invert_y) {
+        d_y = -d_y;
+    }
 
     float output_speed =
         SDL_clamp(sqrt(d_x * d_x + d_y * d_y) * mouse_speed + mouse_speed_offset * 128,

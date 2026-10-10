@@ -156,6 +156,8 @@ public:
     u64 lru_id{};
     u64 tick_accessed_last{};
     u64 hash{};
+    /// Hash of the guest data the image was last filled from (0 = not taken).
+    u64 content_hash{};
 
     struct {
         u32 texture : 1;

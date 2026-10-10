@@ -19,6 +19,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/screens.h"
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -310,6 +311,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             Input::test_mouse_delta[0] = std::stof(action.substr(6, star - 6));
             mouse_release_at =
                 now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
+        } else if (action.starts_with("texuse=")) {
+            Sotc::Screens::DumpUsed(action.substr(7));
+        } else if (action.starts_with("mousey=")) {
+            // The same, moving down (negative = up).
+            const auto star = action.find('*');
+            Input::test_mouse_delta[1] = std::stof(action.substr(7, star - 7));
+            mouse_release_at =
+                now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
         }
     }
     std::erase_if(held_pad, [now](const HeldPad& input) {
@@ -325,6 +334,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
     });
     if (mouse_release_at && now >= mouse_release_at) {
         Input::test_mouse_delta[0] = 0.0f;
+        Input::test_mouse_delta[1] = 0.0f;
         mouse_release_at = 0;
     }
     std::erase_if(held_keys, [now](HeldKey& key) {
@@ -695,6 +705,17 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
         return;
     }
 
+    // One step per turn of the wheel: a free-spinning wheel sends a burst of notches, and each
+    // would change the weapon or move the selection again.
+    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        static u64 last_wheel_ms = 0;
+        const u64 now_ms = SDL_GetTicks();
+        if (now_ms - last_wheel_ms < 220) {
+            return;
+        }
+        last_wheel_ms = now_ms;
+    }
+
     const bool is_mouse =
         event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP ||
         event->type == SDL_EVENT_MOUSE_WHEEL || event->type == SDL_EVENT_MOUSE_WHEEL_OFF;
@@ -705,8 +726,8 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
             if (event->type != SDL_EVENT_MOUSE_BUTTON_UP) {
                 return;
             }
-        } else if (Overlay::InTitleMenu()) {
-            // The title menu only knows pad buttons: left click confirms, right click goes
+        } else if (Overlay::InTitleMenu() || Sotc::Screens::PauseMenu()) {
+            // The game's menus only know pad buttons: left click confirms, right click goes
             // back, the wheel moves the selection.
             SDL_Event key{};
             if (event->type == SDL_EVENT_MOUSE_WHEEL) {

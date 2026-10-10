@@ -6,6 +6,7 @@
 #include "core/sotc/challenge.h"
 #include "core/sotc/first_run.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 #include "input/controller.h"
 #include "input/input_mouse.h"
@@ -58,7 +59,7 @@ static void UpdateMenuCursor() {
     const bool panel =
         show_quit_window || Sotc::Achievements::IsPanelOpen() || Sotc::Menu::IsOpen();
     panel_blocks_mouse = panel;
-    const bool wanted = (panel || !game_started) &&
+    const bool wanted = (panel || !game_started || Sotc::Screens::PauseMenu()) &&
                         VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;
     if (menu_cursor.exchange(wanted) == wanted) {
         return;
@@ -507,12 +508,19 @@ void L::Draw() {
     Sotc::Challenge::Draw();
     UpdateMenuCursor();
 
-    if (!game_started && !show_quit_window) {
-        // Title screen: free play and the PC settings are reached from here.
-        if (!Sotc::Menu::IsOpen() && !Sotc::Achievements::IsPanelOpen()) {
-            const ImVec2 size = GetIO().DisplaySize;
+    if (!show_quit_window && !Sotc::Menu::IsOpen() && !Sotc::Achievements::IsPanelOpen()) {
+        // The PC menu is announced on the game's title menu (free play and settings) and on
+        // its pause menu (settings), and nowhere else: not over the logos, the opening film
+        // or play.
+        const bool title = Sotc::Screens::KnowsTitleMenu() ? Sotc::Screens::TitleMenu()
+                                                           : !game_started;
+        const ImVec2 size = GetIO().DisplaySize;
+        if (title && !game_started) {
             Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
                              "FREE PLAY  /  SETTINGS", Sotc::Ui::Action::Menu);
+        } else if (Sotc::Screens::PauseMenu()) {
+            Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
+                             "SETTINGS", Sotc::Ui::Action::Menu);
         }
     }
 

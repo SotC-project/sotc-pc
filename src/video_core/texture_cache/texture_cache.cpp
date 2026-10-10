@@ -22,6 +22,7 @@
 #include "common/hash.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
+#include "core/sotc/screens.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -802,6 +803,9 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
         }
     }
     UpdateImage(image_id);
+    if (image.content_hash != 0) {
+        Sotc::Screens::TextureUsed(image.content_hash);
+    }
     return image.FindView(desc.view_info);
 }
 
@@ -1036,6 +1040,7 @@ void TextureCache::ApplyTexturePack(Image& image) {
         return;
     }
     const u64 hash = memory->HashSparseMemory(info.guest_address, info.guest_size);
+    image.content_hash = hash;
     const auto level_size = [&](u32 level) {
         const u32 width = std::max(info.size.width >> level, 1u);
         const u32 height = std::max(info.size.height >> level, 1u);

@@ -14,6 +14,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include <fmt/format.h>
@@ -56,6 +57,7 @@ enum ParamId : u32 {
     SamplerWaveformFrameOffset = 0x10000003,
     SamplerExitLoop = 0x10000004,
     SamplerPitch = 0x10000005,
+    SamplerEnvelope = 0x10000006,
 
     SubmixerSetup = 0x20000000,
     SubmixerUserFx = 0x20000004,
@@ -97,6 +99,9 @@ struct Voice;
 struct Port {
     s32 matrix_id = -1;
     float volume = 1.0f;
+    // Volume the last grain ended at; a change is spread over the next grain instead of
+    // jumping, which is heard as a click. Negative: nothing was mixed yet.
+    float applied = -1.0f;
     Voice* dest = nullptr;
 };
 
@@ -137,6 +142,19 @@ struct Voice {
     float pitch = 1.0f;
     float last[MaxChannels]{};
     float prev[MaxChannels]{}; // frame before `last`, for interpolation
+
+    // Envelope: the forward points run from Play, the release points from Stop. The voice
+    // ends when its release has run out.
+    std::vector<OrbisNgs2EnvelopePoint> env_forward;
+    std::vector<OrbisNgs2EnvelopePoint> env_release;
+    std::vector<OrbisNgs2EnvelopePoint> env_points; // the list being played
+    u32 env_point{};
+    u32 env_pos{};
+    float env_from = 1.0f;
+    float env_height = 1.0f;
+    bool env_running{};
+    bool releasing{}; // fading out; the voice stops when the envelope ends
+    bool tail{};      // already reported as stopped, still fading out for a few milliseconds
     void* at9{};
     u64 decoded_samples{};
     u64 decoded_bytes{};
@@ -187,6 +205,10 @@ bool IsSampler(const Voice& v) {
 }
 
 void ResetSampler(Voice& v) {
+    v.env_running = false;
+    v.releasing = false;
+    v.tail = false;
+    v.env_height = 1.0f;
     v.blocks.clear();
     v.pcm.clear();
     v.pcm_pos = 0;
@@ -378,6 +400,43 @@ bool NextFrame(Voice& v, float* frame, u32 ch) {
     return true;
 }
 
+void StartEnvelope(Voice& v, const std::vector<OrbisNgs2EnvelopePoint>& points, float from) {
+    v.env_points = points;
+    v.env_point = 0;
+    v.env_pos = 0;
+    v.env_from = from;
+    v.env_height = from;
+    v.env_running = !points.empty();
+}
+
+/// Fades the voice out and ends it: over its release points, or over a few milliseconds when
+/// it has none or is cut off, since a wave chopped mid-swing is heard as a click.
+void StartRelease(Voice& v, bool use_release_points) {
+    static const std::vector<OrbisNgs2EnvelopePoint> Declick{{0, 240, 0.0f}};
+    StartEnvelope(v, use_release_points && !v.env_release.empty() ? v.env_release : Declick,
+                  v.env_height);
+    v.releasing = true;
+}
+
+/// Envelope height for the next output frame.
+float EnvelopeStep(Voice& v) {
+    if (!v.env_running) {
+        return v.env_height;
+    }
+    const OrbisNgs2EnvelopePoint& point = v.env_points[v.env_point];
+    const u32 duration = std::max(point.duration, 1u);
+    ++v.env_pos;
+    v.env_height = v.env_from + (point.height - v.env_from) * (float(v.env_pos) / duration);
+    if (v.env_pos >= duration) {
+        v.env_from = v.env_height = point.height;
+        v.env_pos = 0;
+        if (++v.env_point >= v.env_points.size()) {
+            v.env_running = false;
+        }
+    }
+    return v.env_height;
+}
+
 // Renders a sampler voice into planar `out` (ch * frames). Returns the channel count.
 u32 RenderSampler(Voice& v, float* out, u32 frames) {
     const u32 ch = std::clamp<u32>(v.format.numChannels, 1, MaxChannels);
@@ -413,21 +472,34 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
             v.phase -= 1.0;
         }
         const float t = static_cast<float>(v.phase);
+        const float gain = EnvelopeStep(v);
         for (u32 c = 0; c < ch; ++c) {
-            out[c * frames + n] = v.prev[c] + (v.last[c] - v.prev[c]) * t;
+            out[c * frames + n] = (v.prev[c] + (v.last[c] - v.prev[c]) * t) * gain;
         }
         v.phase += step;
+        if (v.releasing && !v.env_running) {
+            // The release has run out: the voice is over.
+            for (u32 c = 0; c < ch; ++c) {
+                std::fill(out + c * frames + n + 1, out + (c + 1) * frames, 0.0f);
+            }
+            v.state = 0;
+            ResetSampler(v);
+            return ch;
+        }
     }
     return ch;
 }
 
 // Mixes planar `src` through each patched port of `v` into the destination buses.
 void Route(Voice& v, const float* src, u32 src_ch, u32 frames) {
-    for (const Port& port : v.ports) {
+    for (Port& port : v.ports) {
         Voice* dest = port.dest;
-        if (!dest || port.volume == 0.0f) {
+        const float start_volume = port.applied < 0.0f ? port.volume : port.applied;
+        port.applied = port.volume;
+        if (!dest || (port.volume == 0.0f && start_volume == 0.0f)) {
             continue;
         }
+        const float volume_step = (port.volume - start_volume) / float(frames);
         if (dest->bus.size() != size_t(MaxChannels) * MaxGrain) {
             dest->bus.assign(size_t(MaxChannels) * MaxGrain, 0.0f);
         }
@@ -451,14 +523,20 @@ void Route(Voice& v, const float* src, u32 src_ch, u32 frames) {
                 } else {
                     level = in == o ? 1.0f : 0.0f;
                 }
-                level *= port.volume;
                 if (level == 0.0f) {
                     continue;
                 }
                 const float* s = src + in * frames;
                 float* d = dest->bus.data() + o * MaxGrain;
-                for (u32 n = 0; n < frames; ++n) {
-                    d[n] += s[n] * level;
+                if (volume_step == 0.0f) {
+                    level *= port.volume;
+                    for (u32 n = 0; n < frames; ++n) {
+                        d[n] += s[n] * level;
+                    }
+                } else {
+                    for (u32 n = 0; n < frames; ++n) {
+                        d[n] += s[n] * level * (start_volume + volume_step * float(n + 1));
+                    }
                 }
             }
         }
@@ -560,11 +638,35 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         switch (As<OrbisNgs2VoiceEventParam>(p).eventId) {
         case Play:
             v.state = (v.state | InUse | Playing) & ~(Stopped | Paused | Empty);
+            if (IsSampler(v)) {
+                v.releasing = false;
+                v.tail = false;
+                v.env_height = 1.0f;
+                v.env_running = false;
+                if (!v.env_forward.empty()) {
+                    StartEnvelope(v, v.env_forward, 0.0f);
+                }
+            }
             break;
         case Stop:
+            // Stop lets the sound go through its release; the voice stays in use meanwhile.
+            if (IsSampler(v) && (v.state & Playing) && !(v.state & Paused)) {
+                if (!v.releasing) {
+                    StartRelease(v, true);
+                }
+                break;
+            }
+            [[fallthrough]];
         case StopImm:
         case Kill:
-            // ponytail: no release envelope, stop is immediate.
+            // The voice is free at once for the game; what was sounding fades out over a few
+            // milliseconds instead of being chopped off.
+            if (IsSampler(v) && (v.state & Playing) && !(v.state & Paused) && !v.tail) {
+                StartRelease(v, false);
+                v.tail = true;
+                v.state = 0;
+                break;
+            }
             v.state = 0;
             if (IsSampler(v)) {
                 ResetSampler(v);
@@ -593,6 +695,11 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         v.pitch = 1.0f;
         v.phase = 1.0;
         v.state = InUse;
+        v.env_forward.clear();
+        v.env_release.clear();
+        for (Port& port : v.ports) {
+            port.applied = -1.0f;
+        }
         break;
     case SamplerWaveformBlocks: {
         const auto& m = As<OrbisNgs2SamplerVoiceWaveformBlocksParam>(p);
@@ -626,6 +733,30 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
     case SamplerPitch:
         v.pitch = As<OrbisNgs2SamplerVoicePitchParam>(p).ratio;
         break;
+    case SamplerEnvelope: {
+        const auto& m = As<OrbisNgs2SamplerVoiceEnvelopeParam>(p);
+        v.env_forward.clear();
+        v.env_release.clear();
+        if (m.aPoint && m.numForwardPoints <= 64 && m.numReleasePoints <= 64) {
+            v.env_forward.assign(m.aPoint, m.aPoint + m.numForwardPoints);
+            v.env_release.assign(m.aPoint + m.numForwardPoints,
+                                 m.aPoint + m.numForwardPoints + m.numReleasePoints);
+        }
+        static int traced = 0;
+        if (traced++ < 20) {
+            std::string text;
+            for (const auto& point : v.env_forward) {
+                text += fmt::format("[{} {} {:.2f}] ", point.curve, point.duration, point.height);
+            }
+            text += "| ";
+            for (const auto& point : v.env_release) {
+                text += fmt::format("[{} {} {:.2f}] ", point.curve, point.duration, point.height);
+            }
+            LOG_ERROR(Lib_Ngs2, "voice {:x} envelope (curve duration height): {}",
+                      reinterpret_cast<uintptr_t>(&v) & 0xfffff, text);
+        }
+        break;
+    }
     case SubmixerSetup:
         v.channels = As<OrbisNgs2SubmixerVoiceSetupParam>(p).numIoChannels;
         v.state = InUse;
@@ -646,6 +777,13 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         v.output_id = As<OrbisNgs2MasteringVoiceOutputParam>(p).outputId;
         break;
     default:
+        if (IsSampler(v)) {
+            // Sampler settings this synth does not act on; each kind is named once.
+            static std::set<u32> named;
+            if (named.insert(p->id).second) {
+                LOG_ERROR(Lib_Ngs2, "sampler parameter {:#x} is not handled", p->id);
+            }
+        }
         // Setup of other bus racks (reverb, custom): first two fields are the channel counts.
         if ((p->id & 0xffff) == 0 && !IsSampler(v)) {
             v.channels = std::clamp<u32>(reinterpret_cast<const u32*>(p)[2], 1, MaxChannels);
@@ -732,7 +870,7 @@ s32 VoiceGetState(OrbisNgs2Handle voice_handle, OrbisNgs2VoiceState* out_state, 
     out_state->stateFlags = voice->state;
     if (IsSampler(*voice) && size >= sizeof(OrbisNgs2SamplerVoiceState)) {
         auto* sampler = reinterpret_cast<OrbisNgs2SamplerVoiceState*>(out_state);
-        sampler->envelopeHeight = 1.0f;
+        sampler->envelopeHeight = voice->env_height;
         sampler->numDecodedSamples = voice->decoded_samples;
         // Streams watch this to know when to queue the next chunk, so it has to advance while
         // a block plays, not only when it ends.
@@ -802,7 +940,7 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             continue;
         }
         for (auto& voice : rack->voices) {
-            if ((voice->state & (Playing | Paused)) != Playing) {
+            if (!voice->tail && (voice->state & (Playing | Paused)) != Playing) {
                 continue;
             }
             const u32 ch = RenderSampler(*voice, scratch.data(), frames);

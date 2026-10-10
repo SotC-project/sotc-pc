@@ -19,6 +19,7 @@ bool ToggleMouseModeTo(MouseMode m);
 extern float test_mouse_delta[2];
 void SetMouseToJoystick(int joystick);
 void SetMouseParams(float mouse_deadzone_offset, float mouse_speed, float mouse_speed_offset);
+void SetMouseInvert(bool x, bool y);
 void SetMouseGyroRollMode(bool mode);
 
 void EmulateJoystick(GameController* controller, u32 interval);

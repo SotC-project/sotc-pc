@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+#include <SDL3/SDL.h>
+#include "common/logging/log.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -8,7 +14,44 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
+std::atomic_bool g_exiting{false};
+
+#ifdef _WIN32
+extern "C" {
+__declspec(dllimport) int __stdcall MessageBoxW(void* hwnd, const wchar_t* text,
+                                                const wchar_t* caption, unsigned type);
+__declspec(dllimport) int __stdcall ShowWindow(void* hwnd, int show);
+}
+#endif
+
 namespace Vulkan {
+
+void HandleDeviceLost(const char* where) {
+    if (g_exiting.exchange(true)) {
+        // Another thread is already closing the program.
+        std::this_thread::sleep_for(std::chrono::hours(1));
+    }
+    LOG_CRITICAL(Render_Vulkan, "Device lost ({}); closing", where);
+    Common::Log::Flush();
+#ifdef _WIN32
+    // A dead fullscreen picture must not stay in front of the desktop.
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    for (int i = 0; windows && i < count; i++) {
+        if (void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(windows[i]),
+                                                SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)) {
+            ShowWindow(hwnd, 0);
+        }
+    }
+    if (!std::getenv("SOTC_HEADLESS")) {
+        MessageBoxW(nullptr,
+                    L"The graphics driver stopped responding and Windows reset it, so the game "
+                    L"had to close.\n\nEverything up to your last save is kept.",
+                    L"Shadow of the Colossus", 0x30 | 0x40000 | 0x10000);
+    }
+#endif
+    std::quick_exit(3);
+}
 
 std::mutex Scheduler::submit_mutex;
 
@@ -240,8 +283,14 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
+    if (g_exiting.load(std::memory_order_relaxed)) {
+        // The program is closing; nothing more is drawn.
+        std::this_thread::sleep_for(std::chrono::hours(1));
+    }
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        HandleDeviceLost("submit");
+    }
 
     work_semaphore.Refresh();
     BeginSession();

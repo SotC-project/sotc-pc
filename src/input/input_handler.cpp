@@ -224,6 +224,9 @@ std::filesystem::path GetInputConfigFile(const std::string& game_id) {
 }
 
 bool leftjoystick_halfmode = false, rightjoystick_halfmode = false;
+// Walk instead of run: the left stick is held at this part of its travel.
+bool leftjoystick_walkmode = false;
+constexpr float WalkTilt = 0.45f;
 std::array<std::pair<int, int>, 4> leftjoystick_deadzone, rightjoystick_deadzone,
     lefttrigger_deadzone, righttrigger_deadzone;
 
@@ -474,6 +477,11 @@ void ParseInputConfig(const std::string game_id = "") {
             }
             LOG_WARNING(Input, "Invalid format at line: {}, data: \"{}\", skipping line.",
                         lineCount, line);
+            return;
+        } else if (output_string == "mouse_invert") {
+            // "x", "y", "xy" or "none": which directions of the mouse are turned around.
+            SetMouseInvert(input_string.find('x') != std::string::npos,
+                           input_string.find('y') != std::string::npos);
             return;
         } else if (output_string == "mouse_movement_params") {
             std::stringstream ss(input_string);
@@ -766,6 +774,11 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         case RIGHTJOYSTICK_HALFMODE:
             rightjoystick_halfmode = new_button_state;
             break;
+        case LEFTJOYSTICK_WALK_TOGGLE:
+            if (new_button_state) {
+                leftjoystick_walkmode = !leftjoystick_walkmode;
+            }
+            break;
         case HOTKEY_RELOAD_INPUTS:
             if (new_button_state) {
                 ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
@@ -854,7 +867,7 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         case Axis::LeftX:
         case Axis::LeftY:
             ApplyDeadzone(new_param, leftjoystick_deadzone[gamepad_index]);
-            multiplier = leftjoystick_halfmode ? 0.5 : 1.0;
+            multiplier = (leftjoystick_halfmode ? 0.5 : 1.0) * (leftjoystick_walkmode ? WalkTilt : 1.0);
             break;
         case Axis::RightX:
         case Axis::RightY:
