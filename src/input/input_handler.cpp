@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <optional>
+#include "core/sotc/menu_ext.h"
 #include "input_handler.h"
 
 #include <fstream>
@@ -845,9 +847,21 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         case MOUSE_GYRO_ROLL_MODE:
             SetMouseGyroRollMode(new_button_state);
             break;
-        default: // is a normal key (hopefully)
-            controller->Button(SDLGamepadToOrbisButton(button), new_button_state);
+        default: { // is a normal key (hopefully)
+            // Menu directions and buttons pass by the extra lines of the game's menus first.
+            const auto orbis = SDLGamepadToOrbisButton(button);
+            using Sotc::MenuExt::Nav;
+            const auto nav = orbis == OrbisPadButtonDataOffset::Up       ? std::optional{Nav::Up}
+                             : orbis == OrbisPadButtonDataOffset::Down   ? std::optional{Nav::Down}
+                             : orbis == OrbisPadButtonDataOffset::Cross  ? std::optional{Nav::Confirm}
+                             : orbis == OrbisPadButtonDataOffset::Circle ? std::optional{Nav::Back}
+                                                                         : std::nullopt;
+            if (nav && Sotc::MenuExt::OnNav(*nav, new_button_state, controller)) {
+                break;
+            }
+            controller->Button(orbis, new_button_state);
             break;
+        }
         }
     } else if (axis != SDL_GAMEPAD_AXIS_INVALID && positive_axis) {
         // avoid double-updating axes, but don't skip directional button bindings
@@ -887,7 +901,11 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         default:
             break;
         }
-        controller->Axis(c_axis, GetAxis(-0x80, 0x7f, *new_param * multiplier));
+        float value = *new_param * multiplier;
+        if (c_axis == Axis::LeftY) {
+            value = float(Sotc::MenuExt::FilterLeftY(int(value), controller));
+        }
+        controller->Axis(c_axis, GetAxis(-0x80, 0x7f, value));
     }
 }
 

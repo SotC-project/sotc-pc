@@ -11,6 +11,12 @@ namespace Sotc::Menu {
 /// Opens or closes the PC menu (F2, L3 + R3): free play, achievements, quit.
 void Toggle();
 bool IsOpen();
+/// Opens the free play page, or the PC settings page, from a line of the game's own menu.
+void OpenFreePlay();
+void OpenSettings();
+/// The menu hotkey (F2, L3 + R3). It only works during a free play battle, where the result
+/// screen points to it; everywhere else the menu is reached from the game's menus.
+void HotkeyToggle();
 /// While the key bindings page waits for a key: takes the event and returns true.
 bool CaptureInput(const SDL_Event* event);
 /// Draws the menu when open and handles the pad shortcut. Call once per frame.

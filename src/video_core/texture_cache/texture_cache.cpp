@@ -22,6 +22,7 @@
 #include "common/hash.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
+#include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
@@ -1046,6 +1047,30 @@ void TextureCache::ApplyTexturePack(Image& image) {
     }
     const u64 hash = memory->HashSparseMemory(info.guest_address, info.guest_size);
     image.content_hash = hash;
+    // The game's menu arrow is drawn blank while the cursor is on a line this build adds to
+    // the menu, which then draws its own.
+    constexpr u64 MenuArrow = 0x3e6ebf384eebcdcdULL;
+    if (hash == MenuArrow) {
+        menu_arrow_range = {info.guest_address, info.guest_size};
+        if (Sotc::MenuExt::HideArrow()) {
+            const u32 size = info.guest_size;
+            const auto upload =
+                runtime.GetStagingPool().Request(size, MemoryType::HostUncached, 16);
+            std::memset(upload.mapped, 0, size);
+            upload.Flush();
+            const vk::BufferImageCopy copy{
+                .bufferOffset = upload.offset,
+                .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                     .mipLevel = 0,
+                                     .baseArrayLayer = 0,
+                                     .layerCount = 1},
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {info.size.width, info.size.height, 1},
+            };
+            runtime.UploadImage(&image, upload.buffer, std::span{&copy, 1});
+            return;
+        }
+    }
     const auto level_size = [&](u32 level) {
         const u32 width = std::max(info.size.width >> level, 1u);
         const u32 height = std::max(info.size.height >> level, 1u);
@@ -1385,6 +1410,14 @@ void TextureCache::RunGarbageCollector() {
         pack_applied_set = ActivePromptSet();
         for (const auto& [address, size] : pack_ranges) {
             InvalidateMemory(address, size);
+        }
+    }
+    // The menu arrow is uploaded again whenever it has to appear or go.
+    static bool arrow_hidden = false;
+    if (arrow_hidden != Sotc::MenuExt::HideArrow()) {
+        arrow_hidden = !arrow_hidden;
+        if (menu_arrow_range.second != 0) {
+            InvalidateMemory(menu_arrow_range.first, menu_arrow_range.second);
         }
     }
     GarbageCollectImages();

@@ -19,6 +19,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 #include "common/assert.h"
 #include "common/elf_info.h"
@@ -573,7 +574,7 @@ void WindowSDL::WaitEvent() {
         if (Sotc::Achievements::IsPanelOpen()) {
             Sotc::Achievements::TogglePanel();
         } else {
-            Sotc::Menu::Toggle();
+            Sotc::Menu::HotkeyToggle();
         }
         break;
     case SDL_EVENT_RELOAD_INPUTS:
@@ -740,6 +741,16 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
                 SDL_AddTimer(60, menuKeyUpCallback,
                              reinterpret_cast<void*>(static_cast<uintptr_t>(key.key.key)));
             } else if (event->type == SDL_EVENT_MOUSE_WHEEL_OFF) {
+                return;
+            } else if (event->button.button == SDL_BUTTON_LEFT && event->button.down &&
+                       [&] {
+                           // A click on a menu line chooses that line.
+                           int w = 0, h = 0;
+                           SDL_GetWindowSize(window, &w, &h);
+                           return w > 0 && h > 0 &&
+                                  Sotc::MenuExt::OnClick(event->button.x / float(w),
+                                                         event->button.y / float(h));
+                       }()) {
                 return;
             } else if (event->button.button == SDL_BUTTON_LEFT ||
                        event->button.button == SDL_BUTTON_RIGHT) {

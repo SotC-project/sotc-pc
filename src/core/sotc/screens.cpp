@@ -4,7 +4,10 @@
 
 #include <array>
 #include <atomic>
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <fstream>
 #include <mutex>
 #include <set>
@@ -12,6 +15,7 @@
 #include <SDL3/SDL_timer.h>
 #include <fmt/format.h>
 
+#include "common/logging/log.h"
 #include "common/path_util.h"
 #include "core/sotc/screens.h"
 
@@ -26,6 +30,10 @@ constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
 
 std::atomic<u64> title_seen_ms{0};
+std::atomic_bool arrow_in_draw{false};
+std::atomic<float> arrow_x{0.0f};
+std::atomic<float> arrow_y{0.0f};
+std::atomic<u64> arrow_ms{0};
 std::atomic<u64> pause_seen_ms{0};
 
 std::mutex used_mutex;
@@ -51,6 +59,7 @@ bool Contains(const std::array<u64, N>& list, u64 hash) {
 void TextureUsed(u64 content_hash) {
     if (Contains(TitleMenuTextures, content_hash)) {
         title_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+        arrow_in_draw.store(true, std::memory_order_relaxed);
     }
     if (Contains(PauseMenuTextures, content_hash)) {
         pause_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
@@ -60,6 +69,69 @@ void TextureUsed(u64 content_hash) {
         std::scoped_lock lock{used_mutex};
         used.insert(content_hash);
     }
+}
+
+bool TakeArrowDraw() {
+    return arrow_in_draw.load(std::memory_order_relaxed) &&
+           arrow_in_draw.exchange(false, std::memory_order_relaxed);
+}
+
+void ArrowDraw(const u8* vertices, u32 stride, u32 count, const float viewport[4]) {
+    // SOTC_ARROWPROBE=1: write the raw vertex data now and then, to learn its layout.
+    static const bool probe = std::getenv("SOTC_ARROWPROBE") != nullptr;
+    static u64 last_ms = 0;
+    if (!probe || SDL_GetTicks() - last_ms < 500) {
+        return;
+    }
+    last_ms = SDL_GetTicks();
+    std::string text = fmt::format("arrow draw: stride {} count {} viewport {} {} {} {} |", stride,
+                                   count, viewport[0], viewport[1], viewport[2], viewport[3]);
+    for (u32 v = 0; v < std::min(count, 4u); v++) {
+        text += " [";
+        for (u32 offset = 0; offset + 4 <= std::min(stride, 32u); offset += 4) {
+            float value;
+            std::memcpy(&value, vertices + v * stride + offset, 4);
+            text += fmt::format("{:.3f} ", value);
+        }
+        text += "]";
+    }
+    LOG_ERROR(Render, "{}", text);
+}
+
+void ArrowAt(float x, float y) {
+    arrow_x.store(x, std::memory_order_relaxed);
+    arrow_y.store(y, std::memory_order_relaxed);
+    arrow_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+}
+
+bool Arrow(float& x, float& y) {
+    x = arrow_x.load(std::memory_order_relaxed);
+    y = arrow_y.load(std::memory_order_relaxed);
+    return Recent(arrow_ms);
+}
+
+bool Arrow() {
+    return Recent(arrow_ms);
+}
+
+bool ArrowProbeActive() {
+    static const bool probe = std::getenv("SOTC_ARROWPROBE") != nullptr;
+    return probe;
+}
+
+void ArrowProbeBuffer(u32 index, const u8* data, u32 size) {
+    static u64 last_ms[8]{};
+    if (index >= 8 || SDL_GetTicks() - last_ms[index] < 500) {
+        return;
+    }
+    last_ms[index] = SDL_GetTicks();
+    std::string text = fmt::format("arrow shader buffer {} size {} |", index, size);
+    for (u32 offset = 0; offset + 4 <= std::min(size, 128u); offset += 4) {
+        float value;
+        std::memcpy(&value, data + offset, 4);
+        text += fmt::format(" {:.3f}", value);
+    }
+    LOG_ERROR(Render, "{}", text);
 }
 
 bool TitleMenu() {

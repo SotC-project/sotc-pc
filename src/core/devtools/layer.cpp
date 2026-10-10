@@ -6,6 +6,7 @@
 #include "core/sotc/challenge.h"
 #include "core/sotc/first_run.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 #include "input/controller.h"
@@ -509,21 +510,8 @@ void L::Draw() {
     Sotc::Challenge::Draw();
     UpdateMenuCursor();
 
-    if (!show_quit_window && !Sotc::Menu::IsOpen() && !Sotc::Achievements::IsPanelOpen()) {
-        // The PC menu is announced on the game's title menu (free play and settings) and on
-        // its pause menu (settings), and nowhere else: not over the logos, the opening film
-        // or play.
-        const bool title = Sotc::Screens::KnowsTitleMenu() ? Sotc::Screens::TitleMenu()
-                                                           : !game_started;
-        const ImVec2 size = GetIO().DisplaySize;
-        if (title) {
-            Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
-                             "FREE PLAY  /  SETTINGS", Sotc::Ui::Action::Menu);
-        } else if (Sotc::Screens::PauseMenu()) {
-            Sotc::Ui::Prompt(GetForegroundDrawList(), size.x * 0.30f, size.y * 0.925f,
-                             "SETTINGS", Sotc::Ui::Action::Menu);
-        }
-    }
+    // Free play, the achievements and the PC settings are lines of the game's own menus.
+    Sotc::MenuExt::Draw();
 
     if (show_quit_window) {
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();

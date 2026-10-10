@@ -396,6 +396,8 @@ private:
     TileManager tile_manager;
     absl::flat_hash_map<u64, SamplerId> samplers;
     absl::flat_hash_set<ImageId> download_images;
+    /// Guest range of the game's menu arrow texture, once seen (see ApplyTexturePack).
+    std::pair<VAddr, u64> menu_arrow_range{};
     u64 total_used_memory = 0;
     /// Registered images and the size of the game data they were made from.
     u64 num_registered_images = 0;

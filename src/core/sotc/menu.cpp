@@ -399,6 +399,9 @@ std::vector<Binding> bindings{
     {"Zoom (R3)", "r3"},                   {"L3", "l3"},
 };
 std::atomic<int> capture_row{-1};
+// The menu was opened straight on a page (free play from the title menu): Back closes it.
+bool opened_on_page = false;
+bool wait_for_release = false;
 std::atomic_bool bindings_dirty{true};
 std::mutex bindings_mutex;
 
@@ -553,8 +556,9 @@ std::string KeyLabel(const std::string& key) {
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
     if (page == Page::Main) {
-        // Free play is offered from the title screen, and while a free play battle is on.
-        if (Overlay::InTitleMenu() || InFreePlay()) {
+        // Outside free play this page is the PC settings; free play and the achievements have
+        // their own lines in the game's menus.
+        if (InFreePlay()) {
             rows.push_back({"Free Play", "", "Fight any colossus", true, false,
                             [](int) { GoTo(Page::FreePlay); }});
         }
@@ -568,12 +572,14 @@ std::vector<Row> BuildRows() {
                             bindings_dirty = true;
                             GoTo(Page::Controls);
                         }});
-        rows.push_back({"Achievements", "", "View your achievements", true, false, [](int) {
-                            open = false;
-                            if (!Achievements::IsPanelOpen()) {
-                                Achievements::TogglePanel();
-                            }
-                        }});
+        if (InFreePlay()) {
+            rows.push_back({"Achievements", "", "View your achievements", true, false, [](int) {
+                                open = false;
+                                if (!Achievements::IsPanelOpen()) {
+                                    Achievements::TogglePanel();
+                                }
+                            }});
+        }
         if (InFreePlay()) {
             rows.push_back({"Return to Title", "", "Leave free play; the game restarts", true,
                             false, [](int) { Relaunch("", ""); }});
@@ -616,7 +622,11 @@ std::vector<Row> BuildRows() {
                         }});
         rows.push_back({"Back", "", "Return to the previous menu", true, false, [](int d) {
                             if (d == 0) {
-                                GoTo(Page::Main);
+                                if (opened_on_page) {
+                                    open = false;
+                                } else {
+                                    GoTo(Page::Main);
+                                }
                             }
                         }});
     } else if (page == Page::Graphics) {
@@ -690,7 +700,7 @@ const char* PageTitle() {
     case Page::Controls:
         return "Key Bindings";
     default:
-        return "Shadow of the Colossus";
+        return InFreePlay() ? "Shadow of the Colossus" : "PC Settings";
     }
 }
 
@@ -699,6 +709,7 @@ const char* PageTitle() {
 void Toggle() {
     if (!open) {
         GoTo(Page::Main);
+        opened_on_page = false;
     }
     capture_row = -1;
     open = !open;
@@ -706,6 +717,28 @@ void Toggle() {
 
 bool IsOpen() {
     return open;
+}
+
+void OpenFreePlay() {
+    capture_row = -1;
+    GoTo(Page::FreePlay);
+    opened_on_page = true;
+    wait_for_release = true;
+    open = true;
+}
+
+void OpenSettings() {
+    capture_row = -1;
+    GoTo(Page::Main);
+    opened_on_page = false;
+    wait_for_release = true;
+    open = true;
+}
+
+void HotkeyToggle() {
+    if (open || InFreePlay()) {
+        Toggle();
+    }
 }
 
 bool CaptureInput(const SDL_Event* event) {
@@ -749,7 +782,7 @@ void Draw() {
         (IsKeyDown(ImGuiKey_GamepadL3) && IsKeyPressed(ImGuiKey_GamepadR3, false)) ||
         (IsKeyDown(ImGuiKey_GamepadR3) && IsKeyPressed(ImGuiKey_GamepadL3, false));
     if (pad_combo && !Achievements::IsPanelOpen()) {
-        Toggle();
+        HotkeyToggle();
     }
     if (!open) {
         return;
@@ -768,7 +801,13 @@ void Draw() {
     };
     int activate_row = -1, activate_direction = 0;
     bool back = false;
-    if (!capturing) {
+    // Opened from a line of the game's menu: the press that chose that line is still held, and
+    // must not also choose a row here.
+    if (wait_for_release) {
+        wait_for_release = IsKeyDown(ImGuiKey_Enter) || IsKeyDown(ImGuiKey_Space) ||
+                           IsKeyDown(ImGuiKey_GamepadFaceDown) || IsMouseDown(0);
+    }
+    if (!capturing && !wait_for_release) {
         if (IsKeyPressed(ImGuiKey_DownArrow) || IsKeyPressed(ImGuiKey_GamepadDpadDown) ||
             IsKeyPressed(ImGuiKey_S)) {
             step_to_enabled(1);
@@ -882,7 +921,7 @@ void Draw() {
     if (activate_row >= 0 && rows[activate_row].enabled && rows[activate_row].act) {
         rows[activate_row].act(activate_direction);
     } else if (back) {
-        if (page == Page::Main) {
+        if (page == Page::Main || (page == Page::FreePlay && opened_on_page)) {
             open = false;
         } else {
             GoTo(Page::Main);

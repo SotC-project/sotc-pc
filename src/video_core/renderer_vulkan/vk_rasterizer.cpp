@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <string>
 #include "common/debug.h"
+#include "core/sotc/screens.h"
 #include "video_core/thread_sampler.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -1076,6 +1077,57 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
         }
         LOG_ERROR(Render, "   vertex bindings {} attrs {} {}", bindings.size(), attributes.size(),
                   vbs);
+    }
+
+    if (Sotc::Screens::TakeArrowDraw()) {
+        // The game's menu arrow. Its corners are the first numbers of the vertex shader's first
+        // data buffer, and say which menu line the cursor is on.
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        for (const auto& desc : vs.buffers) {
+            if (desc.buffer_type != Shader::BufferType::Guest) {
+                continue;
+            }
+            const auto sharp = desc.GetSharp(vs);
+            if (sharp.base_address != 0 && sharp.GetSize() >= 8 &&
+                Core::Memory::Instance()->IsValidMapping(sharp.base_address, 8)) {
+                float corner[2];
+                std::memcpy(corner, reinterpret_cast<const void*>(u64(sharp.base_address)), 8);
+                Sotc::Screens::ArrowAt(corner[0], corner[1]);
+            }
+            break;
+        }
+        if (Sotc::Screens::ArrowProbeActive()) {
+            u32 index = 0;
+            LOG_ERROR(Render, "arrow draw: {} vertex buffers, {} shader buffers, n {} prim {}",
+                      guest_buffers.size(), vs.buffers.size(), regs.num_indices,
+                      u32(regs.primitive_type));
+            for (const auto& desc : vs.buffers) {
+                if (desc.buffer_type != Shader::BufferType::Guest) {
+                    continue;
+                }
+                const auto sharp = desc.GetSharp(vs);
+                const u32 size = u32(sharp.GetSize());
+                if (sharp.base_address != 0 && size != 0 &&
+                    Core::Memory::Instance()->IsValidMapping(sharp.base_address, size)) {
+                    Sotc::Screens::ArrowProbeBuffer(
+                        index, reinterpret_cast<const u8*>(u64(sharp.base_address)), size);
+                }
+                ++index;
+            }
+        }
+    }
+    if (false) {
+        // The game's menu arrow: its vertices say where the menu cursor is.
+        const auto& buffer = guest_buffers[0];
+        const u32 stride = buffer.GetStride();
+        const u32 count = std::min<u32>(buffer.num_records, 6);
+        if (buffer.base_address != 0 && stride != 0 && count != 0 &&
+            Core::Memory::Instance()->IsValidMapping(buffer.base_address, u64(stride) * count)) {
+            const float viewport[4] = {regs.viewports[0].xscale, regs.viewports[0].xoffset,
+                                       regs.viewports[0].yscale, regs.viewports[0].yoffset};
+            Sotc::Screens::ArrowDraw(reinterpret_cast<const u8*>(u64(buffer.base_address)),
+                                     stride, count, viewport);
+        }
     }
 
     if (bindings.empty()) {
