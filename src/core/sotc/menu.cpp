@@ -600,20 +600,24 @@ std::vector<Row> BuildRows() {
         rows.push_back({"Difficulty", Difficulties[difficulty], "Choose the difficulty", true,
                         true, [step](int d) { difficulty = (difficulty + step(d) + 3) % 3; }});
         rows.push_back({"Time Attack", OnOff(challenge),
-                        "Timed battle, ranked from D to S+ on time and damage taken. " + target,
+                        "Timed battle on fixed terms, ranked from D to S+ on time and damage taken. " + target,
                         true, true, [](int) { challenge = !challenge; }});
-        rows.push_back({"All Weapons and Items", OnOff(all_items && !challenge),
-                        challenge ? helper_note : "Start with every weapon and item", !challenge,
-                        true, [](int) { all_items = !all_items; }});
-        rows.push_back({"Invincibility", OnOff(no_damage && !challenge),
-                        challenge ? helper_note : "Wander takes no damage", !challenge, true,
-                        [](int) { no_damage = !no_damage; }});
-        rows.push_back({"Unlimited Grip", OnOff(unlimited_grip && !challenge),
-                        challenge ? helper_note : "The grip gauge never empties", !challenge,
-                        true, [](int) { unlimited_grip = !unlimited_grip; }});
-        rows.push_back({"Maximum Damage", OnOff(max_damage && !challenge),
-                        challenge ? helper_note : "Every sword strike deals full damage",
-                        !challenge, true, [](int) { max_damage = !max_damage; }});
+        // A time attack is fought on fixed terms: the start the game gives every colossus
+        // battle, and none of the helpers. Only the difficulty is the player's choice.
+        if (!challenge) {
+            rows.push_back({"All Weapons and Items", OnOff(all_items && !challenge),
+                            challenge ? helper_note : "Start with every weapon and item", !challenge,
+                            true, [](int) { all_items = !all_items; }});
+            rows.push_back({"Invincibility", OnOff(no_damage && !challenge),
+                            challenge ? helper_note : "Wander takes no damage", !challenge, true,
+                            [](int) { no_damage = !no_damage; }});
+            rows.push_back({"Unlimited Grip", OnOff(unlimited_grip && !challenge),
+                            challenge ? helper_note : "The grip gauge never empties", !challenge,
+                            true, [](int) { unlimited_grip = !unlimited_grip; }});
+            rows.push_back({"Maximum Damage", OnOff(max_damage && !challenge),
+                            challenge ? helper_note : "Every sword strike deals full damage",
+                            !challenge, true, [](int) { max_damage = !max_damage; }});
+        }
         rows.push_back({"Begin Battle", "", "The game restarts and loads the battle", true, false,
                         [](int d) {
                             if (d == 0) {
