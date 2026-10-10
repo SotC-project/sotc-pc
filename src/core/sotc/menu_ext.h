@@ -10,8 +10,9 @@ class GameController;
 
 namespace Sotc::MenuExt {
 
-/// Extra lines under the game's own title menu (Free Play, Achievements, PC Settings) and pause
-/// menu (Achievements, PC Settings). The lists are the game's, so the lines are drawn over the
+/// Extra lines under the game's own title menu (Free Play, Achievements) and pause menu
+/// (Achievements). The game's own Settings line opens the port's settings page, which holds the
+/// PC options and leads on to the game's settings. The lists are the game's, so the lines are drawn over the
 /// picture where the next entries would be, and the cursor is taken over when it would step past
 /// the game's last entry. Where the game's cursor is comes from the arrow it draws (see
 /// Screens::ArrowAt).
@@ -28,6 +29,8 @@ int FilterLeftY(int value, Input::GameController* controller);
 bool OnClick(float x, float y);
 /// Draws the extra lines and runs the cursor bookkeeping. Call once per frame from the overlay.
 void Draw();
+/// Confirms the game's Settings line for real, once the port's settings page has closed.
+void PassToGameSettings();
 /// True while the cursor is on an extra line: the game's own arrow is then drawn blank.
 bool HideArrow();
 

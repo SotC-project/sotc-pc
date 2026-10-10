@@ -40,11 +40,11 @@ enum class Kind { None, Title, Pause };
 struct Root {
     float arrow_x;  // left edge of the arrow
     float arrow_y0; // bottom edge of the arrow on the first line
-    std::array<const char*, 3> lines;
+    std::array<const char*, 2> lines;
     int num_lines;
 };
-constexpr Root TitleRoot{-0.786f, 0.139f, {"Free Play", "Achievements", "PC Settings"}, 3};
-constexpr Root PauseRoot{-0.695f, 0.087f, {"Achievements", "PC Settings", nullptr}, 2};
+constexpr Root TitleRoot{-0.786f, 0.139f, {"Free Play", "Achievements"}, 2};
+constexpr Root PauseRoot{-0.695f, 0.087f, {"Achievements", nullptr}, 1};
 
 const Root& RootOf(Kind kind) {
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
@@ -114,6 +114,20 @@ int LinesOf(Kind kind) {
     return kind == Kind::Pause ? PauseLines : title_lines.load();
 }
 
+/// The game's own Settings line: first in the pause menu, and in the title menu the one above
+/// Image Gallery, its last. Confirming it opens the port's settings page, which holds the PC
+/// options and a line that carries on into the game's own settings.
+int SettingsLine(Kind kind) {
+    if (kind == Kind::Pause) {
+        return 0;
+    }
+    const int lines = title_lines.load();
+    return lines >= 2 ? lines - 2 : -1;
+}
+
+// Set by the settings page's "Game Settings" line: confirm the game's Settings line for real.
+std::atomic_bool pass_settings{false};
+
 bool PanelOpen() {
     return Menu::IsOpen() || Achievements::IsPanelOpen();
 }
@@ -126,8 +140,6 @@ void Activate(Kind kind, int index) {
         if (!Achievements::IsPanelOpen()) {
             Achievements::TogglePanel();
         }
-    } else {
-        Menu::OpenSettings();
     }
 }
 
@@ -178,6 +190,11 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
             on_extra = false;
             return false;
         }
+        swallowed[slot] = true;
+        return true;
+    }
+    if (nav == Nav::Confirm && line == SettingsLine(kind) && taps.empty()) {
+        Menu::OpenSettings();
         swallowed[slot] = true;
         return true;
     }
@@ -240,8 +257,16 @@ bool OnClick(float x, float y) {
     const int current = line;
     QueueTap(row > current ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up,
              std::abs(row - current));
-    QueueTap(OrbisPadButtonDataOffset::Cross);
+    if (row == SettingsLine(kind)) {
+        Menu::OpenSettings();
+    } else {
+        QueueTap(OrbisPadButtonDataOffset::Cross);
+    }
     return true;
+}
+
+void PassToGameSettings() {
+    pass_settings = true;
 }
 
 bool HideArrow() {
@@ -253,6 +278,9 @@ void Draw() {
     std::scoped_lock lock{mutex};
     Input::GameController* controller = pad.load();
 
+    if (!PanelOpen() && pass_settings.exchange(false)) {
+        QueueTap(OrbisPadButtonDataOffset::Cross);
+    }
     // Presses on their way to the game: down for three frames, up for three.
     if (!taps.empty() && controller) {
         Tap& tap = taps.front();

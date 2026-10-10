@@ -28,6 +28,7 @@
 #include "common/path_util.h"
 #include "common/singleton.h"
 #include "core/file_sys/fs.h"
+#include "core/sotc/menu_ext.h"
 #include "input/input_handler.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -562,7 +563,7 @@ std::vector<Row> BuildRows() {
             rows.push_back({"Free Play", "", "Fight any colossus", true, false,
                             [](int) { GoTo(Page::FreePlay); }});
         }
-        rows.push_back({"Settings", "", "Graphics, display, button icons and sound",
+        rows.push_back({"Graphics", "", "Graphics, display, button icons and sound",
                         true, false, [](int) {
                             LoadOptions();
                             GoTo(Page::Graphics);
@@ -572,6 +573,13 @@ std::vector<Row> BuildRows() {
                             bindings_dirty = true;
                             GoTo(Page::Controls);
                         }});
+        if (!InFreePlay()) {
+            rows.push_back({"Game Settings", "", "The game's own display, audio, camera and controls",
+                            true, false, [](int) {
+                                open = false;
+                                MenuExt::PassToGameSettings();
+                            }});
+        }
         if (InFreePlay()) {
             rows.push_back({"Achievements", "", "View your achievements", true, false, [](int) {
                                 open = false;
@@ -700,11 +708,11 @@ const char* PageTitle() {
     case Page::FreePlay:
         return "Free Play";
     case Page::Graphics:
-        return "Settings";
+        return "Graphics";
     case Page::Controls:
         return "Key Bindings";
     default:
-        return InFreePlay() ? "Shadow of the Colossus" : "PC Settings";
+        return InFreePlay() ? "Shadow of the Colossus" : "Settings";
     }
 }
 

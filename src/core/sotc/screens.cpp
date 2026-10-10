@@ -28,11 +28,12 @@ namespace {
 // menu only. So the title menu is "a menu without the pause menu's texture".
 constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
-// Drawn together by the Game Over screen. Some of them turn up one at a time in play, so the
-// screen is only recognised when all of them are drawn at once.
-constexpr std::array<u64, 7> GameOverTextures{
-    0x060094bbbc9a02c0ULL, 0x15d23b24ab67f95eULL, 0x2b552bbe9ab54934ULL, 0x3f5b9f7cc18f1b1aULL,
-    0xbb2c6cf34aa4df52ULL, 0xc8263d4cfbb3a9c3ULL, 0xce6b119b57b01a8eULL,
+// Drawn only by the Game Over screen (the stone mask with Retry and End), found by comparing
+// what it draws with what battles, the pause menu and the title draw. All must be drawn at once.
+constexpr std::array<u64, 3> GameOverTextures{
+    0x2b552bbe9ab54934ULL,
+    0xbae322672e7e8628ULL,
+    0xbb2c6cf34aa4df52ULL,
 };
 
 std::atomic<u64> title_seen_ms{0};
@@ -41,7 +42,7 @@ std::atomic<float> arrow_x{0.0f};
 std::atomic<float> arrow_y{0.0f};
 std::atomic<u64> arrow_ms{0};
 std::atomic<u64> pause_seen_ms{0};
-std::array<std::atomic<u64>, 7> game_over_seen_ms{};
+std::array<std::atomic<u64>, GameOverTextures.size()> game_over_seen_ms{};
 
 std::mutex used_mutex;
 std::set<u64> used;

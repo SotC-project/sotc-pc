@@ -380,6 +380,8 @@ void Draw() {
     std::lock_guard lock{mutex};
     // Wander's death: the game puts up its Game Over screen.
     if (state.phase == Phase::Running && Screens::GameOver()) {
+        // The blow that killed him took what health he had left; the bar is gone by now.
+        state.damage += state.health;
         Finish(true);
     }
     const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -395,12 +397,19 @@ void Draw() {
         draw->AddLine({center - half_width, y}, {center + half_width, y}, color, 1.5f * scale);
     };
     constexpr ImU32 RuleColor = IM_COL32(236, 233, 222, 110);
-    // A soft dark plate behind a block of figures, as behind the game's subtitles, so light
-    // lettering stays readable over bright stone and sky.
-    const auto plate = [&](float top, float bottom, float half_width) {
-        draw->AddRectFilled({center - half_width, top}, {center + half_width, bottom},
-                            IM_COL32(6, 6, 6, 118), 10.0f * scale);
+    // During the battle the readout is a small panel in the top left corner, clear of the
+    // colossus and of the game's own bar, ring, hints and subtitles.
+    const float left = 40.0f * scale;
+    const float top = 34.0f * scale;
+    const float width = 228.0f * scale;
+    const float pad = 14.0f * scale;
+    const auto panel = [&](float height) {
+        draw->AddRectFilled({left, top}, {left + width, top + height}, IM_COL32(6, 6, 6, 104),
+                            6.0f * scale);
     };
+    const float inner_left = left + pad;
+    const float inner_right = left + width - pad;
+    const std::string heading = fmt::format("{}  -  {}", name, difficulty);
 
     if (state.phase == Phase::Loading || state.phase == Phase::Ready) {
         // Nothing over the colossus's introduction: the card waits, like the clock, until the
@@ -408,47 +417,44 @@ void Draw() {
         if (state.phase == Phase::Loading || !state.strip_seen || state.letterboxed) {
             return;
         }
-        plate(26.0f * scale, 250.0f * scale, 300.0f * scale);
-        float y = 44.0f * scale;
-        Caption(draw, 24.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
-        y += 40.0f * scale;
-        Ui::TextCentered(draw, 50.0f * scale, center, y, Ui::TextBright, name);
-        y += 68.0f * scale;
-        rule(y, 190.0f * scale, RuleColor);
-        y += 16.0f * scale;
-        Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal,
-                fmt::format("{}  -  target {}", difficulty, FormatMark(state.limit)));
-        if (state.phase == Phase::Ready) {
-            Caption(draw, 20.0f * scale, center, y + 40.0f * scale, 0.5f, Ui::TextNormal,
-                    "The clock starts when you move");
-        }
+        panel(104.0f * scale);
+        float y = top + 10.0f * scale;
+        Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, "Time Attack");
+        y += 20.0f * scale;
+        Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextBright, heading);
+        y += 22.0f * scale;
+        draw->AddLine({inner_left, y}, {inner_right, y}, RuleColor, 1.0f * scale);
+        y += 8.0f * scale;
+        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
+                fmt::format("Target {}", FormatMark(state.limit)));
+        y += 18.0f * scale;
+        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
+                "Starts when you move");
         return;
     }
     if (state.phase == Phase::Running) {
-        // Top centre: the clock; under a thin rule, the target on the left and the damage
-        // taken so far on the right.
+        // The clock; under a thin rule, the target on the left and the health lost so far on
+        // the right.
         const double elapsed = Elapsed();
         const bool over = elapsed > state.limit;
-        plate(16.0f * scale, 214.0f * scale, 215.0f * scale);
-        float y = 30.0f * scale;
-        Caption(draw, 20.0f * scale, center, y, 0.5f, Ui::TextNormal,
-                fmt::format("{}  -  {}", name, difficulty));
-        y += 28.0f * scale;
-        Figures(draw, 68.0f * scale, center, y, 0.5f, over ? Warm : Ui::TextBright,
+        panel(104.0f * scale);
+        float y = top + 10.0f * scale;
+        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, heading);
+        y += 16.0f * scale;
+        Figures(draw, 34.0f * scale, inner_left, y, 0.0f, over ? Warm : Ui::TextBright,
                 FormatTime(elapsed));
-        y += 84.0f * scale;
-        const float half = 170.0f * scale;
-        rule(y, half, RuleColor);
-        y += 12.0f * scale;
-        Caption(draw, 18.0f * scale, center - half, y, 0.0f, Ui::TextNormal, "Target");
-        Caption(draw, 18.0f * scale, center + half, y, 1.0f, Ui::TextNormal, "Damage");
-        y += 24.0f * scale;
-        Figures(draw, 30.0f * scale, center - half, y, 0.0f, Ui::TextBright,
+        y += 42.0f * scale;
+        draw->AddLine({inner_left, y}, {inner_right, y}, RuleColor, 1.0f * scale);
+        y += 8.0f * scale;
+        Caption(draw, 12.0f * scale, inner_left, y + 3.0f * scale, 0.0f, Ui::TextNormal, "Target");
+        Figures(draw, 17.0f * scale, inner_left + 62.0f * scale, y, 0.0f, Ui::TextBright,
                 FormatMark(state.limit));
         const int damage = static_cast<int>(state.damage * 100.0f + 0.5f);
-        Figures(draw, 30.0f * scale, center + half, y, 1.0f,
-                damage == 0 ? Ui::TextNormal : damage > 50 ? Warm : Ui::TextBright,
-                fmt::format("{}%", damage));
+        const std::string lost = fmt::format("{}%", damage);
+        Figures(draw, 17.0f * scale, inner_right, y, 1.0f,
+                damage == 0 ? Ui::TextNormal : damage > 50 ? Warm : Ui::TextBright, lost);
+        Caption(draw, 12.0f * scale, inner_right - 44.0f * scale, y + 3.0f * scale, 1.0f,
+                Ui::TextNormal, "Lost");
         return;
     }
 
@@ -477,12 +483,12 @@ void Draw() {
     rule(y, 300.0f * scale, RuleColor);
     y += 30.0f * scale;
     // Two columns: what it is, and the figure.
-    const float left = center - 300.0f * scale;
+    const float column_left = center - 300.0f * scale;
     const float right = center + 300.0f * scale;
     const float line = 52.0f * scale;
     const float size = 34.0f * scale;
     const auto row = [&](const char* label, const std::string& value, ImU32 color) {
-        Caption(draw, 20.0f * scale, left, y + 9.0f * scale, 0.0f, Ui::TextNormal, label);
+        Caption(draw, 20.0f * scale, column_left, y + 9.0f * scale, 0.0f, Ui::TextNormal, label);
         Figures(draw, size, right, y, 1.0f, color, value);
         y += line;
     };
@@ -491,7 +497,7 @@ void Draw() {
     row("Target time", FormatMark(state.limit), Ui::TextNormal);
     row("Typical time", FormatMark(state.average), Ui::TextNormal);
     const int damage = static_cast<int>(state.damage * 100.0f + 0.5f);
-    row("Damage taken", fmt::format("{}%", damage), damage > 50 ? Warm : Ui::TextBright);
+    row("Health lost", fmt::format("{}%", damage), damage > 50 ? Warm : Ui::TextBright);
     Ui::Prompt(draw, display.x * 0.95f, display.y * 0.90f, "MENU", Ui::Action::Menu);
 }
 
