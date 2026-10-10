@@ -339,8 +339,8 @@ Choice Screen::Ask() {
             const auto key = [](int code) { return (GetAsyncKeyState(code) & 0x8000) != 0; };
             down[Confirm] = key(VK_RETURN) || key(VK_SPACE);
             down[Cancel] = key(VK_ESCAPE);
-            down[Left] = key(VK_LEFT) || key('A');
-            down[Right] = key(VK_RIGHT) || key('D');
+            down[Left] = key(VK_UP) || key('W') || key(VK_LEFT) || key('A');
+            down[Right] = key(VK_DOWN) || key('S') || key(VK_RIGHT) || key('D');
         }
         // Any key or mouse button counts as using the keyboard.
         bool any_key = false;
@@ -378,8 +378,13 @@ Choice Screen::Ask() {
             const int stick = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
             const bool confirm = button(SDL_GAMEPAD_BUTTON_SOUTH);
             const bool cancel = button(SDL_GAMEPAD_BUTTON_EAST);
-            const bool left = button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || stick < -16000;
-            const bool right = button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || stick > 16000;
+            const int stick_y = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+            const bool left = button(SDL_GAMEPAD_BUTTON_DPAD_UP) ||
+                              button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || stick < -16000 ||
+                              stick_y < -16000;
+            const bool right = button(SDL_GAMEPAD_BUTTON_DPAD_DOWN) ||
+                               button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || stick > 16000 ||
+                               stick_y > 16000;
             bool used = confirm || cancel || left || right;
             for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT && !used; b++) {
                 used = button(static_cast<SDL_GamepadButton>(b));
@@ -411,8 +416,10 @@ Choice Screen::Ask() {
             selected = 1;
             dirty = true;
         }
-        if (pressed(Cancel)) {
-            return Choice::Skip;
+        if (pressed(Cancel) && selected != 1) {
+            // Back steps onto Skip; only the accept button chooses.
+            selected = 1;
+            dirty = true;
         }
         if (pressed(Confirm)) {
             return selected == 0 ? Choice::Prepare : Choice::Skip;
@@ -444,30 +451,44 @@ Choice Screen::Ask() {
             y += s.Px(52);
             s.Centered(L"You will be asked again at the next start.", y, s.Px(34), DimInk);
             y += s.Px(130);
-            // Only the prompts of the device in use are shown.
-            using Button = Impl::Button;
-            const std::wstring keys[2] = {device == Device::Xbox ? L"A" : L"Enter",
-                                          device == Device::Xbox ? L"B" : L"Esc"};
-            const Button buttons[2] = {
-                device == Device::Keyboard ? Button::Key
-                : device == Device::Xbox   ? Button::Round
-                                           : Button::Cross,
-                device == Device::Keyboard ? Button::Key
-                : device == Device::Xbox   ? Button::Round
-                                           : Button::Circle,
-            };
+            // The two answers as plain lines, the chosen one bright with the marker beside it,
+            // as in the game's own menus.
             const std::wstring labels[2] = {L"Prepare", L"Skip"};
-            const int between = s.Px(120);
-            int total = between;
+            const int line_size = s.Px(44);
             for (int i = 0; i < 2; i++) {
-                const RECT area = s.Option(0, 0, buttons[i], keys[i], labels[i], false, false);
-                total += area.right - area.left - s.Px(28);
+                const int w = s.TextWidth(labels[i], line_size);
+                const int x = (s.width - w) / 2;
+                const bool chosen = selected == i;
+                s.Text(labels[i], x, y, line_size, chosen ? Ink : DimInk);
+                if (chosen) {
+                    const int m = s.Px(13);
+                    const int cx = x - s.Px(30), cy = y + line_size * 58 / 100;
+                    const POINT marker[3] = {{cx - m / 2, cy - m}, {cx - m / 2, cy + m}, {cx + m, cy}};
+                    const HBRUSH brush = CreateSolidBrush(Ink);
+                    const HGDIOBJ old_brush = SelectObject(s.mem, brush);
+                    const HGDIOBJ old_pen = SelectObject(s.mem, GetStockObject(NULL_PEN));
+                    Polygon(s.mem, marker, 3);
+                    SelectObject(s.mem, old_pen);
+                    SelectObject(s.mem, old_brush);
+                    DeleteObject(brush);
+                }
+                areas[i] = {x - s.Px(50), y - s.Px(8), x + w + s.Px(50), y + line_size + s.Px(14)};
+                y += s.Px(72);
             }
-            int x = (s.width - total) / 2;
-            for (int i = 0; i < 2; i++) {
-                areas[i] = s.Option(x, y, buttons[i], keys[i], labels[i], selected == i, true);
-                x += areas[i].right - areas[i].left - s.Px(28) + between;
-            }
+            // One hint, bottom right, with the accept button of the device in use.
+            using Button = Impl::Button;
+            const Button button = device == Device::Keyboard ? Button::Key
+                                  : device == Device::Xbox   ? Button::Round
+                                                             : Button::Cross;
+            const std::wstring key = device == Device::Xbox ? L"A" : L"Enter";
+            const RECT cap = s.Option(0, 0, button, key, L"", false, false);
+            const int cap_w = cap.right - cap.left - s.Px(28) - s.Px(16);
+            const int hint_size = s.Px(26);
+            const int right = s.width - s.Px(64), bottom = s.height - s.Px(64);
+            s.Option(right - cap_w, bottom - s.Px(46), button, key, L"", true, true);
+            const std::wstring hint = L"ACCEPT";
+            s.Text(hint, right - cap_w - s.Px(18) - s.TextWidth(hint, hint_size),
+                   bottom - s.Px(46) + (s.Px(46) - hint_size) / 2 - s.Px(2), hint_size, DimInk);
             s.Show();
         }
         Sleep(8);
