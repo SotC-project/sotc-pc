@@ -76,20 +76,18 @@ done
 if [ "${#parts[@]}" = "2" ]; then
     joined="$cap/joined.mp4"
     ffmpeg -y -loglevel error -i "${parts[0]}" -i "${parts[1]}"         -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][j];[j]volume=-2dB[a]" -map "[v]" -map "[a]"         -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p -c:a aac -b:a 192k "$joined"
-    # The black wait after Begin Battle (restart and load) is cut to about four seconds: two kept
-    # after the picture goes black, two before it returns, with the sound faded in at the join.
-    # The wait runs from the end of the first part (which closes on about four seconds of
-    # black after Begin Battle) to where the second part's picture appears. It is measured in
-    # the parts, not in the joined film: the menu pages are dark enough to count as black.
+    # The wait after Begin Battle (restart and load) is cut down to the game's loading
+    # animation: the first part up to half a second into its black end, then the last four and
+    # a half seconds of the animation, then the scene. Without the cut the wait is the black of
+    # the restart, six seconds or so of animation, and four of black before the scene.
     d0=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${parts[0]}")
-    e1=$(ffmpeg -hide_banner -nostats -i "${parts[1]}" -vf "blackdetect=d=3:pix_th=0.06" -an -f null - 2>&1 |
-        sed -n 's/.*black_start:0 black_end:\([0-9.]*\).*/\1/p' | head -1)
-    bs=""; be=""
-    [ -n "$d0" ] && [ -n "$e1" ] && { bs=$(python -c "print($d0 - 4)"); be=$(python -c "print($d0 + $e1)"); }
-    echo "black wait from ${bs:-?} s to ${be:-?} s"
-    if [ -n "$bs" ] && [ -n "$be" ]; then
-        a=$(python -c "print($bs + 2)"); b=$(python -c "print($be - 2)")
-        ffmpeg -y -loglevel error -i "$joined" -filter_complex             "[0:v]trim=0:$a,setpts=PTS-STARTPTS[v0];[0:a]atrim=0:$a,asetpts=PTS-STARTPTS[a0];[0:v]trim=start=$b,setpts=PTS-STARTPTS[v1];[0:a]atrim=start=$b,asetpts=PTS-STARTPTS,afade=t=in:d=0.6[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"             -map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out" && ls -la "$out"
+    read -r as ae sc < <(python /d/sotc-pc/video_marks.py "${parts[1]}")
+    echo "first part ${d0:-?} s; in the second: animation ${as:-?} to ${ae:-?} s, scene at ${sc:-?} s"
+    if [ -n "$d0" ] && [ -n "$sc" ]; then
+        a=$(python -c "print($d0 - 3.5)")
+        b0=$(python -c "print($d0 + max($as, $ae - 4.5))"); b1=$(python -c "print($d0 + $ae + 0.4)")
+        c=$(python -c "print($d0 + $sc - 0.4)")
+        ffmpeg -y -loglevel error -i "$joined" -filter_complex "[0:v]trim=0:$a,setpts=PTS-STARTPTS[v0];[0:a]atrim=0:$a,asetpts=PTS-STARTPTS[a0];[0:v]trim=$b0:$b1,setpts=PTS-STARTPTS[v1];[0:a]atrim=$b0:$b1,asetpts=PTS-STARTPTS,afade=t=in:d=0.4[a1];[0:v]trim=start=$c,setpts=PTS-STARTPTS[v2];[0:a]atrim=start=$c,asetpts=PTS-STARTPTS,afade=t=in:d=0.6[a2];[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[v][a]" -map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out" && ls -la "$out"
     else
         cp "$joined" "$out" && ls -la "$out"
     fi
