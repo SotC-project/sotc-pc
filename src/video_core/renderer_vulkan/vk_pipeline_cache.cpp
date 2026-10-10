@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <ranges>
 
+#include "core/sotc/hitch.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -340,6 +342,15 @@ PipelineCache::~PipelineCache() = default;
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
+    // For the hitch report: building a pipeline the game uses for the first time, shader
+    // translation included, stalls the frame it happens in.
+    const auto build_start = std::chrono::steady_clock::now();
+    const auto count_build = [&] {
+        ++Sotc::Hitch::pipelines;
+        Sotc::Hitch::pipeline_us += u32(std::chrono::duration_cast<std::chrono::microseconds>(
+                                            std::chrono::steady_clock::now() - build_start)
+                                            .count());
+    };
     if (!RefreshGraphicsKey()) {
         return nullptr;
     }
@@ -355,6 +366,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
+        count_build();
 
         if (EmulatorSettings.IsShaderCollect()) {
             for (auto stage = 0; stage < MaxShaderStages; ++stage) {
@@ -369,6 +381,15 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
+    // For the hitch report: building a pipeline the game uses for the first time, shader
+    // translation included, stalls the frame it happens in.
+    const auto build_start = std::chrono::steady_clock::now();
+    const auto count_build = [&] {
+        ++Sotc::Hitch::pipelines;
+        Sotc::Hitch::pipeline_us += u32(std::chrono::duration_cast<std::chrono::microseconds>(
+                                            std::chrono::steady_clock::now() - build_start)
+                                            .count());
+    };
     if (!RefreshComputeKey()) {
         return nullptr;
     }
@@ -383,6 +404,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+        count_build();
 
         if (EmulatorSettings.IsShaderCollect()) {
             auto& m = modules[0];

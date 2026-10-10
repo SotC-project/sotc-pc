@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <utility>
+#include "common/alignment.h"
+#include "core/sotc/hitch.h"
 #include "common/adaptive_mutex.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -446,11 +448,25 @@ struct SignalImpl : public PageManager::Impl {
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
         const bool is_write = Common::IsWriteError(context);
+        ++Sotc::Hitch::memory_faults;
         const auto handle = [&](VAddr target, u64 target_size) {
             return is_write ? rasterizer->InvalidateMemory(target, target_size, is_gpu_thread)
                             : rasterizer->ReadMemory(target, target_size, is_gpu_thread);
         };
         bool handled = handle(addr, size);
+        if (handled && is_write) {
+            // Data being streamed in is written page after page, and every page costs a fault
+            // like this one. Hand the buffer cache the pages around it too, so the next ones
+            // are written freely. SOTC_FAULT_WINDOW_KB=0 keeps it to the one page.
+            static const u64 window = [] {
+                const char* kb = std::getenv("SOTC_FAULT_WINDOW_KB");
+                return (kb ? u64(std::atoll(kb)) : 64) << 10;
+            }();
+            if (window != 0) {
+                const VAddr start = Common::AlignDown(addr, window);
+                rasterizer->InvalidateBufferMemory(start, window, is_gpu_thread);
+            }
+        }
         // The access may have gone through another mapping of memory the GPU tracks. Collect the
         // aliases first: handling one re-enters Protect, which takes the alias map lock again.
         boost::container::small_vector<std::pair<VAddr, u64>, 4> aliases;

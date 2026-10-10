@@ -75,6 +75,8 @@ public:
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
     bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false);
     bool IsMapped(VAddr addr, u64 size);
+    /// Marks a range of buffer memory as written by the game, without touching the textures in it.
+    void InvalidateBufferMemory(VAddr addr, u64 size, bool assume_locks);
     void MapMemory(VAddr addr, u64 size);
     void RegisterMemory(VAddr addr, u64 size);
     void UnmapMemory(VAddr addr, u64 size);

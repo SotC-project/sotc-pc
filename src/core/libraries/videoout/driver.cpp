@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <intrin.h>
 #include <cstdio>
 #include <cstdlib>
 #include <atomic>
 #include <SDL3/SDL_timer.h>
 #include <chrono>
+#include "core/sotc/hitch.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -269,6 +272,42 @@ void VideoOutDriver::Flip(const Request& req) {
     }
     worst_ms = std::max(worst_ms, gap_ms);
     hitches += gap_ms > 40.0;
+    {
+        // What the renderer did during this frame; printed when the frame was a long one.
+        const u32 pipelines = Sotc::Hitch::pipelines.exchange(0);
+        const u32 pipeline_us = Sotc::Hitch::pipeline_us.exchange(0);
+        const u32 uploads = Sotc::Hitch::texture_uploads.exchange(0);
+        const u32 upload_kb = Sotc::Hitch::texture_kb.exchange(0);
+        const u32 buffer_kb = Sotc::Hitch::buffer_kb.exchange(0);
+        const u32 freed = Sotc::Hitch::images_freed.exchange(0);
+        const u32 gpu_us = Sotc::Hitch::gpu_busy_us.exchange(0);
+        const u32 faults = Sotc::Hitch::memory_faults.exchange(0);
+        const u32 read_kb = Sotc::Hitch::file_read_kb.exchange(0);
+        const u32 read_us = Sotc::Hitch::file_read_us.exchange(0);
+        // Renderer stages during this frame, as shares of the frame's processor ticks.
+        static u64 previous_ticks[5]{};
+        static u64 previous_tsc = __rdtsc();
+        u64 ticks[5];
+        Sotc::Hitch::RendererTicks(ticks);
+        const u64 tsc = __rdtsc();
+        double stage_ms[5];
+        for (int i = 0; i < 5; i++) {
+            const u64 delta = ticks[i] >= previous_ticks[i] ? ticks[i] - previous_ticks[i] : ticks[i];
+            stage_ms[i] = double(delta) / double(std::max<u64>(tsc - previous_tsc, 1)) * gap_ms;
+            previous_ticks[i] = ticks[i];
+        }
+        previous_tsc = tsc;
+        if (gap_ms > 40.0) {
+            LOG_ERROR(Lib_VideoOut,
+                      "hitch {:.0f} ms: {} pipelines built in {} ms, {} textures uploaded ({} MB), "
+                      "{} MB of buffers allocated, {} images freed | renderer busy {} ms, {} "
+                      "memory faults, files read {} KB in {} ms | draws {:.0f} ms (buffers {:.0f}, "
+                      "textures {:.0f}), compute {:.0f} ms, copy-back {:.0f} ms",
+                      gap_ms, pipelines, pipeline_us / 1000, uploads, upload_kb >> 10,
+                      buffer_kb >> 10, freed, gpu_us / 1000, faults, read_kb, read_us / 1000,
+                      stage_ms[0], stage_ms[2], stage_ms[3], stage_ms[1], stage_ms[4]);
+        }
+    }
     if (now - last >= std::chrono::seconds(3)) {
         LOG_ERROR(Lib_VideoOut, "fps {:.1f} worst {:.0f} ms hitches {}",
                   flips / std::chrono::duration<double>(now - last).count(), worst_ms, hitches);

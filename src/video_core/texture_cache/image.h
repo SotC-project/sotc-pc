@@ -158,6 +158,8 @@ public:
     u64 hash{};
     /// Hash of the guest data the image was last filled from (0 = not taken).
     u64 content_hash{};
+    /// Times the image was filled from game memory.
+    u32 upload_count{};
 
     struct {
         u32 texture : 1;

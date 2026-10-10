@@ -3,6 +3,7 @@
 
 #include <boost/preprocessor/stringize.hpp>
 
+#include "core/sotc/hitch.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
@@ -125,7 +126,10 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
-            task.resume();
+            {
+                Sotc::Hitch::Timer timer{Sotc::Hitch::gpu_busy_us};
+                task.resume();
+            }
 
             if (task.done()) {
                 task.destroy();

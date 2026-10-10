@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include "core/sotc/hitch.h"
 #include "common/assert.h"
 #include "common/path_util.h"
 #include "common/io_file.h"
@@ -956,6 +957,18 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     runtime.UploadImage(&image, buffer, image_copies);
+    ++Sotc::Hitch::texture_uploads;
+    Sotc::Hitch::texture_kb += image.info.guest_size >> 10;
+    if (++image.upload_count % 40 == 0) {
+        // Temporary: an image uploaded over and over.
+        LOG_ERROR(Render,
+                  "image {:#x} size {:#x} {}x{} mips {} uploaded {} times, flags {:#x} tracked "
+                  "{:#x}-{:#x} gpu_modified {} tiled {}",
+                  image.info.guest_address, image.info.guest_size, image.info.size.width,
+                  image.info.size.height, image.info.resources.levels, image.upload_count,
+                  u32(image.flags), image.track_addr, image.track_addr_end, is_gpu_modified,
+                  image.info.IsTiled());
+    }
     {
         // A guest write that faulted while the data above was being read has untracked the
         // image and set its dirty flag, which the upload then cleared with the rest. Nothing
@@ -1335,6 +1348,7 @@ void TextureCache::GarbageCollectImages() {
             DownloadImageMemory(image_id);
         }
         FreeImage(image_id);
+        ++Sotc::Hitch::images_freed;
         if (total_used_memory < critical_gc_memory) {
             if (aggresive) {
                 num_deletions >>= 2;

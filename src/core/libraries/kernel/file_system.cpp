@@ -10,6 +10,7 @@
 #include <vector>
 #include <magic_enum/magic_enum.hpp>
 
+#include "core/sotc/hitch.h"
 #include "common/assert.h"
 #include "common/error.h"
 #include "common/logging/log.h"
@@ -531,6 +532,8 @@ s64 PS4_SYSV_ABI sceKernelLseek(s32 fd, s64 offset, s32 whence) {
 }
 
 s64 PS4_SYSV_ABI read(s32 fd, void* buf, u64 nbytes) {
+    Sotc::Hitch::Timer timer{Sotc::Hitch::file_read_us};
+    Sotc::Hitch::file_read_kb += u32(nbytes >> 10);
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
     auto* file = h->GetFile(fd);
     if (file == nullptr) {
@@ -986,6 +989,10 @@ s32 PS4_SYSV_ABI sceKernelRename(const char* from, const char* to) {
 }
 
 s64 PS4_SYSV_ABI posix_preadv(s32 fd, OrbisKernelIovec* iov, s32 iovcnt, s64 offset) {
+    Sotc::Hitch::Timer timer{Sotc::Hitch::file_read_us};
+    for (s32 i = 0; iov && i < iovcnt; i++) {
+        Sotc::Hitch::file_read_kb += u32(iov[i].iov_len >> 10);
+    }
     if (offset < 0) {
         *__Error() = POSIX_EINVAL;
         return -1;

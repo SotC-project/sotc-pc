@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdlib>
 #include <string>
+#include "core/sotc/hitch.h"
 #include "common/debug.h"
 #include "core/sotc/screens.h"
 #include "video_core/thread_sampler.h"
@@ -253,6 +254,18 @@ struct DrawStats {
     }
 };
 static DrawStats g_stats;
+
+} // namespace Vulkan
+
+void Sotc::Hitch::RendererTicks(u64 out[5]) {
+    out[0] = Vulkan::g_stats.ns_draw_total;
+    out[1] = Vulkan::g_stats.ns_dispatch_total;
+    out[2] = Vulkan::g_stats.ns_bind_buffers;
+    out[3] = Vulkan::g_stats.ns_bind_textures;
+    out[4] = Vulkan::g_stats.ns_mirror;
+}
+
+namespace Vulkan {
 
 // Temporary: SOTC_BISECT_AT=<seconds> then withholds one compute shader's mirror at a time for
 // a few frames and logs the indirect draw count, to find the outputs the game reads on the CPU.
@@ -2055,6 +2068,13 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
     }
     buffer_cache.ReadMemory(addr, size, false, assume_locks);
     return true;
+}
+
+void Rasterizer::InvalidateBufferMemory(VAddr addr, u64 size, bool assume_locks) {
+    if (!IsMapped(addr, size)) {
+        return;
+    }
+    buffer_cache.InvalidateMemory(addr, size, assume_locks);
 }
 
 bool Rasterizer::IsMapped(VAddr addr, u64 size) {

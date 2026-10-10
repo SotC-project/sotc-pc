@@ -10,6 +10,7 @@
 #include <vector>
 #include <unordered_set>
 #include <xxhash.h>
+#include "core/sotc/hitch.h"
 #include "common/alignment.h"
 #include "core/debug_state.h"
 #include "core/memory.h"
@@ -357,6 +358,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     };
     const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
     resident_bytes += u64(resident_blocks) << block_shift;
+    Sotc::Hitch::buffer_kb += u32((u64(resident_blocks) << block_shift) >> 10);
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
