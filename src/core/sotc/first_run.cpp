@@ -192,8 +192,8 @@ void DrawOpeningMessages() {
     }
 
     static constexpr std::array<const char*, 2> Lines{
-        "we waited, yet no one answered",
-        "sometimes, we have to do things ourselves",
+        "We waited, yet no one answered.",
+        "Sometimes, we have to do things ourselves.",
     };
     constexpr float FadeIn = 1.5f, Hold = 5.0f, FadeOut = 1.5f, Gap = 0.8f;
     constexpr float Each = FadeIn + Hold + FadeOut + Gap;

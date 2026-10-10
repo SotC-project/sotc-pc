@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <SDL3/SDL.h>
 
@@ -16,8 +17,6 @@
 #ifdef _WIN32
 #include <windows.h>
 
-#include <xinput.h>
-#pragma comment(lib, "xinput.lib")
 #endif
 
 namespace Sotc::PrepScreen {
@@ -185,11 +184,17 @@ struct Screen::Impl {
         ReleaseDC(hwnd, dc);
     }
 
-    /// One answer of the prompt: a key cap, then what it does. Returns the area it covers.
-    RECT Option(int x, int y, const std::wstring& key, const std::wstring& label, bool selected,
-                bool draw) {
+    /// How the button of an answer is drawn: a key cap with its name, a round pad button with
+    /// a letter, or a PlayStation cross or circle.
+    enum class Button { Key, Round, Cross, Circle };
+
+    /// One answer of the prompt: its button, then what it does. Returns the area it covers.
+    RECT Option(int x, int y, Button button, const std::wstring& key, const std::wstring& label,
+                bool selected, bool draw) {
         const int size = Px(40), cap_size = Px(28), cap_h = Px(46), pad = Px(14), gap = Px(16);
-        const int cap_w = std::max(cap_h, TextWidth(key, cap_size) + pad * 2);
+        const int cap_w = button == Button::Key
+                              ? std::max(cap_h, TextWidth(key, cap_size) + pad * 2)
+                              : cap_h;
         const int label_w = TextWidth(label, size);
         const RECT area{x - pad, y - pad, x + cap_w + gap + label_w + pad, y + cap_h + pad};
         if (draw) {
@@ -197,16 +202,29 @@ struct Screen::Impl {
             const HPEN pen = CreatePen(PS_SOLID, std::max(1, Px(2)), ink);
             const HGDIOBJ old_pen = SelectObject(mem, pen);
             const HGDIOBJ old_brush = SelectObject(mem, GetStockObject(NULL_BRUSH));
-            RoundRect(mem, x, y, x + cap_w, y + cap_h, Px(12), Px(12));
+            if (button == Button::Key) {
+                RoundRect(mem, x, y, x + cap_w, y + cap_h, Px(12), Px(12));
+            } else {
+                Ellipse(mem, x, y, x + cap_w, y + cap_h);
+            }
+            const int inset = cap_h * 30 / 100;
+            if (button == Button::Cross) {
+                MoveToEx(mem, x + inset, y + inset, nullptr);
+                LineTo(mem, x + cap_w - inset, y + cap_h - inset);
+                MoveToEx(mem, x + cap_w - inset, y + inset, nullptr);
+                LineTo(mem, x + inset, y + cap_h - inset);
+            } else if (button == Button::Circle) {
+                Ellipse(mem, x + inset, y + inset, x + cap_w - inset, y + cap_h - inset);
+            }
             SelectObject(mem, old_brush);
             SelectObject(mem, old_pen);
             DeleteObject(pen);
-            Text(key, x + (cap_w - TextWidth(key, cap_size)) / 2, y + (cap_h - cap_size) / 2 - Px(2),
-                 cap_size, ink);
-            Text(label, x + cap_w + gap, y + (cap_h - size) / 2 - Px(3), size, ink);
-            if (selected) {
-                Fill(x + cap_w + gap, y + cap_h + Px(4), label_w, std::max(2, Px(3)), Moss);
+            if (button == Button::Key || button == Button::Round) {
+                Text(key, x + (cap_w - TextWidth(key, cap_size)) / 2,
+                     y + (cap_h - cap_size) / 2 - Px(2), cap_size, ink);
             }
+            // The chosen answer is the bright one.
+            Text(label, x + cap_w + gap, y + (cap_h - size) / 2 - Px(3), size, ink);
         }
         return area;
     }
@@ -279,9 +297,37 @@ Choice Screen::Ask() {
     std::array<bool, NumInputs> held;
     held.fill(true);
     int selected = 0;
-    bool pad_present = false;
     bool dirty = true;
     std::array<RECT, 2> areas{};
+
+    // Controllers of every kind, through the same library the game uses for them. Those opened
+    // here are closed again when the prompt is answered.
+    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+    struct Pads {
+        std::vector<SDL_Gamepad*> opened;
+        ~Pads() {
+            for (SDL_Gamepad* pad : opened) {
+                SDL_CloseGamepad(pad);
+            }
+        }
+    } pads;
+    // The buttons shown are those of the device used last: keyboard keys, or the pictures of
+    // an Xbox-type or a PlayStation controller.
+    enum class Device { Keyboard, Xbox, PlayStation };
+    const auto device_of = [](SDL_Gamepad* pad) {
+        switch (SDL_GetGamepadType(pad)) {
+        case SDL_GAMEPAD_TYPE_PS3:
+        case SDL_GAMEPAD_TYPE_PS4:
+        case SDL_GAMEPAD_TYPE_PS5:
+            return Device::PlayStation;
+        default:
+            return Device::Xbox;
+        }
+    };
+    Device device = Device::Keyboard;
+    bool first_pass = true;
+    bool any_key_held = true;
+    bool any_pad_held = true;
 
     while (true) {
         SDL_PumpEvents();
@@ -296,23 +342,64 @@ Choice Screen::Ask() {
             down[Left] = key(VK_LEFT) || key('A');
             down[Right] = key(VK_RIGHT) || key('D');
         }
-        bool pad_now = false;
-        for (DWORD index = 0; index < XUSER_MAX_COUNT; index++) {
-            XINPUT_STATE state{};
-            if (XInputGetState(index, &state) != ERROR_SUCCESS) {
-                continue;
+        // Any key or mouse button counts as using the keyboard.
+        bool any_key = false;
+        if (GetForegroundWindow() == s.parent) {
+            for (int code = 1; code < 0xff && !any_key; code++) {
+                any_key = (GetAsyncKeyState(code) & 0x8000) != 0;
             }
-            pad_now = true;
-            const WORD buttons = state.Gamepad.wButtons;
-            down[Confirm] |= (buttons & XINPUT_GAMEPAD_A) != 0;
-            down[Cancel] |= (buttons & XINPUT_GAMEPAD_B) != 0;
-            down[Left] |= (buttons & XINPUT_GAMEPAD_DPAD_LEFT) != 0 ||
-                          state.Gamepad.sThumbLX < -16000;
-            down[Right] |= (buttons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0 ||
-                           state.Gamepad.sThumbLX > 16000;
         }
-        if (pad_now != pad_present) {
-            pad_present = pad_now;
+        Device new_device = device;
+        if (any_key && !any_key_held) {
+            new_device = Device::Keyboard;
+        }
+        any_key_held = any_key;
+
+        int pad_count = 0;
+        SDL_JoystickID* ids = SDL_GetGamepads(&pad_count);
+        bool any_pad = false;
+        for (int i = 0; ids && i < pad_count; i++) {
+            SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i]);
+            if (!pad) {
+                pad = SDL_OpenGamepad(ids[i]);
+                if (!pad) {
+                    continue;
+                }
+                pads.opened.push_back(pad);
+            }
+            if (first_pass) {
+                // A controller that is plugged in is taken as the device in use until a key
+                // says otherwise.
+                new_device = device_of(pad);
+            }
+            const auto button = [&](SDL_GamepadButton which) {
+                return SDL_GetGamepadButton(pad, which);
+            };
+            const int stick = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+            const bool confirm = button(SDL_GAMEPAD_BUTTON_SOUTH);
+            const bool cancel = button(SDL_GAMEPAD_BUTTON_EAST);
+            const bool left = button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || stick < -16000;
+            const bool right = button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || stick > 16000;
+            bool used = confirm || cancel || left || right;
+            for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT && !used; b++) {
+                used = button(static_cast<SDL_GamepadButton>(b));
+            }
+            down[Confirm] |= confirm;
+            down[Cancel] |= cancel;
+            down[Left] |= left;
+            down[Right] |= right;
+            if (used) {
+                any_pad = true;
+                if (!any_pad_held) {
+                    new_device = device_of(pad);
+                }
+            }
+        }
+        SDL_free(ids);
+        any_pad_held = any_pad;
+        first_pass = false;
+        if (new_device != device) {
+            device = new_device;
             dirty = true;
         }
         const auto pressed = [&](Input input) { return down[input] && !held[input]; };
@@ -358,17 +445,27 @@ Choice Screen::Ask() {
             s.Centered(L"You will be asked again at the next start.", y, s.Px(34), DimInk);
             y += s.Px(130);
             // Only the prompts of the device in use are shown.
-            const std::wstring keys[2] = {pad_present ? L"A" : L"Enter", pad_present ? L"B" : L"Esc"};
+            using Button = Impl::Button;
+            const std::wstring keys[2] = {device == Device::Xbox ? L"A" : L"Enter",
+                                          device == Device::Xbox ? L"B" : L"Esc"};
+            const Button buttons[2] = {
+                device == Device::Keyboard ? Button::Key
+                : device == Device::Xbox   ? Button::Round
+                                           : Button::Cross,
+                device == Device::Keyboard ? Button::Key
+                : device == Device::Xbox   ? Button::Round
+                                           : Button::Circle,
+            };
             const std::wstring labels[2] = {L"Prepare", L"Skip"};
             const int between = s.Px(120);
             int total = between;
             for (int i = 0; i < 2; i++) {
-                const RECT area = s.Option(0, 0, keys[i], labels[i], false, false);
+                const RECT area = s.Option(0, 0, buttons[i], keys[i], labels[i], false, false);
                 total += area.right - area.left - s.Px(28);
             }
             int x = (s.width - total) / 2;
             for (int i = 0; i < 2; i++) {
-                areas[i] = s.Option(x, y, keys[i], labels[i], selected == i, true);
+                areas[i] = s.Option(x, y, buttons[i], keys[i], labels[i], selected == i, true);
                 x += areas[i].right - areas[i].left - s.Px(28) + between;
             }
             s.Show();
