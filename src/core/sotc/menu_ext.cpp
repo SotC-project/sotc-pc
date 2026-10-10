@@ -4,7 +4,10 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <mutex>
@@ -40,11 +43,11 @@ enum class Kind { None, Title, Pause };
 struct Root {
     float arrow_x;  // left edge of the arrow
     float arrow_y0; // bottom edge of the arrow on the first line
-    std::array<const char*, 2> lines;
+    std::array<const char*, 3> lines;
     int num_lines;
 };
-constexpr Root TitleRoot{-0.786f, 0.139f, {"Free Play", "Achievements"}, 2};
-constexpr Root PauseRoot{-0.695f, 0.087f, {"Achievements", nullptr}, 1};
+constexpr Root TitleRoot{-0.786f, 0.139f, {"Free Play", "Achievements", "Quit"}, 3};
+constexpr Root PauseRoot{-0.695f, 0.087f, {"Achievements", nullptr, nullptr}, 1};
 
 const Root& RootOf(Kind kind) {
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
@@ -140,6 +143,8 @@ void Activate(Kind kind, int index) {
         if (!Achievements::IsPanelOpen()) {
             Achievements::TogglePanel();
         }
+    } else if (line == "Quit") {
+        Menu::OpenQuit();
     }
 }
 
@@ -265,12 +270,21 @@ bool OnClick(float x, float y) {
     return true;
 }
 
+bool AtTitleRoot() {
+    int line = 0;
+    return Current(line) == Kind::Title;
+}
+
 void PassToGameSettings() {
     pass_settings = true;
 }
 
 bool HideArrow() {
-    return on_extra;
+    return on_extra || HideText();
+}
+
+bool HideText() {
+    return Menu::ReplacesGameMenu() || Achievements::ReplacesGameMenu();
 }
 
 void Draw() {

@@ -36,6 +36,9 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
+    /// Decided when the frame is made, from what that frame drew: shown black (see
+    /// Sotc::Menu::StartCovered).
+    bool sotc_cover{false};
 
     ImTextureID imgui_texture;
 };

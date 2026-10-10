@@ -5,6 +5,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/first_run.h"
+#include "core/sotc/loading.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
@@ -512,11 +513,10 @@ void L::Draw() {
 
     // Free play, the achievements and the PC settings are lines of the game's own menus.
     Sotc::MenuExt::Draw();
-    if (Sotc::Menu::StartCovered()) {
-        // A free play battle: black until the colossus's own loading screen is up.
-        GetForegroundDrawList()->AddRectFilled({0.0f, 0.0f}, GetIO().DisplaySize,
-                                               IM_COL32(0, 0, 0, 255));
-    }
+    // A free play battle starting: black, with the loading animation, until the battle is up.
+    // Without a recorded animation yet, the game's own is let through where it plays.
+    Sotc::Loading::Draw(Sotc::Loading::HasAnimation() ? Sotc::Menu::StartCovered(true)
+                                                      : Sotc::Menu::FrameCovered());
 
     if (show_quit_window) {
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();

@@ -31,6 +31,14 @@ bool KnowsTitleMenu();
 
 /// True once after a draw bound the game's menu arrow texture; the renderer then hands that
 /// draw's vertex data to ArrowDraw.
+/// Marks the end of a game frame, and how many textures that frame bound: a few for a plain
+/// screen, thousands for a scene.
+void EndFrame();
+u32 FrameBinds();
+/// True once after a texture was bound whose draw is to be left out; clears the mark.
+bool TakeSkipDraw();
+/// Test aid: leave out every draw that uses this texture (0 = none).
+void SetSkipProbe(u64 content_hash);
 bool TakeArrowDraw();
 /// Vertex data of the draw that shows the menu arrow: where on screen the game's cursor is.
 /// `viewport` is x scale, x offset, y scale, y offset of the draw's viewport.

@@ -20,6 +20,8 @@
 
 #include "common/logging/log.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/menu.h"
+#include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 
@@ -70,6 +72,9 @@ struct State {
     // lies inside the lower one. While it is pure black the player has no control yet.
     bool strip_seen = false;
     bool letterboxed = true;
+    // After a death: the game's Game Over screen (Retry, End) is up underneath the result.
+    bool game_over_seen = false;
+    Clock::time_point game_over_last{};
 };
 
 std::mutex mutex;
@@ -384,6 +389,33 @@ void Draw() {
         state.damage += state.health;
         Finish(true);
     }
+    // Retry on the game's Game Over screen starts the fight again: a new attempt, clock and
+    // health lost back at nothing, started by the first move as before.
+    if (state.phase == Phase::Died) {
+        const auto now = Clock::now();
+        if (Screens::GameOver()) {
+            state.game_over_seen = true;
+            state.game_over_last = now;
+        } else if (state.game_over_seen && Screens::Arrow()) {
+            // End was chosen: the game asks whether to leave for the main menu. That is not a
+            // retry; the wait below only counts time with no menu on screen.
+            state.game_over_last = now;
+            if (MenuExt::AtTitleRoot()) {
+                // Yes: the battle is over. Free play goes back to a plain start of the game.
+                state.phase = Phase::Off;
+                Menu::LeaveFreePlay();
+                return;
+            }
+        } else if (state.game_over_seen && now - state.game_over_last > std::chrono::seconds(2)) {
+            state.game_over_seen = false;
+            state.phase = Phase::Ready;
+            state.damage = 0.0f;
+            state.health = 1.0f;
+            state.bar_seen = false;
+            state.final_time = 0.0;
+            LOG_INFO(Lib_NpTrophy, "Challenge restarted after a retry");
+        }
+    }
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float scale = Ui::Scale();
     const float center = display.x * 0.5f;
@@ -460,9 +492,24 @@ void Draw() {
 
     // Results, set out like a page of the game's menus.
     const bool died = state.phase == Phase::Died;
+    if (died && state.game_over_seen && !Screens::GameOver() && Screens::Arrow()) {
+        return; // the game's own question is up; nothing goes over it
+    }
     // After a death the game's Game Over screen is underneath; it is covered whole, so the
     // two pages do not read through each other.
-    Ui::Veil(died ? 1.0f : 0.80f);
+    if (died && Screens::GameOver()) {
+        // All of it but the game's Retry and End lines, bottom left, and its confirm hint,
+        // bottom right: those are the way on from here.
+        constexpr ImU32 Black = IM_COL32(0, 0, 0, 255);
+        const float w = display.x, h = display.y;
+        draw->AddRectFilled({0.0f, 0.0f}, {w, h * 0.875f}, Black);
+        draw->AddRectFilled({w * 0.17f, h * 0.875f}, {w * 0.86f, h}, Black);
+        draw->AddRectFilled({0.0f, h * 0.965f}, {w * 0.17f, h}, Black);
+        draw->AddRectFilled({w * 0.86f, h * 0.875f}, {w, h * 0.935f}, Black);
+        draw->AddRectFilled({w * 0.86f, h * 0.98f}, {w, h}, Black);
+    } else {
+        Ui::Veil(died ? 1.0f : 0.80f);
+    }
     float y = display.y * 0.13f;
     Caption(draw, 26.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
     y += 50.0f * scale;
@@ -500,7 +547,7 @@ void Draw() {
     row("Typical time", FormatMark(state.average), Ui::TextNormal);
     const int damage = static_cast<int>(state.damage * 100.0f + 0.5f);
     row("Health lost", fmt::format("{}%", damage), damage > 50 ? Warm : Ui::TextBright);
-    Ui::Prompt(draw, display.x * 0.95f, display.y * 0.90f, "MENU", Ui::Action::Menu);
+    Ui::Prompt(draw, display.x * 0.95f, display.y * 0.885f, "MENU", Ui::Action::Menu);
 }
 
 } // namespace Sotc::Challenge

@@ -9,6 +9,8 @@
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <ctime>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <iterator>
@@ -29,6 +31,7 @@
 #include "common/singleton.h"
 #include "core/file_sys/fs.h"
 #include "core/sotc/menu_ext.h"
+#include "core/sotc/screens.h"
 #include "input/input_handler.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -48,7 +51,7 @@ namespace Sotc::Menu {
 
 namespace {
 
-enum class Page { Main, FreePlay, Graphics, Controls };
+enum class Page { Main, FreePlay, Graphics, Controls, Quit };
 
 std::atomic_bool open{false};
 Page page = Page::Main;
@@ -589,12 +592,9 @@ std::vector<Row> BuildRows() {
                             }});
         }
         if (InFreePlay()) {
-            rows.push_back({"Return to Title", "", "Leave free play; the game restarts", true,
-                            false, [](int) { Relaunch("", ""); }});
-        }
-        if (InFreePlay()) {
-            rows.push_back(
-                {"Quit Game", "", "Close the game", true, false, [](int) { QuitGame(); }});
+            // Leaving to the desktop is on the main menu only.
+            rows.push_back({"Return to Main Menu", "", "Leave free play; the game restarts",
+                            true, false, [](int) { Relaunch("", ""); }});
             rows.push_back({"Resume", "", "Return to the game", true, false,
                             [](int) { open = false; }});
         } else {
@@ -602,6 +602,9 @@ std::vector<Row> BuildRows() {
             rows.push_back({"Back", "", "Return to the menu", true, false,
                             [](int) { open = false; }});
         }
+    } else if (page == Page::Quit) {
+        rows.push_back({"No", "", "", true, false, [](int) { open = false; }});
+        rows.push_back({"Yes", "", "", true, false, [](int) { QuitGame(); }});
     } else if (page == Page::FreePlay) {
         const std::string target = fmt::format(
             "Target time {}{}", Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
@@ -718,6 +721,8 @@ const char* PageTitle() {
         return "Graphics";
     case Page::Controls:
         return "Key Bindings";
+    case Page::Quit:
+        return "Quit to desktop?";
     default:
         return InFreePlay() ? "Shadow of the Colossus" : "Settings";
     }
@@ -746,6 +751,66 @@ void OpenFreePlay() {
     open = true;
 }
 
+void OpenQuit() {
+    capture_row = -1;
+    GoTo(Page::Quit);
+    opened_on_page = true;
+    wait_for_release = true;
+    open = true;
+}
+
+namespace {
+std::atomic_bool frame_covered{true};
+}
+
+void SetFrameCovered(bool covered) {
+    frame_covered = covered;
+}
+
+bool FrameCovered() {
+    // Until the first game frame arrives a free play start is black.
+    return frame_covered && StartCovered(true);
+}
+
+void LeaveFreePlay() {
+    if (InFreePlay()) {
+        Relaunch("", "");
+    }
+}
+
+bool ReplacesGameMenu() {
+    return open && !InFreePlay();
+}
+
+float SceneShift() {
+    // Eased over a third of a second each way; only on the title, whose picture has the
+    // tower on the right. The pause menu's picture is an even haze already.
+    static float shift = 0.0f;
+    static u64 last_ms = 0;
+    const u64 now = SDL_GetTicks();
+    const float step = last_ms == 0 ? 0.0f : std::min<float>(float(now - last_ms) / 330.0f, 1.0f);
+    last_ms = now;
+    const bool wanted = ReplacesGameMenu() && !Screens::PauseMenu();
+    shift = std::clamp(shift + (wanted ? step : -step), 0.0f, 1.0f);
+    return shift * shift * (3.0f - 2.0f * shift);
+}
+
+bool RecoverFromCrash() {
+    // Test runs are meant to show the fault, unless the restart itself is what is tested.
+    if (std::getenv("SOTC_SCRIPT") != nullptr && std::getenv("SOTC_TEST_RECOVER") == nullptr) {
+        return false;
+    }
+    // A fault soon after an earlier restart counts on; after ten good minutes it starts over.
+    const char* before = std::getenv("SOTC_CRASH_RESTARTS");
+    const int count = SDL_GetTicks() > 600000 ? 0 : before ? std::atoi(before) : 0;
+    if (count >= 2) {
+        return false;
+    }
+    SetEnv("SOTC_CRASH_RESTARTS", std::to_string(count + 1));
+    Relaunch("", "");
+    return true;
+}
+
 void OpenSettings() {
     capture_row = -1;
     GoTo(Page::Main);
@@ -760,13 +825,21 @@ std::atomic<u64> second_start_ms{0};
 } // namespace
 
 void OnGameFlowStart() {
+    {
+        // Wall clock, to set against the times in screenshot names.
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
+        char text[16]{};
+        std::strftime(text, sizeof(text), "%H%M%S", std::localtime(&seconds));
+        LOG_INFO(Core, "Game flow start {} at {}", flow_starts.load() + 1, text);
+    }
     if (++flow_starts == 2) {
         second_start_ms = SDL_GetTicks();
     }
 }
 
-bool StartCovered() {
-    static const bool free_play = InFreePlay();
+bool StartCovered(bool period_only) {
+    static const bool free_play = InFreePlay() && std::getenv("SOTC_NOCOVER") == nullptr;
     if (!free_play) {
         return false;
     }
@@ -775,9 +848,26 @@ bool StartCovered() {
     if (now > 90000) {
         return false;
     }
+    // The game's loading animation is shown as it is; what the cover hides is the start
+    // around it: the first frames, and the starting field the game shows for a moment before
+    // it moves on to the battle.
+    // The two are told apart by how much a frame draws: the loading screen binds a few dozen
+    // textures, a scene (and the blue frames of the warp between scenes) many more, an empty
+    // frame none.
     const u64 second = second_start_ms.load();
-    // The game's own loading screen is up shortly after the second announcement.
-    return second == 0 || now - second < 700;
+    if (second != 0 && now - second >= 700) {
+        return false;
+    }
+    if (period_only) {
+        return true;
+    }
+    // Once the starting field has been drawn, nothing more is shown until the battle: the
+    // frames between the two scenes (some of them plain blue) draw as little as the loading
+    // screen does.
+    static bool scene_seen = false;
+    const u32 binds = Screens::FrameBinds();
+    scene_seen |= binds >= 600;
+    return scene_seen || binds < 20;
 }
 
 void HotkeyToggle() {
@@ -828,6 +918,17 @@ void Draw() {
         (IsKeyDown(ImGuiKey_GamepadR3) && IsKeyPressed(ImGuiKey_GamepadL3, false));
     if (pad_combo && !Achievements::IsPanelOpen()) {
         HotkeyToggle();
+    }
+    // After a restart that followed a fault: say so for a while, bottom left.
+    static const bool recovered = [] {
+        const char* count = std::getenv("SOTC_CRASH_RESTARTS");
+        return count != nullptr && std::atoi(count) > 0;
+    }();
+    if (recovered && SDL_GetTicks() > 12000 && SDL_GetTicks() < 32000) {
+        const ImVec2 size = GetIO().DisplaySize;
+        Ui::Text(GetForegroundDrawList(), 24.0f * Ui::Scale(),
+                 {size.x * 0.03f, size.y * 0.94f}, Ui::TextNormal,
+                 "The game stopped unexpectedly and was started again.");
     }
     if (!open) {
         return;
@@ -883,16 +984,29 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
-    // Opened from one of the game's menus, the page covers it, as the game's own settings
-    // screen does; over a free play battle the picture stays visible.
-    Ui::Veil(InFreePlay() ? 0.72f : 0.97f);
-    const float title_x = display.x * 0.15f;
-    const float label_x = display.x * 0.20f;
-    const float value_x = display.x * 0.58f;
-    float y = display.y * 0.17f;
-    Ui::Text(draw, 60.0f * scale, {title_x, y}, Ui::TextBright, PageTitle());
-    y += 100.0f * scale;
-    const float row_height = 50.0f * scale;
+    // Opened from one of the game's menus, the page takes that menu's place: the game's
+    // lettering is left out meanwhile (see MenuExt::HideText) and the page is written where
+    // it stood, in ink on the game's picture, like the game's own sub-menus. Over a free play
+    // battle it is a pale page on a veil.
+    const bool in_place = !InFreePlay();
+    struct InkScope {
+        explicit InkScope(bool ink) {
+            Ui::SetInk(ink);
+        }
+        ~InkScope() {
+            Ui::SetInk(false);
+        }
+    } ink_scope{in_place};
+    if (!in_place) {
+        Ui::Veil(0.72f);
+    }
+    const float title_x = display.x * (in_place ? 0.076f : 0.15f);
+    const float label_x = display.x * (in_place ? 0.089f : 0.20f);
+    const float value_x = display.x * (in_place ? 0.40f : 0.58f);
+    float y = display.y * (in_place ? 0.318f : 0.17f);
+    Ui::Text(draw, (in_place ? 46.0f : 60.0f) * scale, {title_x, y}, Ui::TextBright, PageTitle());
+    y += (in_place ? 68.0f : 100.0f) * scale;
+    const float row_height = (in_place ? 45.0f : 50.0f) * scale;
     const float text_size = 34.0f * scale;
     // Long pages scroll to keep the selection in view.
     constexpr int MaxVisible = 11;
@@ -950,6 +1064,11 @@ void Draw() {
             {track_x, y + (track_bottom - y) * first_visible / (count - MaxVisible)},
             5.0f * scale, Ui::TextBright);
     }
+    // The foot of the title picture is dark stone: the description and the prompts are
+    // written pale there, as over a battle.
+    if (in_place && !Screens::PauseMenu()) {
+        Ui::SetInk(false);
+    }
     const Row& current = rows[selected];
     if (!current.description.empty()) {
         Ui::TextCentered(draw, 28.0f * scale, display.x * 0.5f, display.y * 0.86f,
@@ -968,7 +1087,8 @@ void Draw() {
     if (activate_row >= 0 && rows[activate_row].enabled && rows[activate_row].act) {
         rows[activate_row].act(activate_direction);
     } else if (back) {
-        if (page == Page::Main || (page == Page::FreePlay && opened_on_page)) {
+        if (page == Page::Main || page == Page::Quit ||
+            (page == Page::FreePlay && opened_on_page)) {
             open = false;
         } else {
             GoTo(Page::Main);

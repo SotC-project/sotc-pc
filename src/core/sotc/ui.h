@@ -21,6 +21,10 @@ inline constexpr ImU32 TextBright = IM_COL32(244, 242, 232, 255);
 inline constexpr ImU32 TextNormal = IM_COL32(196, 194, 184, 255);
 inline constexpr ImU32 TextDim = IM_COL32(120, 119, 112, 255);
 
+/// Ink: the page stands in the place of one of the game's own menus, on the game's picture
+/// with nothing behind it, so it is written as those menus are: near-black, no shadow.
+void SetInk(bool ink);
+bool IsInk();
 /// Height of the display in units of the 1080-line layout the sizes below are written in.
 float Scale();
 /// Darkens the whole picture behind an overlay screen.

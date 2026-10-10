@@ -313,6 +313,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             Input::test_mouse_delta[0] = std::stof(action.substr(6, star - 6));
             mouse_release_at =
                 now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
+        } else if (action == "fault") {
+            // Test aid: a fault nothing handles, to see what the program does about one.
+            volatile int* nowhere = nullptr;
+            *nowhere = 1;
+        } else if (action.starts_with("blank=")) {
+            Sotc::Screens::SetSkipProbe(std::stoull(action.substr(6), nullptr, 16));
         } else if (action.starts_with("texuse=")) {
             Sotc::Screens::DumpUsed(action.substr(7));
         } else if (action.starts_with("mousey=")) {

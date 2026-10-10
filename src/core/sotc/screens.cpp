@@ -17,6 +17,7 @@
 
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 
 namespace Sotc::Screens {
@@ -29,10 +30,11 @@ namespace {
 constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
 // Drawn only by the Game Over screen (the stone mask with Retry and End), found by comparing
-// what it draws with what battles, the pause menu and the title draw. All must be drawn at once.
-constexpr std::array<u64, 3> GameOverTextures{
+// what it draws on several deaths with what battles, the pause menu and the title draw. Both
+// must be drawn at once. (A third texture seen at first belongs to the sigil on the mask, which
+// is not always lit.)
+constexpr std::array<u64, 2> GameOverTextures{
     0x2b552bbe9ab54934ULL,
-    0xbae322672e7e8628ULL,
     0xbb2c6cf34aa4df52ULL,
 };
 
@@ -43,6 +45,14 @@ std::atomic<float> arrow_y{0.0f};
 std::atomic<u64> arrow_ms{0};
 std::atomic<u64> pause_seen_ms{0};
 std::array<std::atomic<u64>, GameOverTextures.size()> game_over_seen_ms{};
+
+// Draws that use a texture from this list are left out (see TakeSkipDraw).
+std::atomic<u64> skip_probe{0};
+std::atomic_bool skip_draw{false};
+
+// Texture binds since the last frame went to the screen, and in the frame before that.
+std::atomic<u32> binds_now{0};
+std::atomic<u32> binds_last{0};
 
 std::mutex used_mutex;
 std::set<u64> used;
@@ -65,6 +75,13 @@ bool Contains(const std::array<u64, N>& list, u64 hash) {
 } // namespace
 
 void TextureUsed(u64 content_hash) {
+    binds_now.fetch_add(1, std::memory_order_relaxed);
+    // The sheet all the lettering of the game's menus is drawn from.
+    constexpr u64 MenuLettering = 0xa7e173b9b30fa486ULL;
+    if (content_hash == skip_probe.load(std::memory_order_relaxed) ||
+        (content_hash == MenuLettering && MenuExt::HideText())) {
+        skip_draw.store(true, std::memory_order_relaxed);
+    }
     if (Contains(TitleMenuTextures, content_hash)) {
         title_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
         arrow_in_draw.store(true, std::memory_order_relaxed);
@@ -82,6 +99,15 @@ void TextureUsed(u64 content_hash) {
         std::scoped_lock lock{used_mutex};
         used.insert(content_hash);
     }
+}
+
+bool TakeSkipDraw() {
+    return skip_draw.load(std::memory_order_relaxed) &&
+           skip_draw.exchange(false, std::memory_order_relaxed);
+}
+
+void SetSkipProbe(u64 content_hash) {
+    skip_probe = content_hash;
 }
 
 bool TakeArrowDraw() {
@@ -158,6 +184,14 @@ bool GameOver() {
         }
     }
     return true;
+}
+
+void EndFrame() {
+    binds_last.store(binds_now.exchange(0, std::memory_order_relaxed), std::memory_order_relaxed);
+}
+
+u32 FrameBinds() {
+    return binds_last.load(std::memory_order_relaxed);
 }
 
 bool PauseMenu() {

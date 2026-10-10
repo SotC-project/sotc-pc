@@ -16,6 +16,8 @@ UnlockResult Unlock(s32 id, s32* platinum_id);
 float NotificationVolume();
 
 void TogglePanel();
+/// True while the list is shown in the place of the game's title or pause menu.
+bool ReplacesGameMenu();
 bool IsPanelOpen();
 /// Draws the panel when open and handles the pad shortcut (L3 + R3); F2 arrives through the
 /// hotkey layer. Call once per frame.

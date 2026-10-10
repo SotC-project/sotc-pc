@@ -125,14 +125,41 @@ void Veil(float opacity) {
         {0.0f, 0.0f}, size, IM_COL32(0, 0, 0, static_cast<int>(255.0f * opacity)));
 }
 
+namespace {
+bool ink_mode = false;
+
+ImU32 Inked(ImU32 color) {
+    if (!ink_mode) {
+        return color;
+    }
+    if (color == TextBright || color == TextNormal) {
+        return IM_COL32(22, 22, 20, 255);
+    }
+    if (color == TextDim) {
+        return IM_COL32(22, 22, 20, 110);
+    }
+    return color;
+}
+} // namespace
+
+void SetInk(bool ink) {
+    ink_mode = ink;
+}
+
+bool IsInk() {
+    return ink_mode;
+}
+
 ImVec2 TextSize(float size, const std::string& text) {
     return Serif()->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
 }
 
 void Text(ImDrawList* draw, float size, ImVec2 pos, ImU32 color, const std::string& text) {
-    draw->AddText(Serif(), size, {pos.x + 1.5f, pos.y + 1.5f}, IM_COL32(0, 0, 0, 190),
-                  text.c_str());
-    draw->AddText(Serif(), size, pos, color, text.c_str());
+    if (!ink_mode) {
+        draw->AddText(Serif(), size, {pos.x + 1.5f, pos.y + 1.5f}, IM_COL32(0, 0, 0, 190),
+                      text.c_str());
+    }
+    draw->AddText(Serif(), size, pos, Inked(color), text.c_str());
 }
 
 void TextCentered(ImDrawList* draw, float size, float center_x, float y, ImU32 color,
@@ -149,7 +176,7 @@ void Triangle(ImDrawList* draw, ImVec2 center, float size, bool point_right, ImU
     const float d = point_right ? 1.0f : -1.0f;
     draw->AddTriangleFilled({center.x + d * size * 0.55f, center.y},
                             {center.x - d * size * 0.45f, center.y - size * 0.6f},
-                            {center.x - d * size * 0.45f, center.y + size * 0.6f}, color);
+                            {center.x - d * size * 0.45f, center.y + size * 0.6f}, Inked(color));
 }
 
 float Prompt(ImDrawList* draw, float right_x, float y, const char* label, Action action) {

@@ -567,6 +567,10 @@ s32 Depth(Voice& v, u32 guard = 0) {
 void WriteOutput(const Voice& v, const OrbisNgs2RenderBufferInfo& info, u32 frames) {
     const u32 ch = info.numChannels;
     const bool is_float = info.waveformType == PcmF32L;
+    // Never past the end of the game's buffer, whatever the grain of the first output was.
+    if (ch != 0) {
+        frames = std::min<u32>(frames, u32(info.bufferSize / ((is_float ? 4 : 2) * ch)));
+    }
     for (u32 n = 0; n < frames; ++n) {
         for (u32 c = 0; c < ch; ++c) {
             // Peaks reach about 1.3 in busy scenes; bend them over above 0.8 instead of

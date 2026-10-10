@@ -21,6 +21,7 @@ inline std::atomic<u32> images_freed{0};
 inline std::atomic<u32> gpu_busy_us{0};       ///< time the command processor spent working
 inline std::atomic<u32> memory_faults{0};     ///< writes and reads caught on tracked game memory
 inline std::atomic<u32> file_read_kb{0};      ///< data the game read from its files
+inline std::atomic<u64> file_read_total_kb{0}; ///< the same, never reset
 inline std::atomic<u32> file_read_us{0};      ///< time those reads took
 
 /// Running totals of the renderer's stage timers, in processor ticks: draws, compute

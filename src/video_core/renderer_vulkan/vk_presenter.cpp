@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include "core/sotc/challenge.h"
+#include "core/sotc/loading.h"
+#include "core/sotc/menu.h"
+#include "core/sotc/screens.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -880,6 +883,11 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         }
     }
 
+    Sotc::Screens::EndFrame();
+    frame->sotc_cover = Sotc::Menu::StartCovered();
+    if (std::getenv("SOTC_BINDLOG")) {
+        LOG_ERROR(Render, "frame binds {}", Sotc::Screens::FrameBinds());
+    }
     // Challenge runs read the health bar off a thin strip of the game image.
     std::optional<ScreenshotReadback> pending_hud_strip;
     if (Sotc::Challenge::WantsHudStrip()) {
@@ -905,6 +913,58 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             .imageExtent = {strip_width, strip_height, 1},
         };
         runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+    }
+
+    // The game's loading animation is recorded once, from the corner it is drawn in.
+    std::optional<ScreenshotReadback> pending_loading_shot;
+    if (Sotc::Loading::WantsCapture()) {
+        using namespace Sotc::Loading;
+        const s32 x0 = static_cast<s32>(image_size.width * RegionLeft);
+        const s32 y0 = static_cast<s32>(image_size.height * RegionTop);
+        const u32 shot_width = static_cast<u32>(image_size.width * RegionRight) - x0;
+        const u32 shot_height = static_cast<u32>(image_size.height * RegionBottom) - y0;
+        auto& readback = pending_loading_shot.emplace(
+            instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{}, shot_width,
+            shot_height, view_info.format, false);
+        const vk::BufferImageCopy copy_region = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {x0, y0, 0},
+            .imageExtent = {shot_width, shot_height, 1},
+        };
+        runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+    }
+
+    // Two thin rows of the picture, to tell a plain black load screen.
+    std::array<std::optional<ScreenshotReadback>, 2> pending_probes;
+    if (Sotc::Loading::WantsProbe()) {
+        for (size_t row = 0; row < pending_probes.size(); row++) {
+            const s32 y0 = static_cast<s32>(image_size.height * Sotc::Loading::ProbeRows[row]);
+            auto& readback = pending_probes[row].emplace(
+                instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{},
+                image_size.width, 2u, view_info.format, false);
+            const vk::BufferImageCopy copy_region = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource{
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageOffset = {0, y0, 0},
+                .imageExtent = {image_size.width, 2, 1},
+            };
+            runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+        }
     }
 
     // Continue with host-side passes that draw the displayed (scaled) frame.
@@ -936,7 +996,25 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             WriteRecordFrame(frame_data.value());
         });
     }
-    if (pending_hud_strip) {
+    for (auto& probe : pending_probes) {
+        if (probe) {
+            draw_scheduler.DeferPriorityOperation([row = std::move(probe)]() {
+                std::vector<u8> rgba;
+                if (ConvertReadbackToRgba8(row.value(), rgba)) {
+                    Sotc::Loading::OnProbe(rgba);
+                }
+            });
+        }
+    }
+    if (pending_loading_shot) {
+        draw_scheduler.DeferPriorityOperation([shot = std::move(pending_loading_shot)]() {
+            std::vector<u8> rgba;
+            if (shot.has_value() && ConvertReadbackToRgba8(shot.value(), rgba)) {
+                Sotc::Loading::OnCapture(rgba, shot->width, shot->height);
+            }
+        });
+    }
+    if (pending_hud_strip.has_value()) {
         draw_scheduler.DeferPriorityOperation([strip = std::move(pending_hud_strip)]() {
             std::vector<u8> rgba;
             if (ConvertReadbackToRgba8(strip.value(), rgba)) {
@@ -1059,6 +1137,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     ASSERT_MSG(reset_result == vk::Result::eSuccess,
                "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
 
+    if (is_game_frame && !is_reusing_frame) {
+        Sotc::Menu::SetFrameCovered(frame->sotc_cover);
+    }
     ImGuiID dockId = ImGui::Core::NewFrame(is_reusing_frame);
 
     const vk::Image swapchain_image = swapchain.Image();
@@ -1179,7 +1260,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 };
 
                 ImGui::SetCursorPos(ImGui::GetCursorStartPos() + offset);
-                ImGui::Image(game_texture, size);
+                // A page in the place of the title menu: the picture is drawn enlarged, held
+                // at its left edge, so the page lies over the sky and not over the tower.
+                const float shift = Sotc::Menu::SceneShift();
+                const float part = 1.0f / (1.0f + 0.32f * shift);
+                const float top = 0.30f * (1.0f - part);
+                ImGui::Image(game_texture, size, {0.0f, top}, {part, top + part});
 
                 if (EmulatorSettings.IsNullGPU()) {
                     Core::Devtools::Layer::DrawNullGpuNotice();

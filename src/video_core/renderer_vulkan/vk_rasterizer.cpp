@@ -404,10 +404,13 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
 
     PrepareRenderState(pipeline);
+    Sotc::Screens::TakeSkipDraw();
     if (!BindResources(pipeline)) {
         ++g_stats.bind_failed;
         return;
     }
+    // Set while binding when the draw uses a texture that is to stay off the screen.
+    const bool left_out = Sotc::Screens::TakeSkipDraw();
     ++g_stats.drawn;
     g_stats.verts_max = std::max<u32>(g_stats.verts_max, regs.num_indices);
     if (DrawLogActive()) {
@@ -453,7 +456,8 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     auto& cmdbuf = scheduler.Stream();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
 
-    if (is_indexed) {
+    if (left_out) {
+    } else if (is_indexed) {
         cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
                            s32(vertex_offset), instance_offset);
     } else {

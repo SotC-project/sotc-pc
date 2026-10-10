@@ -5,6 +5,7 @@
 // not ship, so the list below carries the published English texts. Icons in the package are plain
 // PNGs and are read from the game's own files.
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -27,6 +28,7 @@
 #include "core/file_sys/fs.h"
 #include "core/libraries/np/trophy_ui.h"
 #include "core/sotc/achievements.h"
+#include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 #include "imgui/imgui_texture.h"
 
@@ -340,7 +342,24 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
-    Ui::Veil(0.95f); // a game menu is usually underneath; cover it
+    // Opened from the title or pause menu, the list takes the menu's place the way the game's
+    // own screens do (its Settings, for one): the picture washed out pale, the text in ink.
+    // Over a free play battle it is a pale list on a dark veil.
+    const bool in_place = ReplacesGameMenu();
+    struct InkScope {
+        explicit InkScope(bool ink) {
+            Ui::SetInk(ink);
+        }
+        ~InkScope() {
+            Ui::SetInk(false);
+        }
+    } ink_scope{in_place};
+    if (!in_place) {
+        Ui::Veil(0.80f);
+    } else if (!Screens::PauseMenu()) {
+        // The pause menu has washed its picture out already; the title has not.
+        draw->AddRectFilled({0.0f, 0.0f}, display, IM_COL32(212, 211, 204, 226));
+    }
     const float left = display.x * 0.15f;
     const float right = display.x * 0.85f;
     float top = display.y * 0.10f;
@@ -400,7 +419,8 @@ void Draw() {
             status += fmt::format("   -   {}", date);
         }
         Ui::TextRight(draw, 26.0f * scale, right, y + 22.0f * scale,
-                      done ? GradeColor(entry.grade) : Ui::TextDim, status);
+                      !done ? Ui::TextDim : in_place ? Ui::TextBright : GradeColor(entry.grade),
+                      status);
         draw->AddLine({left, y + row - 1.0f}, {right, y + row - 1.0f}, IM_COL32(70, 70, 66, 160));
     }
     draw->PopClipRect();
@@ -415,6 +435,11 @@ void Draw() {
     float prompt_y = display.y * 0.865f;
     prompt_y += Ui::Prompt(draw, prompt_x, prompt_y, "SCROLL", Ui::Action::Choose);
     Ui::Prompt(draw, prompt_x, prompt_y, "BACK", Ui::Action::Back);
+}
+
+bool ReplacesGameMenu() {
+    const char* free_play = std::getenv("SOTC_FREEPLAY");
+    return IsPanelOpen() && !(free_play && *free_play);
 }
 
 } // namespace Sotc::Achievements

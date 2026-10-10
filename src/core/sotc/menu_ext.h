@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "common/types.h"
 
 namespace Input {
@@ -29,6 +31,11 @@ int FilterLeftY(int value, Input::GameController* controller);
 bool OnClick(float x, float y);
 /// Draws the extra lines and runs the cursor bookkeeping. Call once per frame from the overlay.
 void Draw();
+/// True while the lettering of the game's menus is left out: one of this build's pages is
+/// shown in the menu's place.
+bool HideText();
+/// True while the game's title menu is on screen with its cursor on one of its lines.
+bool AtTitleRoot();
 /// Confirms the game's Settings line for real, once the port's settings page has closed.
 void PassToGameSettings();
 /// True while the cursor is on an extra line: the game's own arrow is then drawn blank.

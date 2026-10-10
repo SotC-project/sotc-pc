@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <fmt/format.h>
+#if defined(_WIN32)
+#include <xbyak/xbyak.h>
+#include <xbyak/xbyak_util.h>
+#endif
+#include "core/sotc/menu.h"
 #include "core/sotc/watchdog.h"
 #include "common/arch.h"
 #include "common/assert.h"
@@ -28,7 +34,7 @@ namespace Core {
 
 #if defined(_WIN32)
 
-static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
+static LONG SignalHandlerBody(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
     const auto* signals = Signals::Instance();
 
@@ -155,10 +161,75 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
                      trace);
         Sotc::Watchdog::WriteCrashStack(pExp->ContextRecord,
                                         pExp->ExceptionRecord->ExceptionInformation[1]);
+        // The game's own code faults now and then while it loads (seen inside its memory
+        // allocator); rather than just close, the game is started again.
+        if (Sotc::Menu::RecoverFromCrash()) {
+            LOG_CRITICAL(Debug, "Restarting the game after the fault");
+        }
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// The handler's own work is done on a stack of the runtime's, not on the stack of the thread
+// that faulted. The game runs much of its code on fibers with stacks of 16 to 64 KiB that it
+// takes from its heap, and writes to memory the GPU side watches fault all the time: handling
+// one goes many calls deep (page tracking, buffer and texture caches). On a small fiber stack
+// that ran off its end into whatever the heap held below it, which showed up later as faults
+// in the game's allocator and job code. What Windows itself puts on the faulting stack before
+// the handler is called (the exception record and context, a few KiB) cannot be moved.
+constexpr size_t HandlerStackSize = 1024 * 1024;
+
+using StackCall = LONG (*)(LONG (*)(EXCEPTION_POINTERS*) noexcept, EXCEPTION_POINTERS*, void*);
+
+static StackCall MakeStackCall() {
+    using namespace Xbyak::util;
+    static Xbyak::CodeGenerator code{4096};
+    const auto entry = code.getCurr<StackCall>();
+    // rcx = function, rdx = its argument, r8 = top of the stack to run it on.
+    code.push(rbp);
+    code.mov(rbp, rsp);
+    code.mov(rsp, r8);
+    code.and_(rsp, ~0xFULL);
+    code.sub(rsp, 32);
+    code.mov(rax, rcx);
+    code.mov(rcx, rdx);
+    code.call(rax);
+    code.mov(rsp, rbp);
+    code.pop(rbp);
+    code.ret();
+    return entry;
+}
+
+static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
+    static const bool own_stack = std::getenv("SOTC_NO_ALTSTACK") == nullptr;
+    static const StackCall stack_call = MakeStackCall();
+    static thread_local u8* handler_stack = nullptr;
+    if (!own_stack) {
+        return SignalHandlerBody(pExp);
+    }
+    if (handler_stack == nullptr) {
+        handler_stack = static_cast<u8*>(
+            VirtualAlloc(nullptr, HandlerStackSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    }
+    const u8* here = reinterpret_cast<const u8*>(&pExp);
+    // No stack to be had, or a fault inside the handler itself: carry on where we are.
+    if (handler_stack == nullptr ||
+        (here >= handler_stack && here < handler_stack + HandlerStackSize)) {
+        return SignalHandlerBody(pExp);
+    }
+    // Windows checks stack addresses against these bounds when it unwinds.
+    auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
+    void* const base = tib->StackBase;
+    void* const limit = tib->StackLimit;
+    tib->StackBase = handler_stack + HandlerStackSize;
+    tib->StackLimit = handler_stack;
+    const LONG result =
+        stack_call(SignalHandlerBody, pExp, handler_stack + HandlerStackSize - 64);
+    tib->StackBase = base;
+    tib->StackLimit = limit;
+    return result;
 }
 
 #else

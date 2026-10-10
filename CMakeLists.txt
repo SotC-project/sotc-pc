@@ -644,6 +644,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/sotc/achievements.h
             src/core/sotc/challenge.cpp
             src/core/sotc/challenge.h
+            src/core/sotc/loading.cpp
+            src/core/sotc/loading.h
             src/core/sotc/menu.cpp
             src/core/sotc/first_run.cpp
             src/core/sotc/first_run.h
