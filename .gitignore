@@ -1,0 +1,42 @@
+# The runtime is its own repository.
+/runtime/
+/toolchain/
+
+# Never commit game data or anything made from it.
+*.bin
+!dist/glyphs/**/*.bin
+*.psarc
+*.pkg
+*.sfo
+*.trp
+*.raw
+*.dds
+eboot*
+sce_sys/
+sce_module/
+savedata*/
+**/sotc_textures/
+**/unknown/
+**/dump*/
+
+# Per-user state, caches, logs, builds, captures.
+/dist/user/*
+!/dist/user/config.json
+!/dist/user/input_config/
+/testrun*/
+/repro*/
+/pgo/
+/caps/
+*.log
+*.exe
+*.dll
+*.pdb
+*.ico
+*.pack
+*.spv
+*.mp4
+*.mkv
+/showcase/*.png
+/showcase_raw/
+dist/launch.ini
+dist/desktop.ini

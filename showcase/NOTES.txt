@@ -1,0 +1,96 @@
+Shadow of the Colossus - PC build: showcase captured 2026-10-09, about 10:20-10:40.
+
+How these were made
+- By scripted keyboard and mouse input, not by a person playing, in a separate test profile
+  (your saves and settings were not used or changed).
+- From the optimised Release build of the same code as the program behind your shortcut
+  (dist\ShadowOfTheColossus.exe, built 09:44), plus a capture hook added for this recording.
+- Graphics: the settings currently chosen in Settings.bat, 1920x1080 game image.
+- Radeon RX 9060 XT. No Intel or NVIDIA GPU was available to test.
+
+Files
+- 01_shrine.png                      Start of a new game in the Shrine of Worship.
+- 02_open_field_agro_colossus.png    Riding Agro in the fourth colossus's field.
+- 03_agro.png, 04_riding_agro.png    Agro, mounted with Left Shift.
+- 05-07_colossus_gaius_*.png         Third colossus (Gaius): intro, raised sword, the field.
+- 08_keyboard_prompt_and_challenge_clock.png
+                                     In-game hint showing a keyboard key instead of a pad
+                                     button, with the challenge clock at the top.
+- 09_pc_menu.png                     The PC menu (F2 or L3 + R3).
+- 10_free_play_menu.png              Free play: colossus, difficulty, challenge, helpers.
+- 11_achievements_panel.png          Achievements panel.
+- 12_challenge_result.png            Challenge results screen. This ending was triggered by a
+                                     test command, not by defeating the colossus.
+- gameplay_gaius.mp4                 46 s, 1280x720 H.264, with the game's own sound. Third
+                                     colossus arena: walking, camera, raising the sword, jump,
+                                     roll, sword swings. Recorded at 960x540 and scaled up.
+No title-screen picture: the scripted run captured the pause menu instead.
+
+What is still unverified or broken
+- No one has played this build yet. "Fully playable" is not confirmed.
+- The 08:41 start-up freeze: fixed in testing (a progress window now shows while saved shaders
+  load), not yet confirmed in your own session.
+- Mist particles are switched off: they render far too bright and the cause is unknown.
+- A rare "Device lost" crash while loading an arena (seen twice in testing) is unexplained.
+- Seven controller button pictures in hints are still the PlayStation ones when using keyboard
+  or an Xbox pad: L1, R1, L3, R3, right stick, d-pad up, options, touchpad.
+- Not confirmed by ear or in play: sound on colossus stomps and impacts, climbing and stabbing a
+  colossus, DualSense buttons and sticks.
+- The menu pointer (stone arrow) has not been seen on screen, only its image file.
+- Achievements: popup and panel work with simulated unlocks; no real unlock has happened yet.
+- Challenge mode: damage tracking was confirmed in a real fight; a real colossus defeat and a
+  real death ending the run have not been seen. Time attack limits for colossi 12-15 and the
+  "typical player" times are estimates.
+- Easy and Hard start without errors; whether they change the fight is unconfirmed.
+- This is the PS4 game's own code running on a translation layer derived from shadPS4. It is
+  not, and cannot be made, a native recompile: no source code for the game exists.
+
+Update 10:50 - menus and results screen redone after your feedback
+- 09, 10 and 12 are new captures: the PC menu, free play menu and results screen now follow
+  the game's own menu layout (dark veil, serif text, triangle marker, prompts bottom right).
+- Prompts show only the device in use. 13_menus_playstation_icons.png and
+  13_menus_xbox_icons.png show the same screens with pad icons (forced in a test, no pad used).
+- The typeface is Garamond from this PC's fonts, chosen as close to the game's; it is not the
+  game's own font file.
+- Results wording is now: Time Attack / <colossus> - <difficulty> / "The colossus has fallen"
+  or "Wander has fallen" / Rank / Time, Target time, Average time, Damage taken.
+- The achievements panel (11) is restyled the same way (new capture, with two simulated unlocks).
+
+Update 11:30 - settings and key bindings inside the game, free play on the title screen
+- 14: the PC menu on the title screen, where Free Play now lives (F2 or L3 + R3). During normal
+  play the menu no longer offers Free Play; inside a free play battle it does, so you can pick
+  another colossus, plus "Return to Title".
+- 15, 16: Graphics and Settings page with everything Settings.bat offers except language.
+  None of it applies live: these are options the game reads when it starts, so "Apply and
+  Restart" saves them and restarts the game. Tested in the test profile (preset Low).
+- 17: Key Bindings page. Select an action, press the new key or mouse button; saved and active
+  at once. Tested by moving Jump to J.
+  Limits: one key per action after rebinding (second keys such as Enter for Jump are dropped);
+  the key pictures inside the game's own hints still show the default keys; controller buttons
+  are not rebindable here.
+- Found while testing: an intermittent crash in the audio thread when opening the game's own
+  Settings page from the pause menu (once in three tries). Not fixed yet; the crash handler now
+  records where it happens.
+
+Update 14:30 - benchmark, first-start behaviour, Settings rename
+- BENCHMARK.md: measured frame rates for the four presets in three scenes, resource use,
+  requirements (the minimum is an estimate), and why FSR 3.1, FSR 4 and XeSS are not offered.
+- The menu page is now called "Settings".
+- 18, 19: the two opening messages, captured from the screen. They show once, on the first
+  start, on a black screen before the game's own logos, with the game held meanwhile. These two
+  captures were taken before the text was enlarged by about 40%; the installed build shows it
+  larger. Your install has not shown them yet, so they will appear once on your next start.
+- First-start settings for a new player: tested in a throwaway empty profile (it chose Ultra,
+  1080p, fullscreen, VSync on for this PC). "New player" means an install that has never been
+  played: no play time and no save. Yours has both, so nothing of yours is changed.
+- A dialog from the underlying runtime that used to appear on a brand-new profile's first start
+  (a question about migrating old saves) is removed; it would have sat in front of the game.
+- The optimised build now records a readable call stack if it crashes or stalls
+  (dist\user\log\crash_stack.txt, hang_stacks.txt).
+
+- Shader preparation is shown inside the game window before anything else (20, 21). It is asked
+  for at each start until it has run once for the installed build and graphics driver; after that
+  it runs unasked and takes seconds. Skipping starts the game at once with pauses while shaders
+  compile during play. Measured on the test profile, driver cache warm, launch to first frame:
+  prepared 9 s, skipped 5 s; first 75 s of play: prepared 4 hitches, worst frame 0.44 s;
+  skipped 37 hitches, worst frame 1.8 s, the first 9 s at 13-48 FPS.
