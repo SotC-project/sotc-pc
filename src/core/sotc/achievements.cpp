@@ -340,7 +340,7 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
-    Ui::Veil(0.80f);
+    Ui::Veil(0.95f); // a game menu is usually underneath; cover it
     const float left = display.x * 0.15f;
     const float right = display.x * 0.85f;
     float top = display.y * 0.10f;

@@ -460,7 +460,9 @@ void Draw() {
 
     // Results, set out like a page of the game's menus.
     const bool died = state.phase == Phase::Died;
-    Ui::Veil(0.80f);
+    // After a death the game's Game Over screen is underneath; it is covered whole, so the
+    // two pages do not read through each other.
+    Ui::Veil(died ? 1.0f : 0.80f);
     float y = display.y * 0.13f;
     Caption(draw, 26.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
     y += 50.0f * scale;

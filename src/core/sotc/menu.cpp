@@ -592,9 +592,16 @@ std::vector<Row> BuildRows() {
             rows.push_back({"Return to Title", "", "Leave free play; the game restarts", true,
                             false, [](int) { Relaunch("", ""); }});
         }
-        rows.push_back({"Quit Game", "", "Close the game", true, false, [](int) { QuitGame(); }});
-        rows.push_back({"Resume", "", "Return to the game", true, false,
-                        [](int) { open = false; }});
+        if (InFreePlay()) {
+            rows.push_back(
+                {"Quit Game", "", "Close the game", true, false, [](int) { QuitGame(); }});
+            rows.push_back({"Resume", "", "Return to the game", true, false,
+                            [](int) { open = false; }});
+        } else {
+            // Opened from the game's Settings line: its menu, with its own way out, is behind.
+            rows.push_back({"Back", "", "Return to the menu", true, false,
+                            [](int) { open = false; }});
+        }
     } else if (page == Page::FreePlay) {
         const std::string target = fmt::format(
             "Target time {}{}", Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
@@ -876,7 +883,9 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
-    Ui::Veil(0.72f);
+    // Opened from one of the game's menus, the page covers it, as the game's own settings
+    // screen does; over a free play battle the picture stays visible.
+    Ui::Veil(InFreePlay() ? 0.72f : 0.97f);
     const float title_x = display.x * 0.15f;
     const float label_x = display.x * 0.20f;
     const float value_x = display.x * 0.58f;
