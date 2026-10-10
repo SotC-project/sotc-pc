@@ -21,8 +21,9 @@ namespace {
 
 // Textures drawn on that screen and on no other; found with SOTC_TEXUSE runs.
 constexpr std::array<u64, 0> TitleMenuTextures{};
-constexpr std::array<u64, 3> PauseMenuTextures{0x3e6ebf384eebcdcdULL, 0x53539718d28a642fULL,
-                                               0xf87d7fa10c4d64d9ULL};
+// (The third texture only the pause menu drew in that run is the roll button's picture, which
+// play hints show as well, so it is left out.)
+constexpr std::array<u64, 2> PauseMenuTextures{0x3e6ebf384eebcdcdULL, 0x53539718d28a642fULL};
 
 std::atomic<u64> title_seen_ms{0};
 std::atomic<u64> pause_seen_ms{0};
