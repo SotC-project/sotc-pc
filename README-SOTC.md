@@ -11,6 +11,4 @@ panel and extra lines in the game's own menus (`src/core/sotc/`).
 It contains no game data. Run it with your own, legally obtained copy of the game. The scripts
 that build, install and test it are in the companion wrapper repository.
 
-Differences from the build on the author's PC: the program icon is shadPS4's, and the
-achievements panel shows "Trophy 1", "Trophy 2", ... because the trophy names and descriptions
-are the game's text and are not published here.
+Difference from the build on the author's PC: the program icon is shadPS4's.
