@@ -376,8 +376,15 @@ void Draw() {
         draw->AddLine({center - half_width, y}, {center + half_width, y}, color, 1.5f * scale);
     };
     constexpr ImU32 RuleColor = IM_COL32(236, 233, 222, 110);
+    // A soft dark plate behind a block of figures, as behind the game's subtitles, so light
+    // lettering stays readable over bright stone and sky.
+    const auto plate = [&](float top, float bottom, float half_width) {
+        draw->AddRectFilled({center - half_width, top}, {center + half_width, bottom},
+                            IM_COL32(6, 6, 6, 118), 10.0f * scale);
+    };
 
     if (state.phase == Phase::Loading || state.phase == Phase::Ready) {
+        plate(26.0f * scale, (state.phase == Phase::Ready ? 250.0f : 210.0f) * scale, 300.0f * scale);
         float y = 44.0f * scale;
         Caption(draw, 24.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
         y += 40.0f * scale;
@@ -398,6 +405,7 @@ void Draw() {
         // taken so far on the right.
         const double elapsed = Elapsed();
         const bool over = elapsed > state.limit;
+        plate(16.0f * scale, 214.0f * scale, 215.0f * scale);
         float y = 30.0f * scale;
         Caption(draw, 20.0f * scale, center, y, 0.5f, Ui::TextNormal,
                 fmt::format("{}  -  {}", name, difficulty));
