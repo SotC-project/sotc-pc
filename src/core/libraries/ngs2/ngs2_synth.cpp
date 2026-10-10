@@ -6,6 +6,9 @@
 // voice, whose bus is written to the render buffers.
 
 #include <algorithm>
+#include <atomic>
+#include <process.h>
+#include <string>
 #include <cmath>
 #include <chrono>
 #include <cstdio>
@@ -27,6 +30,10 @@
 #include "core/libraries/ngs2/ngs2_sampler.h"
 #include "core/libraries/ngs2/ngs2_submixer.h"
 #include "core/libraries/ngs2/ngs2_synth.h"
+
+/// Sample frames written to the audio dump so far; the footage capture notes it at its first
+/// frame so sound and picture can be joined exactly.
+std::atomic<u64> g_sotc_audio_frames{0};
 
 namespace Libraries::Ngs2::Synth {
 
@@ -1059,8 +1066,25 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             // Test aid: SOTC_AUDIODUMP=<file> appends the first two channels of every rendered grain
             // as raw float32 (pre-limiter values would hide what the listener gets, so this is post).
             static FILE* dump = [] {
-                const char* path = std::getenv("SOTC_AUDIODUMP");
-                return path ? std::fopen(path, "wb") : nullptr;
+                // %p in the name becomes the process number; <file>.ms holds the clock time of
+                // the first grain, to line the sound up with captured frames.
+                const char* env = std::getenv("SOTC_AUDIODUMP");
+                if (!env) {
+                    return static_cast<FILE*>(nullptr);
+                }
+                std::string path = env;
+                if (const auto at = path.find("%p"); at != std::string::npos) {
+                    path.replace(at, 2, std::to_string(_getpid()));
+                }
+                if (FILE* mark = std::fopen((path + ".ms").c_str(), "w")) {
+                    std::fprintf(mark, "%lld\n",
+                                 static_cast<long long>(
+                                     std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count()));
+                    std::fclose(mark);
+                }
+                return std::fopen(path.c_str(), "wb");
             }();
             if (dump && i == 0 && buffers[i].numChannels >= 2 && buffers[i].waveformType == PcmF32L) {
                 static bool announced = false;
@@ -1076,6 +1100,7 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                 for (u32 n = 0; n < frames; ++n) {
                     std::fwrite(out + n * buffers[i].numChannels, sizeof(float), 2, dump);
                 }
+                g_sotc_audio_frames += frames;
             }
             // Temporary: output level meter, to confirm the synth produces signal.
             static float peak[4]{};

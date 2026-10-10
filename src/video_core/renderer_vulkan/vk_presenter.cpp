@@ -54,6 +54,7 @@
 #include <vk_mem_alloc.h>
 
 std::atomic<int> g_sotc_record{0};
+extern std::atomic<u64> g_sotc_audio_frames; // sample frames in the audio dump so far
 
 namespace Vulkan {
 
@@ -682,6 +683,15 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
     return {};
 }
 
+/// Time between captured frames: 30 per second, or SOTC_RECORD_FPS.
+static std::chrono::microseconds RecordInterval() {
+    static const int fps = [] {
+        const char* value = std::getenv("SOTC_RECORD_FPS");
+        return std::clamp(value ? std::atoi(value) : 30, 1, 120);
+    }();
+    return std::chrono::microseconds(1000000 / fps);
+}
+
 /// Footage capture: appends one frame, halved in size, as raw RGB24 to the SOTC_RECORD file.
 static void WriteRecordFrame(const ScreenshotReadback& frame) {
     static FILE* file = [] {
@@ -695,10 +705,45 @@ static void WriteRecordFrame(const ScreenshotReadback& frame) {
         if (const auto at = path.find("%p"); at != std::string::npos) {
             path.replace(at, 2, std::to_string(_getpid()));
         }
+        // <file>.ms holds the clock time of the first frame, to line the sound up with.
+        // <file>.ms holds the clock time of the first frame and how much sound had been dumped
+        // by then, to line the sound up with.
+        if (FILE* mark = std::fopen((path + ".ms").c_str(), "w")) {
+            std::fprintf(mark, "%lld %llu\n",
+                         static_cast<long long>(
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count()),
+                         static_cast<unsigned long long>(g_sotc_audio_frames.load()));
+            std::fclose(mark);
+        }
         return std::fopen(path.c_str(), "wb");
     }();
     std::vector<u8> rgba;
     if (!file || !ConvertReadbackToRgba8(frame, rgba)) {
+        return;
+    }
+    // The file must hold one frame per interval of real time, or the picture runs ahead of the
+    // sound: a frame that comes late is written again for every interval it missed.
+    static const auto first_time = std::chrono::steady_clock::now();
+    static u64 written = 0;
+    const u64 due = static_cast<u64>((std::chrono::steady_clock::now() - first_time) /
+                                     RecordInterval()) +
+                    1;
+    const u64 copies = std::clamp<u64>(due > written ? due - written : 1, 1, 600);
+    written += copies;
+    // SOTC_RECORD_FULL=1 keeps the frame at its own size (it takes a fast disk).
+    static const bool full_size = std::getenv("SOTC_RECORD_FULL") != nullptr;
+    if (full_size) {
+        std::vector<u8> rgb(static_cast<size_t>(frame.width) * frame.height * 3);
+        for (size_t i = 0, n = static_cast<size_t>(frame.width) * frame.height; i < n; i++) {
+            rgb[i * 3] = rgba[i * 4];
+            rgb[i * 3 + 1] = rgba[i * 4 + 1];
+            rgb[i * 3 + 2] = rgba[i * 4 + 2];
+        }
+        for (u64 i = 0; i < copies; i++) {
+            std::fwrite(rgb.data(), 1, rgb.size(), file);
+        }
         return;
     }
     const u32 w = frame.width / 2, h = frame.height / 2;
@@ -726,9 +771,12 @@ static void WriteRecordFrame(const ScreenshotReadback& frame) {
             }
         }
     }
-    std::fwrite(rgb.data(), 1, rgb.size(), file);
+    for (u64 i = 0; i < copies; i++) {
+        std::fwrite(rgb.data(), 1, rgb.size(), file);
+    }
     std::fflush(file);
 }
+
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
@@ -808,9 +856,9 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         static auto next_frame = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_frame) {
-            next_frame += std::chrono::microseconds(33333);
+            next_frame += RecordInterval();
             if (next_frame < now) {
-                next_frame = now + std::chrono::microseconds(33333);
+                next_frame = now + RecordInterval();
             }
             auto& readback = pending_record.emplace(
                 instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{},
@@ -1027,9 +1075,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         static auto next_frame = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_frame) {
-            next_frame += std::chrono::microseconds(33333);
+            next_frame += RecordInterval();
             if (next_frame < now) {
-                next_frame = now + std::chrono::microseconds(33333);
+                next_frame = now + RecordInterval();
             }
             record_this_frame = true;
         }
