@@ -20,6 +20,7 @@
 
 #include "common/logging/log.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 
 namespace Sotc::Challenge {
@@ -377,6 +378,10 @@ void Draw() {
         return;
     }
     std::lock_guard lock{mutex};
+    // Wander's death: the game puts up its Game Over screen.
+    if (state.phase == Phase::Running && Screens::GameOver()) {
+        Finish(true);
+    }
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float scale = Ui::Scale();
     const float center = display.x * 0.5f;

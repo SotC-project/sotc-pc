@@ -28,6 +28,12 @@ namespace {
 // menu only. So the title menu is "a menu without the pause menu's texture".
 constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
+// Drawn together by the Game Over screen. Some of them turn up one at a time in play, so the
+// screen is only recognised when all of them are drawn at once.
+constexpr std::array<u64, 7> GameOverTextures{
+    0x060094bbbc9a02c0ULL, 0x15d23b24ab67f95eULL, 0x2b552bbe9ab54934ULL, 0x3f5b9f7cc18f1b1aULL,
+    0xbb2c6cf34aa4df52ULL, 0xc8263d4cfbb3a9c3ULL, 0xce6b119b57b01a8eULL,
+};
 
 std::atomic<u64> title_seen_ms{0};
 std::atomic_bool arrow_in_draw{false};
@@ -35,6 +41,7 @@ std::atomic<float> arrow_x{0.0f};
 std::atomic<float> arrow_y{0.0f};
 std::atomic<u64> arrow_ms{0};
 std::atomic<u64> pause_seen_ms{0};
+std::array<std::atomic<u64>, 7> game_over_seen_ms{};
 
 std::mutex used_mutex;
 std::set<u64> used;
@@ -60,6 +67,11 @@ void TextureUsed(u64 content_hash) {
     if (Contains(TitleMenuTextures, content_hash)) {
         title_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
         arrow_in_draw.store(true, std::memory_order_relaxed);
+    }
+    for (size_t i = 0; i < GameOverTextures.size(); i++) {
+        if (GameOverTextures[i] == content_hash) {
+            game_over_seen_ms[i].store(SDL_GetTicks(), std::memory_order_relaxed);
+        }
     }
     if (Contains(PauseMenuTextures, content_hash)) {
         pause_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
@@ -136,6 +148,15 @@ void ArrowProbeBuffer(u32 index, const u8* data, u32 size) {
 
 bool TitleMenu() {
     return Recent(title_seen_ms) && !Recent(pause_seen_ms);
+}
+
+bool GameOver() {
+    for (const auto& seen : game_over_seen_ms) {
+        if (!Recent(seen)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool PauseMenu() {

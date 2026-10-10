@@ -24,6 +24,8 @@ bool Arrow();
 bool TitleMenu();
 /// True while the game's pause menu is on screen.
 bool PauseMenu();
+/// True while the game's Game Over screen (Retry / End) is on screen.
+bool GameOver();
 /// False when no texture is known for a screen yet, so callers can fall back.
 bool KnowsTitleMenu();
 
