@@ -41,9 +41,18 @@ public:
 
     void ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func);
 
+    /// Number of stored blobs of a type, found without reading any of them.
+    u32 CountBlobs(BlobType type);
+
+    /// Reads the pack: one file holding a copy of every blob, so that a start reads one file
+    /// front to back instead of thousands of small ones, which takes minutes on a hard disk
+    /// that has not read them since the PC started. `tick` is called while it loads.
+    void LoadPack(const std::function<void()>& tick);
+
 private:
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
+    std::filesystem::path pack_path{};
     bool opened{};
 };
 

@@ -517,10 +517,12 @@ void PipelineCache::WarmUp() {
     // Loading a few thousand pipelines takes tens of seconds on the window's own thread, and
     // minutes the first time a new program file runs (the graphics driver compiles them all
     // again). Show how far it is.
-    u32 expected_pipelines{};
-    Storage::DataBase::Instance().ForEachBlob(Storage::BlobType::PipelineKey,
-                                              [&](std::vector<u8>&&) { ++expected_pipelines; });
+    // Counted without reading the files: on a hard disk that alone took a minute after a
+    // restart of the PC, with no window answering the system yet.
+    const u32 expected_pipelines =
+        Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey);
     LoadingSplash splash{expected_pipelines};
+    Storage::DataBase::Instance().LoadPack([&] { splash.Update(0); });
     auto last_update = std::chrono::steady_clock::now();
 
     // Two threads are left for the rest of the system. SOTC_PRELOAD_THREADS=0 builds every
