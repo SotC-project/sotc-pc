@@ -21,24 +21,33 @@ cp "$f" "$f.bak"; printf '+nointro\r\n+skipSplash=true\r\n' >> "$f"
 # First instance: into the field, pause > Quit Game > Yes to reach the title menu, then record:
 # down to Free Play, open it, change a few options, Begin Battle.
 first="40:key=escape,43:key=down,44:key=down,45:key=down,47:key=enter,49:key=left,50:key=enter"
-first="$first,68:rec=ui,71:key=down,72:key=down,73:key=down,75:key=enter"
+# The Settings line first (the PC options are inside it), closed again, then Free Play.
+first="$first,68:rec=ui,70:key=down,72:key=enter,76:key=escape,78:key=down,79:key=down,81:key=enter"
 # Colossus to Gaius, Difficulty to Hard, Time Attack on (the page then offers nothing else), Begin Battle.
-first="$first,78:key=right,79:key=right,81:key=down,82:key=right,84:key=down,85:key=right"
-first="$first,89:key=down,92:key=enter,96:rec=stop,101:quit"
+first="$first,84:key=right,85:key=right,87:key=down,88:key=right,90:key=down,91:key=right"
+first="$first,95:key=down,98:key=enter,102:rec=stop,107:quit"
 # Second instance (the battle): record from the start; once Wander can move, a short run toward
 # the colossus, sword raised to the light, camera turns, the view of the colossus, swings, a roll
 # and a jump. The moves are short so he stays on the platform.
 second="4:rec=ui,52:mouse=-40*1200,54:key=r*2500,57:key=w*2000,60:key=leftbutton,61:key=leftbutton,62:key=leftbutton"
 second="$second,64:key=a*700,66:mouse=40*900,68:key=space,70:key=q*2500,73:mouse=-40*900,76:key=w*1500,80:key=leftbutton"
-second="$second,84:key=q*2000,90:key=s*1500,96:key=leftbutton"
-# The run should end by itself when the colossus kills Wander. If he is still alive at the end,
-# the test command ends it as a defeat; the log line "Challenge lost" tells which happened.
-second="$second,123:chal=dead,129:rec=stop,131:quit"
-env SOTC_HEADLESS=1 SOTC_MUTE=1 SOTC_SCRIPT="$first" SOTC_SCRIPT_NEXT="$second" \
+# From then on he keeps walking up to the colossus, which kills him sooner or later: the run
+# ends with the game's own Game Over. The loop below sees the result in the log and ends the
+# recording nine seconds later through the live script file; 330 s is only a backstop.
+for t in 90 105 120 135 150 165 180 195 210 225 240 255 270 285; do second="$second,$t:key=w*2500"; done
+second="$second,330:rec=stop,332:quit"
+live="$cap/live.txt"; : > "$live"
+log=user/log/shad_log.txt
+env SOTC_HEADLESS=1 SOTC_MUTE=1 SOTC_SCRIPT="$first" SOTC_SCRIPT_NEXT="$second" SOTC_SCRIPT_FILE="$live" \
     SOTC_RECORD="$cap/rec_%p.raw" SOTC_RECORD_FULL=1 SOTC_RECORD_FPS=30 SOTC_AUDIODUMP="$cap/aud_%p.f32" \
     ../runtime/Build/x64-Clang-RelWithDebInfo/shadps4.exe -f false --game "D:/Games/CUSA08809T/eboot.bin" > /dev/null 2>&1 &
 sleep 20
-for ((i = 0; i < 300; i++)); do
+ended=0
+for ((i = 0; i < 520; i++)); do
+    if [ "$ended" = "0" ] && grep -aqE "Challenge (lost|won)" "$log" 2>/dev/null; then
+        ended=1; grep -aE "Challenge (lost|won)" "$log" | cut -c1-160
+        (sleep 9; echo "rec=stop" >> "$live"; sleep 3; echo "quit" >> "$live") &
+    fi
     [ "$(tasklist | grep -ci "shadps4.exe")" = "0" ] && break
     [ "$(tasklist | grep -ci ShadowOfTheColossus)" != "0" ] && { echo "ABORTED: the user's game started"; break; }
     sleep 1
