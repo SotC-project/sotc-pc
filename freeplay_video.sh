@@ -28,17 +28,17 @@ first="$first,89:key=down,92:key=enter,96:rec=stop,101:quit"
 # Second instance (the battle): record from the start; once Wander can move, a short run toward
 # the colossus, sword raised to the light, camera turns, the view of the colossus, swings, a roll
 # and a jump. The moves are short so he stays on the platform.
-second="4:rec=ui,43:key=w*2500,46:mouse=40*1200,48:key=q*3500,52:mouse=-40*1200,54:key=r*2500"
-second="$second,57:key=w*2000,60:key=leftbutton,61:key=leftbutton,62:key=leftbutton,64:key=a*700,64:key=c"
-second="$second,66:mouse=40*900,68:key=space,70:key=q*2500,73:mouse=-40*900"
-# The script cannot bring a colossus down: the run is ended with the test command, which shows
-# the result page as a win.
-second="$second,76:chal=win,84:rec=stop,86:quit"
+second="4:rec=ui,52:mouse=-40*1200,54:key=r*2500,57:key=w*2000,60:key=leftbutton,61:key=leftbutton,62:key=leftbutton"
+second="$second,64:key=a*700,66:mouse=40*900,68:key=space,70:key=q*2500,73:mouse=-40*900,76:key=w*1500,80:key=leftbutton"
+second="$second,84:key=q*2000,90:key=s*1500,96:key=leftbutton"
+# The run should end by itself when the colossus kills Wander. If he is still alive at the end,
+# the test command ends it as a defeat; the log line "Challenge lost" tells which happened.
+second="$second,123:chal=dead,129:rec=stop,131:quit"
 env SOTC_HEADLESS=1 SOTC_MUTE=1 SOTC_SCRIPT="$first" SOTC_SCRIPT_NEXT="$second" \
     SOTC_RECORD="$cap/rec_%p.raw" SOTC_RECORD_FULL=1 SOTC_RECORD_FPS=30 SOTC_AUDIODUMP="$cap/aud_%p.f32" \
     ../runtime/Build/x64-Clang-RelWithDebInfo/shadps4.exe -f false --game "D:/Games/CUSA08809T/eboot.bin" > /dev/null 2>&1 &
 sleep 20
-for ((i = 0; i < 240; i++)); do
+for ((i = 0; i < 300; i++)); do
     [ "$(tasklist | grep -ci "shadps4.exe")" = "0" ] && break
     [ "$(tasklist | grep -ci ShadowOfTheColossus)" != "0" ] && { echo "ABORTED: the user's game started"; break; }
     sleep 1
