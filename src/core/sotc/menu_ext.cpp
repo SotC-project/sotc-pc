@@ -269,9 +269,10 @@ void RenameQuitLine(int pass) {
                                      u32(info.Type), wide);
                         }
                         auto* memory = Core::Memory::Instance();
-                        if (watched && !memory->IsValidMapping(reinterpret_cast<VAddr>(target),
-                                                               to.size())) {
-                            continue; // read-only memory of the program's own, not the game's
+                        // Only memory the game itself mapped, by the memory manager's records:
+                        // never the runtime's own or a driver's that happens to hold the words.
+                        if (!memory->IsValidMapping(reinterpret_cast<VAddr>(target), to.size())) {
+                            continue;
                         }
                         if (watched ? memory->TryWriteBacking(target, to.data(), to.size())
                                     : WriteProcessMemory(process, target, to.data(), to.size(),
