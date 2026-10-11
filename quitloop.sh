@@ -13,7 +13,7 @@ for ((n = 1; n <= runs; n++)); do
         crashed=$((crashed + 1))
         echo "run $n: CRASH $(grep -aE -m1 "Unhandled Exception|Assertion Failed|Unreachable" testrun/user/log/shad_log.txt | cut -c1-150)"
     else
-        echo "run $n: ok, flips $(grep -ac 'Flip: fps' testrun/user/log/shad_log.txt)"
+        echo "run $n: ok, flips $(grep -ac 'Flip: fps' testrun/user/log/shad_log.txt), late results dropped $(grep -a 'late compute results dropped' testrun/user/log/shad_log.txt | sed -E 's/^.*: ([0-9]+) late.*/\1/' | awk '{s+=$1} END{print s+0}')"
     fi
 done
 echo "crashed $crashed of $runs ($*)"
