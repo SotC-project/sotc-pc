@@ -437,7 +437,7 @@ bool HideArrow() {
 }
 
 bool HideText() {
-    return Menu::ReplacesGameMenu() || Achievements::ReplacesGameMenu();
+    return Menu::ReplacesGameMenu() || Achievements::ReplacesGameMenu() || Ui::DialogOpen();
 }
 
 void Draw() {
@@ -574,7 +574,7 @@ void Draw() {
         }
     }
 
-    if (!Known(kind) || PanelOpen()) {
+    if (!Known(kind) || PanelOpen() || Ui::DialogOpen()) {
         return;
     }
     const Root& root = RootOf(kind);

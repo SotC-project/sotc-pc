@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cmath>
 
+#include "common/types.h"
 #include "core/sotc/ui.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -111,6 +114,20 @@ ImFont* Serif() {
 
 void SetSerif(ImFont* font) {
     serif = font;
+}
+
+namespace {
+std::atomic<u64> dialog_ms{0};
+} // namespace
+
+// By the clock, not the frame count: the question is also asked from the render thread.
+void MarkDialog() {
+    dialog_ms = SDL_GetTicks() + 1;
+}
+
+bool DialogOpen() {
+    const u64 marked = dialog_ms.load(std::memory_order_relaxed);
+    return marked != 0 && SDL_GetTicks() + 1 - marked < 120;
 }
 
 float Scale() {

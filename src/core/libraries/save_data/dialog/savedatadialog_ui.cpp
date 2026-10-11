@@ -11,6 +11,7 @@
 #include "core/file_format/psf.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/save_data/save_instance.h"
+#include "core/sotc/ui.h"
 #include "imgui/imgui_std.h"
 #include "savedatadialog_ui.h"
 
@@ -26,6 +27,17 @@ constexpr auto SAVE_ICON_PADDING = ImVec2{8.0f, 2.0f};
 static constexpr ImVec2 BUTTON_SIZE{100.0f, 30.0f};
 constexpr auto FOOTER_HEIGHT = BUTTON_SIZE.y + 15.0f;
 static constexpr float PROGRESS_BAR_WIDTH{0.8f};
+
+// The window is drawn as the game's own pages are: the picture washed out pale, the text in
+// ink, in the serif face.
+static constexpr ImU32 PAGE_INK = IM_COL32(22, 22, 20, 255);
+static float g_font_scale = 1.0f;
+// The line of the list that last held the focus; -1 before any did.
+static int g_focused_item = -1;
+
+static void SetFontScale(float scale) {
+    ImGui::SetWindowFontScale(scale * g_font_scale);
+}
 
 static ::Core::FileSys::MntPoints* g_mnt =
     Common::Singleton<::Core::FileSys::MntPoints>::Instance();
@@ -406,13 +418,42 @@ void SaveDialogUi::Draw() {
     if (first_render || !io.NavActive) {
         SetNextWindowFocus();
     }
+    // A list takes the place of the menu it was opened from: the whole picture is washed out
+    // behind it, as behind the game's own pages. A message or a progress bar is a pale slip.
+    const bool list = state->GetMode() == SaveDataDialogMode::LIST;
+    if (list) {
+        Sotc::Ui::MarkDialog();
+        SetNextWindowPos({0.0f, 0.0f});
+        SetNextWindowSize(io.DisplaySize);
+    }
+    PushStyleVar(ImGuiStyleVar_WindowPadding,
+                 list ? ImVec2{io.DisplaySize.x * 0.17f, io.DisplaySize.y * 0.14f}
+                      : ImVec2{16.0f, 12.0f});
+    ImFont* const serif = Sotc::Ui::Serif();
+    PushFont(serif, 0.0f); // the size stays
+    g_font_scale = 1.0f;
+    PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    PushStyleColor(ImGuiCol_WindowBg,
+                   list ? IM_COL32(226, 224, 214, 238) : IM_COL32(226, 224, 214, 246));
+    PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    PushStyleColor(ImGuiCol_Text, PAGE_INK);
+    PushStyleColor(ImGuiCol_Border, IM_COL32(22, 22, 20, 150));
+    PushStyleColor(ImGuiCol_Separator, IM_COL32(22, 22, 20, 110));
+    PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0, 0, 0, 30));
+    PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(0, 0, 0, 55));
+    PushStyleColor(ImGuiCol_NavHighlight, PAGE_INK);
+    PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 28));
+    PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(22, 22, 20, 200));
+    PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(0, 0, 0, 0));
+    PushStyleColor(ImGuiCol_ScrollbarGrab, IM_COL32(22, 22, 20, 120));
     if (Begin("Save Data Dialog##SaveDataDialog", nullptr,
               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
-        DrawPrettyBackground();
-
+        SetFontScale(1.0f);
         Separator();
         // Draw title bigger
-        SetWindowFontScale(1.7f);
+        SetFontScale(1.7f);
         switch (state->type) {
         case DialogType::SAVE:
             TextUnformatted("Save");
@@ -424,7 +465,7 @@ void SaveDialogUi::Draw() {
             TextUnformatted("Delete");
             break;
         }
-        SetWindowFontScale(1.0f);
+        SetFontScale(1.0f);
         Separator();
 
         BeginGroup();
@@ -450,6 +491,9 @@ void SaveDialogUi::Draw() {
         EndGroup();
     }
     End();
+    PopStyleColor(13);
+    PopStyleVar(3);
+    PopFont();
 
     first_render = false;
     if (*status == Status::FINISHED) {
@@ -484,12 +528,25 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
     }
 
     window.DrawList->AddRectFilled(bb.Min + SAVE_ICON_PADDING, bb.Max - SAVE_ICON_PADDING,
-                                   GetColorU32(ImVec4{0.3f}));
+                                   IM_COL32(0, 0, 0, 18));
 
     bool hovered = false;
     if (clickable) {
         bool held;
         bool pressed = ButtonBehavior(bb, id, &hovered, &held);
+        // The key that confirms, taken in hand: the overlay's own handling of it has been
+        // seen to do nothing on the first press when no line held the focus at that moment
+        // (the highlight was drawn, the press went nowhere, a second one chose the save).
+        if (ctx.NavId == id) {
+            g_focused_item = _id;
+        }
+        const bool confirm = IsKeyPressed(ImGuiKey_Enter, false) ||
+                             IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+                             IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+        if (!pressed && confirm && !first_render && *status == Status::RUNNING &&
+            (ctx.NavId == id || (ctx.NavId == 0 && _id == std::max(g_focused_item, 0)))) {
+            pressed = true;
+        }
         if (pressed) {
             result->dir_name = item.dir_name;
             result->param = item.pfo;
@@ -512,11 +569,11 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
     if (!item.title.empty()) {
         const char* begin = &item.title.front();
         const char* end = &item.title.back() + 1;
-        SetWindowFontScale(1.5f);
+        SetFontScale(1.5f);
         RenderText(pos + ImVec2{pos_x, pos_y}, begin, end, false);
         pos_y += ctx.FontSize * text_spacing;
     }
-    SetWindowFontScale(1.1f);
+    SetFontScale(1.1f);
 
     if (item.is_corrupted) {
         pos_y -= ctx.FontSize * text_spacing * 0.3f;
@@ -558,7 +615,7 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
         RenderText(pos + ImVec2{pos_x, pos_y}, begin, end, false);
     }
 
-    SetWindowFontScale(1.0f);
+    SetFontScale(1.0f);
 
     if (hovered) {
         window.DrawList->AddRect(bb.Min, bb.Max, GetColorU32(ImGuiCol_Border), 0.0f, 0, 2.0f);
@@ -578,6 +635,9 @@ void SaveDialogUi::DrawList() {
     }
     for (const auto& item : state->save_list) {
         DrawItem(i++, item);
+    }
+    if (first_render) {
+        g_focused_item = -1;
     }
     if (first_render) { // Make the initial focus
         if (std::holds_alternative<FocusPos>(state->focus_pos)) {
@@ -643,6 +703,12 @@ void SaveDialogUi::DrawList() {
         }
         if (IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
             SetItemCurrentNavFocus();
+        }
+        // On the keyboard Esc leaves the list at once, as it leaves the game's own pages.
+        if (IsKeyPressed(ImGuiKey_Escape, false) && !first_render &&
+            *status == Status::RUNNING) {
+            result->dir_name.clear();
+            Finish(ButtonId::INVALID, Result::USER_CANCELED);
         }
     }
 }

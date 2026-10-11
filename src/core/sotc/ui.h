@@ -25,6 +25,10 @@ inline constexpr ImU32 TextDim = IM_COL32(120, 119, 112, 255);
 /// with nothing behind it, so it is written as those menus are: near-black, no shadow.
 void SetInk(bool ink);
 bool IsInk();
+/// A window of the runtime's own (the save list) stands over the menu this frame: called by
+/// it each frame it draws, so the menu's added lines and the game's lettering stay away.
+void MarkDialog();
+bool DialogOpen();
 /// Height of the display in units of the 1080-line layout the sizes below are written in.
 float Scale();
 /// Darkens the whole picture behind an overlay screen.
