@@ -21,11 +21,14 @@ using Common::ElfInfo;
 
 constexpr u32 OrbisSaveDataBlockSize = 32768; // 32 KiB
 
-constexpr auto SAVE_ICON_SIZE = ImVec2{152.0f, 85.0f};
-constexpr auto SAVE_ICON_PADDING = ImVec2{8.0f, 2.0f};
+// Sizes are for a picture 1080 lines high at the game's own menu lettering size, and grow with
+// the window (g_ui_scale, set each frame).
+static float g_ui_scale = 1.0f;
+#define SAVE_ICON_SIZE (ImVec2{152.0f, 85.0f} * g_ui_scale)
+#define SAVE_ICON_PADDING (ImVec2{8.0f, 2.0f} * g_ui_scale)
 
-static constexpr ImVec2 BUTTON_SIZE{100.0f, 30.0f};
-constexpr auto FOOTER_HEIGHT = BUTTON_SIZE.y + 15.0f;
+#define BUTTON_SIZE (ImVec2{100.0f, 30.0f} * g_ui_scale)
+#define FOOTER_HEIGHT (BUTTON_SIZE.y + 15.0f * g_ui_scale)
 static constexpr float PROGRESS_BAR_WIDTH{0.8f};
 
 // The window is drawn as the game's own pages are: the picture washed out pale, the text in
@@ -398,6 +401,8 @@ void SaveDialogUi::Draw() {
     const auto& ctx = *GetCurrentContext();
     const auto& io = ctx.IO;
 
+    // 1.6 brings the lettering to the size of the game's own lists.
+    g_ui_scale = 1.6f * Sotc::Ui::Scale();
     ImVec2 window_size;
 
     if (state->GetMode() == SaveDataDialogMode::LIST) {
@@ -407,8 +412,8 @@ void SaveDialogUi::Draw() {
         };
     } else {
         window_size = ImVec2{
-            std::min(io.DisplaySize.x, 600.0f),
-            std::min(io.DisplaySize.y, 300.0f),
+            std::min(io.DisplaySize.x, 600.0f * g_ui_scale),
+            std::min(io.DisplaySize.y, 300.0f * g_ui_scale),
         };
     }
 
@@ -426,12 +431,13 @@ void SaveDialogUi::Draw() {
         SetNextWindowPos({0.0f, 0.0f});
         SetNextWindowSize(io.DisplaySize);
     }
+    // A list stands where the game's own lists do: left, below the top third.
     PushStyleVar(ImGuiStyleVar_WindowPadding,
-                 list ? ImVec2{io.DisplaySize.x * 0.17f, io.DisplaySize.y * 0.14f}
-                      : ImVec2{16.0f, 12.0f});
+                 list ? ImVec2{io.DisplaySize.x * 0.075f, io.DisplaySize.y * 0.20f}
+                      : ImVec2{16.0f, 12.0f} * g_ui_scale);
     ImFont* const serif = Sotc::Ui::Serif();
     PushFont(serif, 0.0f); // the size stays
-    g_font_scale = 1.0f;
+    g_font_scale = g_ui_scale;
     PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     PushStyleColor(ImGuiCol_WindowBg,
@@ -563,8 +569,8 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
         window.DrawList->AddRectFilled(pos, pos + SAVE_ICON_SIZE, GetColorU32(ImVec4{0.7f}));
     }
 
-    auto pos_x = SAVE_ICON_SIZE.x + 5.0f;
-    auto pos_y = 2.0f;
+    auto pos_x = SAVE_ICON_SIZE.x + 12.0f * g_ui_scale;
+    auto pos_y = 4.0f * g_ui_scale;
 
     if (!item.title.empty()) {
         const char* begin = &item.title.front();
@@ -625,8 +631,16 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
 void SaveDialogUi::DrawList() {
     auto availableSize = GetContentRegionAvail();
 
-    constexpr auto footerHeight = 30.0f;
+    const auto footerHeight = 30.0f * g_ui_scale;
     availableSize.y -= footerHeight + 1.0f;
+    // As wide as the game's own lists and no taller than its lines need, so that Back follows
+    // straight below.
+    const size_t lines = state->save_list.size() + (state->new_item.has_value() ? 1 : 0);
+    const float line_height = SAVE_ICON_SIZE.y + SAVE_ICON_PADDING.y * 3.0f +
+                              GetStyle().ItemSpacing.y;
+    availableSize.x = std::min(availableSize.x, GetIO().DisplaySize.x * 0.56f);
+    availableSize.y = std::min(availableSize.y, std::max<size_t>(lines, 1) * line_height +
+                                                    8.0f * g_ui_scale);
 
     BeginChild("##ScrollingRegion", availableSize, ImGuiChildFlags_NavFlattened);
     int i = 0;
@@ -690,13 +704,12 @@ void SaveDialogUi::DrawList() {
     Separator();
     if (state->enable_back.value_or(true)) {
         constexpr auto back = "Back";
-        constexpr float pad = 7.0f;
+        const float pad = 7.0f * g_ui_scale;
         const auto txt_size = CalcTextSize(back);
         const auto button_size = ImVec2{
-            std::max(txt_size.x, 100.0f) + pad * 2.0f,
+            std::max(txt_size.x, 100.0f * g_ui_scale) + pad * 2.0f,
             footerHeight - pad,
         };
-        SetCursorPosX(GetContentRegionAvail().x - button_size.x);
         if (Button(back, button_size)) {
             result->dir_name.clear();
             Finish(ButtonId::INVALID, Result::USER_CANCELED);

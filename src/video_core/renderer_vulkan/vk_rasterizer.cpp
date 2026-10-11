@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <unordered_set>
 #include <chrono>
 #include <intrin.h>
 #include <unordered_map>
@@ -1538,17 +1539,40 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             } else {
                 u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
                 if (size != vsharp.GetSize()) {
-                    // The engine declares its structured buffers as ~4GB ("unbounded"). Binding
-                    // everything up to the end of the mapping makes every draw track and upload
-                    // hundreds of MB of unrelated heap, so bound them.
-                    // ponytail: fixed window, derive the real extent from the shader if a
-                    // buffer ever needs more.
+                    // The engine declares its structured buffers as ~4GB ("unbounded"); the
+                    // request is cut off at the end of the mapping the buffer lies in. That is
+                    // some 40 MB as a rule, but when the game's heap happens to be one unbroken
+                    // mapping it came to 3 GB: bound, allocated and uploaded in one frame, a
+                    // stall of 1.8 s as a battle began. These are the per-instance arrays of
+                    // four shaders (64, 112 and 224 bytes a record); 64 MB is more than they
+                    // are given in the usual case. SOTC_UNBOUNDED_CAP_MB sets another size, 0
+                    // none.
                     static const u64 unbounded_cap = [] {
                         const char* mb = std::getenv("SOTC_UNBOUNDED_CAP_MB");
-                        return (mb ? std::strtoull(mb, nullptr, 10) : 0) << 20;
+                        return (mb ? std::strtoull(mb, nullptr, 10) : 64) << 20;
                     }();
                     if (unbounded_cap) {
                         size = std::min(size, unbounded_cap);
+                    }
+                    // Basis for the bound (SOTC_UNBOUNDED_TRACE): the furthest these arrays
+                    // could be read if indexed by instance, and the least room they were given.
+                    static const bool trace = std::getenv("SOTC_UNBOUNDED_TRACE") != nullptr;
+                    if (trace) {
+                        static u64 max_reach = 0, min_room = ~0ULL;
+                        const u64 reach = u64(vsharp.GetStride()) *
+                                          liverpool->regs.num_instances.NumInstances();
+                        const u64 room = memory->ClampRangeSize(vsharp.base_address,
+                                                                vsharp.GetSize());
+                        if (reach > max_reach || room < min_room) {
+                            max_reach = std::max(max_reach, reach);
+                            min_room = std::min(min_room, room);
+                            LOG_ERROR(Render, "unbounded bind by {:#x}: stride {} instances {} "
+                                              "reach {:#x} (largest {:#x}), room {:#x} (least "
+                                              "{:#x})",
+                                      stage.pgm_hash, vsharp.GetStride(),
+                                      liverpool->regs.num_instances.NumInstances(), reach,
+                                      max_reach, room, min_room);
+                        }
                     }
                 }
                 static int bind_traced = 0;
