@@ -129,7 +129,7 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 ### If something goes wrong
 
 - **The game stops and starts again by itself.** The game's own program sometimes faults while
-  it loads, most often on the way back to the title menu (about one time in eight in testing).
+  it loads, most often on the way back to the title menu (about one time in eighteen in testing).
   When that happens the port starts the game again and says so on screen. Your progress up to
   the last save is kept.
 - **Short stops when entering a new area.** Choosing Prepare at the first start removes most of
@@ -172,11 +172,12 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
   game with a message.
 - Loading a new area can stall for a moment; level loads stall for about half a second to a
   second and a half once.
-- The game's own code faults now and then while it loads: 4 times in 34 scripted runs of
-  pause > Quit Game > Yes, and a few times while a battle was loading. The faults are in the
-  game's memory allocator and render command buffers on its job threads; the cause has not been
-  found, and limiting the frame rate to 60 did not remove them (1 in 14 runs). The port starts
-  the game again when this happens.
+- The game faults now and then when it leaves a level, most often on the way back to the title
+  menu: 14 times in 112 scripted runs of pause > Main Menu > Yes before the change below, 5 in
+  90 after it. One cause was found in the port itself: results of GPU compute work were copied
+  back into the game's memory late, sometimes after the game had freed it; that copy is now
+  made only if the memory is unchanged. What causes the remaining faults is not known. The
+  port starts the game again when one happens.
 
 ## Licence
 
