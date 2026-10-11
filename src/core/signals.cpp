@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include <string>
+#include <SDL3/SDL_timer.h>
 #include <fmt/format.h>
 #if defined(_WIN32)
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
 #endif
+#include "core/sotc/mem_trace.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/watchdog.h"
 #include "common/arch.h"
@@ -159,6 +162,70 @@ static LONG SignalHandlerBody(EXCEPTION_POINTERS* pExp) noexcept {
         LOG_CRITICAL(Debug, "access {:#x} rsp {:#x} stack: {}",
                      pExp->ExceptionRecord->ExceptionInformation[1], pExp->ContextRecord->Rsp,
                      trace);
+        // What the registers held and what lies around the addresses in them: when the game's
+        // allocator trips over a damaged block, the bytes that damaged it are right there and
+        // often say who wrote them. Read through the system, so a bad address cannot fault.
+        {
+            const CONTEXT& c = *pExp->ContextRecord;
+            LOG_CRITICAL(Debug,
+                         "rax {:#x} rbx {:#x} rcx {:#x} rdx {:#x} rsi {:#x} rdi {:#x} r8 {:#x} "
+                         "r9 {:#x} r10 {:#x} r11 {:#x} r12 {:#x} r13 {:#x} r14 {:#x} r15 {:#x}",
+                         c.Rax, c.Rbx, c.Rcx, c.Rdx, c.Rsi, c.Rdi, c.R8, c.R9, c.R10, c.R11, c.R12,
+                         c.R13, c.R14, c.R15);
+            const auto dump = [](const char* name, u64 address) {
+                u8 bytes[192];
+                SIZE_T got = 0;
+                const u64 from = (address & ~0xFULL) - 96;
+                if (address < 0x10000 ||
+                    !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(from), bytes,
+                                       sizeof(bytes), &got) ||
+                    got != sizeof(bytes)) {
+                    return;
+                }
+                for (u32 row = 0; row < sizeof(bytes); row += 32) {
+                    std::string hex, text;
+                    for (u32 i = 0; i < 32; i++) {
+                        hex += fmt::format("{:02x}{}", bytes[row + i], i % 8 == 7 ? " " : "");
+                        text += bytes[row + i] >= 32 && bytes[row + i] < 127
+                                    ? static_cast<char>(bytes[row + i])
+                                    : '.';
+                    }
+                    LOG_CRITICAL(Debug, "{} {:#x}: {} {}", name, from + row, hex, text);
+                }
+            };
+            // Changes to the address space that touched a megabyte around any of those
+            // addresses, and the last few of all.
+            {
+                const u64 watched[] = {c.Rax, c.Rbx, c.Rsi, c.Rdi, c.R8, c.R10, c.R12, c.R15};
+                const u64 newest = Sotc::MemTrace::written.load();
+                u64 slot = newest > Sotc::MemTrace::Capacity ? newest - Sotc::MemTrace::Capacity : 0;
+                Sotc::MemTrace::ForEach([&](const Sotc::MemTrace::Entry& entry) {
+                    bool near_one = false;
+                    for (const u64 address : watched) {
+                        near_one |= address + 0x100000 > entry.address &&
+                                    address < entry.address + entry.size + 0x100000;
+                    }
+                    if (near_one || slot + 24 >= newest) {
+                        LOG_CRITICAL(Debug, "memory {} {:#x} size {:#x} at {} ms{}", entry.kind,
+                                     entry.address, entry.size, entry.ms, near_one ? " NEAR" : "");
+                    }
+                    ++slot;
+                });
+                LOG_CRITICAL(Debug, "now {} ms", SDL_GetTicks());
+            }
+            dump("rax", c.Rax);
+            dump("rcx", c.Rcx);
+            dump("rbx", c.Rbx);
+            dump("r8", c.R8);
+            dump("r9", c.R9);
+            dump("r10", c.R10);
+            dump("r10+", c.R10 + 192);
+            dump("r10-", c.R10 - 192);
+            dump("r11", c.R11);
+            dump("rdi", c.Rdi);
+            dump("rdi+", c.Rdi + 192);
+            dump("rsi", c.Rsi);
+        }
         Sotc::Watchdog::WriteCrashStack(pExp->ContextRecord,
                                         pExp->ExceptionRecord->ExceptionInformation[1]);
         // The game's own code faults now and then while it loads (seen inside its memory

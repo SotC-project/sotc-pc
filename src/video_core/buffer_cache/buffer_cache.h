@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <vector>
+#include <map>
 #include <span>
 #include <utility>
 #include <deque>
@@ -109,9 +111,9 @@ public:
     void MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges);
 
     /// Marks a range as written by the GPU and not yet copied back to guest memory.
-    void AddPendingMirror(VAddr device_addr, u32 size) {
-        pending_mirror_ranges.Add(device_addr, size);
-    }
+    /// What the game's memory holds there now is kept: the copy back is made only if it still
+    /// holds that when the time comes (see MirrorToGuest).
+    void AddPendingMirror(VAddr device_addr, u32 size);
 
     /// GPU memory holding copies of game memory, in bytes. It only grows: a block the game
     /// once used as a buffer stays resident.
@@ -161,6 +163,8 @@ private:
     /// Compute outputs that are newer on the GPU than in guest memory, until MirrorToGuest
     /// copies them back. Uploads must leave them alone.
     RangeSet pending_mirror_ranges;
+    /// Game memory as it was when each pending range was queued, keyed by address and size.
+    std::map<std::pair<VAddr, u32>, std::vector<u8>> mirror_snapshots;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;

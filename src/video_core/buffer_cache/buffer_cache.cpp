@@ -177,6 +177,15 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
 // Copies GPU-written ranges back into guest memory so CPU-side readers see what compute shaders
 // produced: the game itself (culling results) and the SRT walker that flattens shader constants.
 // One GPU flush covers the whole batch.
+void BufferCache::AddPendingMirror(VAddr device_addr, u32 size) {
+    pending_mirror_ranges.Add(device_addr, size);
+    auto& snapshot = mirror_snapshots[{device_addr, size}];
+    if (snapshot.empty() && memory->IsValidMapping(device_addr, size)) {
+        snapshot.resize(size);
+        memory->CopySparseMemory(device_addr, snapshot.data(), size);
+    }
+}
+
 void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
     if (ranges.empty()) {
         return;
@@ -195,11 +204,47 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
     }
     scheduler.Finish();
     download.buffer->Invalidate(download.offset, total);
+    // The copy back happens some time after the GPU work, and after the game may have been
+    // told the work is done. If the game has since given that memory another use (it frees
+    // such buffers when a level goes, and its allocator keeps its lists inside freed blocks),
+    // writing the result there would damage whatever is in it now. So a range is written only
+    // if the game's memory still holds what it held when the range was queued; otherwise the
+    // result is dropped, the game having moved on.
+    static const bool unguarded = std::getenv("SOTC_MIRROR_UNGUARDED") != nullptr;
     cursor = 0;
+    std::vector<u8> current;
+    u32 dropped = 0;
     for (const auto& [addr, size] : ranges) {
-        memory->TryWriteBacking(std::bit_cast<u8*>(addr), download.mapped + cursor, size);
+        bool write = true;
+        if (!unguarded) {
+            const auto snapshot = mirror_snapshots.find({addr, size});
+            if (!memory->IsValidMapping(addr, size)) {
+                write = false;
+            } else if (snapshot != mirror_snapshots.end() && snapshot->second.size() == size) {
+                current.resize(size);
+                memory->CopySparseMemory(addr, current.data(), size);
+                write = std::memcmp(current.data(), snapshot->second.data(), size) == 0;
+            }
+        }
+        if (write) {
+            memory->TryWriteBacking(std::bit_cast<u8*>(addr), download.mapped + cursor, size);
+        } else {
+            ++dropped;
+        }
         cursor += Common::AlignUp(size, 64);
     }
+    if (dropped != 0) {
+        static u64 total = 0;
+        total += dropped;
+        static u64 logged = 0;
+        if (total - logged >= 64 || logged == 0) {
+            logged = total;
+            LOG_INFO(Render, "{} compute results not copied back so far: the game had changed "
+                             "that memory",
+                     total);
+        }
+    }
+    mirror_snapshots.clear();
     pending_mirror_ranges.Clear();
 }
 

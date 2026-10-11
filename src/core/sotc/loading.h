@@ -13,8 +13,9 @@
 //
 // The animation is not shipped: it is recorded from the game's own picture on the player's
 // machine the first time it plays (the corner of the frame it is drawn in, one turn of it) and
-// kept in the user folder. Until that has happened, the game's own animation is let through
-// instead and the rest of the wait is plain black.
+// kept in the user folder. The game shows it for a few seconds at every start, so it is at hand
+// from the first run on; until it is, the game's own animation is let through instead and the
+// rest of the wait is plain black.
 namespace Sotc::Loading {
 
 /// The part of the game picture the animation is drawn in, as fractions of its width and height.

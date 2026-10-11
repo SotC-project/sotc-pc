@@ -7,6 +7,7 @@
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
+#include "core/sotc/mem_trace.h"
 #include "core/emulator_settings.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/memory.h"
@@ -298,6 +299,7 @@ PAddr MemoryManager::Allocate(PAddr search_start, PAddr search_end, u64 size, u6
 }
 
 s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
+    Sotc::MemTrace::Add('R', phys_addr, size);
     // Basic bounds checking
     if (phys_addr > total_direct_size || (is_checked && phys_addr + size > total_direct_size)) {
         LOG_ERROR(Kernel_Vmm, "phys_addr {:#x}, size {:#x} goes outside dmem map", phys_addr, size);
@@ -390,6 +392,7 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
 }
 
 s32 MemoryManager::PoolCommit(VAddr virtual_addr, u64 size, MemoryProt prot, s32 mtype) {
+    Sotc::MemTrace::Add('C', virtual_addr, size);
     std::scoped_lock lk{unmap_mutex};
     std::unique_lock lk2{mutex};
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
@@ -694,6 +697,7 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
     }
 
     *out_addr = std::bit_cast<void*>(mapped_addr);
+    Sotc::MemTrace::Add('M', reinterpret_cast<u64>(*out_addr), size);
     if (type != VMAType::Reserved && type != VMAType::PoolReserved) {
         // Flexible address space mappings were performed while finding direct memory areas.
         if (type != VMAType::Flexible) {
@@ -840,10 +844,12 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
     }
 
     *out_addr = std::bit_cast<void*>(mapped_addr);
+    Sotc::MemTrace::Add('M', reinterpret_cast<u64>(*out_addr), size);
     return ORBIS_OK;
 }
 
 s32 MemoryManager::PoolDecommit(VAddr virtual_addr, u64 size) {
+    Sotc::MemTrace::Add('D', virtual_addr, size);
     std::scoped_lock lk{unmap_mutex};
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
                virtual_addr);
@@ -930,6 +936,7 @@ s32 MemoryManager::PoolDecommit(VAddr virtual_addr, u64 size) {
 }
 
 s32 MemoryManager::UnmapMemory(VAddr virtual_addr, u64 size) {
+    Sotc::MemTrace::Add('U', virtual_addr, size);
     if (size == 0) {
         return ORBIS_OK;
     }
@@ -1139,6 +1146,7 @@ s64 MemoryManager::ProtectBytes(VAddr addr, VirtualMemoryArea& vma_base, u64 siz
 }
 
 s32 MemoryManager::Protect(VAddr addr, u64 size, MemoryProt prot) {
+    Sotc::MemTrace::Add('P', addr, size);
     // If size is zero, then there's nothing to protect
     if (size == 0) {
         return ORBIS_OK;

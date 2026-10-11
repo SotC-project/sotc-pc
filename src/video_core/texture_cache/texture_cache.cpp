@@ -1345,6 +1345,11 @@ void TextureCache::GarbageCollectImages() {
         }
         const auto image_id = slot_images.GetSlotId(image);
         if (download) {
+            // Worth a line: this writes into the game's memory at a moment the game knows
+            // nothing about.
+            LOG_ERROR(Render, "collector: image {}x{} written back to {:#x} ({} KB)",
+                      image.info.size.width, image.info.size.height, image.info.guest_address,
+                      image.info.guest_size >> 10);
             DownloadImageMemory(image_id);
         }
         FreeImage(image_id);

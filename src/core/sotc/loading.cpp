@@ -148,8 +148,20 @@ void Load() {
 
 } // namespace
 
+namespace {
+std::atomic<u64> last_probe_ms{0};
+std::atomic<u64> last_light_ms{0}; // when a probed row last held anything but black
+} // namespace
+
 bool WantsCapture() {
-    if (have_animation.load() || recording_done.load() || !Menu::StartCovered(true)) {
+    if (have_animation.load() || recording_done.load()) {
+        return false;
+    }
+    // During a free play start, or whenever the game shows its loading screen (any start of
+    // the game does, for a few seconds): the rest of the picture is black then.
+    const u64 ticks = SDL_GetTicks();
+    const bool black = ticks - last_probe_ms.load() < 500 && ticks - last_light_ms.load() >= 300;
+    if (!Menu::StartCovered(true) && !black) {
         return false;
     }
     // Only frames of the game's loading screen: little drawn, but something.
@@ -178,16 +190,20 @@ void OnCapture(std::span<const u8> rgba, u32 width, u32 height) {
     shots.push_back(std::move(shot));
 }
 
-namespace {
-std::atomic<u64> last_probe_ms{0};
-std::atomic<u64> last_light_ms{0}; // when a probed row last held anything but black
-} // namespace
-
 bool WantsProbe() {
+    const u64 now = SDL_GetTicks();
+    if (!have_animation.load()) {
+        // Nothing recorded yet: the rows say when the game's loading screen is up, so it can
+        // be recorded from any start of the game. Given up after two minutes.
+        if (recording_done.load() || now > 120000 || now - last_probe_ms.load() < 100) {
+            return false;
+        }
+        last_probe_ms = now;
+        return true;
+    }
     // Not while the program is starting up, and not during a free play start, which is covered
     // from end to end anyway.
-    const u64 now = SDL_GetTicks();
-    if (!have_animation.load() || now < 25000 || Menu::StartCovered(true)) {
+    if (now < 25000 || Menu::StartCovered(true)) {
         last_light_ms = now;
         return false;
     }
@@ -199,6 +215,17 @@ bool WantsProbe() {
 }
 
 void OnProbe(std::span<const u8> rgba) {
+    if (std::getenv("SOTC_LOADLOG")) {
+        static u64 logged = 0;
+        if (SDL_GetTicks() - logged > 2000) {
+            logged = SDL_GetTicks();
+            u32 peak = 0;
+            for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+                peak = std::max<u32>({peak, rgba[i], rgba[i + 1], rgba[i + 2]});
+            }
+            LOG_INFO(Core, "loading probe: {} bytes, peak {}", rgba.size(), peak);
+        }
+    }
     for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
         if (rgba[i] > 7 || rgba[i + 1] > 7 || rgba[i + 2] > 7) {
             last_light_ms = SDL_GetTicks();
@@ -242,8 +269,19 @@ void Draw(bool covered) {
         load_tried = true;
         Load();
     }
-    // The recording ends with the wait; it is sorted out and written off this thread.
-    if (!recording_done.load() && !Menu::StartCovered(true)) {
+    if (std::getenv("SOTC_LOADLOG")) {
+        static u64 logged = 0;
+        if (SDL_GetTicks() - logged > 1000) {
+            logged = SDL_GetTicks();
+            std::scoped_lock lock{mutex};
+            LOG_INFO(Core, "loading: shots {} binds {} probe age {} light age {} have {}",
+                     shots.size(), Screens::FrameBinds(), SDL_GetTicks() - last_probe_ms.load(),
+                     SDL_GetTicks() - last_light_ms.load(), have_animation.load());
+        }
+    }
+    // The recording ends when nothing has been added for a second (the loading screen is gone);
+    // it is sorted out and written off this thread.
+    if (!recording_done.load() && SDL_GetTicks() - last_shot_ms.load() > 1000) {
         std::scoped_lock lock{mutex};
         if (!shots.empty()) {
             recording_done = true;

@@ -959,20 +959,27 @@ void Rasterizer::FlushMirrors(u32 source) {
     // Sources: 1 EOS, 2 EOP, 4 ReleaseMem, 8 submit, 16 fence, 32 immediate. The game consumes
     // compute results after end-of-pipe events; flushing at EOS, ReleaseMem and fences only adds
     // blocking GPU round trips (measured: same draw counts, about half the flushes).
-    // SOTC_FLUSH_MASK overrides the set for experiments.
+    //
+    // That timing writes some results into the game's memory after the game has been told the
+    // GPU is done with it, and the game may have freed it by then: seen as faults in its
+    // allocator, about once in nine returns to the title menu. Writing everything before every
+    // such event (SOTC_MIRROR_EAGER=1) more than doubles the round trips and cost 40% of the
+    // frame rate in the heaviest scene, so the timing stays and the write is guarded instead:
+    // see BufferCache::MirrorToGuest. SOTC_FLUSH_MASK overrides the set of sources.
+    static const bool eager = std::getenv("SOTC_MIRROR_EAGER") != nullptr;
     static const u32 mask = [] {
         const char* value = std::getenv("SOTC_FLUSH_MASK");
-        return value ? u32(std::atoi(value)) : (2u | 8u | 32u);
+        return value ? u32(std::atoi(value)) : eager ? 63u : (2u | 8u | 32u);
     }();
     if (pending_mirrors.empty() || !(mask & source)) {
         return;
     }
     // An end-of-pipe event waits only for outputs the game reads; the rest ride along with the
     // next such flush, or go at the end of a frame that had none.
-    if (source == 2 && !mirrors_urgent) {
+    if (!eager && source == 2 && !mirrors_urgent) {
         return;
     }
-    if (source == 8 && mirrors_flushed_this_frame) {
+    if (!eager && source == 8 && mirrors_flushed_this_frame) {
         mirrors_flushed_this_frame = false;
         return;
     }
