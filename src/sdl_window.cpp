@@ -20,6 +20,7 @@
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
+#include "core/sotc/perf_hud.h"
 #include "core/sotc/screens.h"
 #include "common/assert.h"
 #include "common/elf_info.h"
@@ -241,6 +242,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             // Footage capture: the game picture, the finished picture with overlays, or off
             // (see SOTC_RECORD in the presenter).
             g_sotc_record = action == "rec=start" ? 1 : action == "rec=ui" ? 2 : 0;
+            if (g_sotc_record) {
+                // The readout's average and 1% low then cover the footage and nothing before.
+                Sotc::PerfHud::Restart();
+            }
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");

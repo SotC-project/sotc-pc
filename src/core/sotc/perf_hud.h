@@ -18,6 +18,9 @@ namespace Sotc::PerfHud {
 bool Enabled();
 /// One game frame went to the screen, this long after the one before. Any thread.
 void OnFrame(double gap_ms);
+/// Forgets the frames so far, so that average and 1% low cover a recording from its first
+/// frame and nothing before it (the loading of the scene). Any thread.
+void Restart();
 /// Graphics memory the renderer has allocated, in bytes. Set by the renderer.
 inline std::atomic<u64> device_memory{0};
 /// Draws the readout. Call once per frame from the overlay.

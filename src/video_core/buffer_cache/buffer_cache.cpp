@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <thread>
+#include <vector>
 #include <magic_enum/magic_enum.hpp>
 
 #include <cstdlib>
@@ -402,6 +405,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         .allocationSize = resident_blocks << block_shift,
         .memoryTypeIndex = arena_memory_type_index,
     };
+    const auto t_alloc = std::chrono::steady_clock::now();
     const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
     resident_bytes += u64(resident_blocks) << block_shift;
     Sotc::Hitch::buffer_kb += u32((u64(resident_blocks) << block_shift) >> 10);
@@ -459,12 +463,49 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     });
     if (!copies.empty()) {
         Sotc::Hitch::buffer_sync_kb += u32(total_size_bytes >> 10);
+        const auto t0 = std::chrono::steady_clock::now();
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
+        const auto t1 = std::chrono::steady_clock::now();
+        // A large upload (the game's ~4 GB "unbounded" arrays, bound 64 MB at a time, when
+        // they move to memory not yet on the card) took 25 ms as one copy, in the middle of
+        // play. It is cut into pieces of 2 MB and copied by four threads.
+        if (total_size_bytes >= 8_MB) {
+            struct Piece {
+                VAddr addr;
+                u8* dest;
+                u64 size;
+            };
+            std::vector<Piece> pieces;
+            for (const auto& copy : copies) {
+                for (u64 done = 0; done < copy.size; done += 2_MB) {
+                    pieces.push_back({copy.dstOffset + done, staging.mapped + copy.srcOffset + done,
+                                      std::min<u64>(2_MB, copy.size - done)});
+                }
+            }
+            std::atomic<size_t> next{0};
+            const auto work = [&] {
+                for (size_t i = next++; i < pieces.size(); i = next++) {
+                    memory->CopySparseMemory(pieces[i].addr, pieces[i].dest, pieces[i].size);
+                }
+            };
+            std::array<std::thread, 3> helpers;
+            for (auto& helper : helpers) {
+                helper = std::thread{work};
+            }
+            work();
+            for (auto& helper : helpers) {
+                helper.join();
+            }
+        }
         for (auto& copy : copies) {
-            memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
+            if (total_size_bytes < 8_MB) {
+                memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset,
+                                         copy.size);
+            }
             copy.srcOffset += staging.offset;
             copy.dstOffset -= arena->cpu_addr;
         }
+        const auto t2 = std::chrono::steady_clock::now();
         staging.Flush();
         runtime.CopyBuffer(staging.buffer, arena, copies);
     }

@@ -1579,6 +1579,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     // are given in the usual case. SOTC_UNBOUNDED_CAP_MB sets another size, 0
                     // none.
                     static const u64 unbounded_cap = [] {
+                        // For finding how much of these arrays is read: a size in KB.
+                        if (const char* kb = std::getenv("SOTC_UNBOUNDED_CAP_KB")) {
+                            return std::strtoull(kb, nullptr, 10) << 10;
+                        }
                         const char* mb = std::getenv("SOTC_UNBOUNDED_CAP_MB");
                         return (mb ? std::strtoull(mb, nullptr, 10) : 64) << 20;
                     }();
@@ -1589,20 +1593,33 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     // could be read if indexed by instance, and the least room they were given.
                     static const bool trace = std::getenv("SOTC_UNBOUNDED_TRACE") != nullptr;
                     if (trace) {
-                        static u64 max_reach = 0, min_room = ~0ULL;
-                        const u64 reach = u64(vsharp.GetStride()) *
+                        // What could index these arrays: the vertices of the draw, or the
+                        // threads of the dispatch. The largest of each per shader, with the
+                        // room the request was given.
+                        struct Seen {
+                            u64 count = 0;
+                            u64 min_room = ~0ULL;
+                        };
+                        static std::unordered_map<u64, Seen> seen_by_shader;
+                        const bool compute = stage.sw_stage == Shader::SwStage::Compute;
+                        const auto& cs = liverpool->GetCsRegs();
+                        const u64 count =
+                            compute ? u64(cs.dim_x) * cs.dim_y * cs.dim_z
+                                    : u64(liverpool->regs.num_indices) *
                                           liverpool->regs.num_instances.NumInstances();
                         const u64 room = memory->ClampRangeSize(vsharp.base_address,
                                                                 vsharp.GetSize());
-                        if (reach > max_reach || room < min_room) {
-                            max_reach = std::max(max_reach, reach);
-                            min_room = std::min(min_room, room);
-                            LOG_ERROR(Render, "unbounded bind by {:#x}: stride {} instances {} "
-                                              "reach {:#x} (largest {:#x}), room {:#x} (least "
-                                              "{:#x})",
-                                      stage.pgm_hash, vsharp.GetStride(),
-                                      liverpool->regs.num_instances.NumInstances(), reach,
-                                      max_reach, room, min_room);
+                        auto& seen = seen_by_shader[stage.pgm_hash ^ (u64(vsharp.GetStride()) << 48)];
+                        if (count > seen.count || room < seen.min_room) {
+                            seen.count = std::max(seen.count, count);
+                            seen.min_room = std::min(seen.min_room, room);
+                            LOG_ERROR(Render, "unbounded bind by {:#x}: {} stride {} written {} "
+                                              "{} {} (largest {}, by stride {:#x} bytes), room "
+                                              "{:#x} (least {:#x})",
+                                      stage.pgm_hash, compute ? "compute" : "draw",
+                                      vsharp.GetStride(), desc.is_written,
+                                      compute ? "groups" : "vertices", count, seen.count,
+                                      seen.count * vsharp.GetStride(), room, seen.min_room);
                         }
                     }
                 }

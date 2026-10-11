@@ -291,6 +291,11 @@ void OnFrame(double gap_ms) {
     ++gap_count;
 }
 
+void Restart() {
+    std::scoped_lock lock{mutex};
+    gap_count = 0;
+}
+
 void Draw() {
     if (!Enabled()) {
         return;
@@ -348,7 +353,7 @@ void Draw() {
     const std::string note = EnvText("SOTC_PERFHUD_NOTE");
     const float line = 26.0f * scale;
     const float graph_height = 70.0f * scale;
-    const float height = pad * 2 + (label.empty() ? 0.0f : line) + 46.0f * scale + line * 4 +
+    const float height = pad * 2 + (label.empty() ? 0.0f : line) + 46.0f * scale + line * 5 +
                          graph_height + 10.0f * scale + (note.empty() ? 0.0f : line);
     draw->AddRectFilled({left, top}, {left + width, top + height}, IM_COL32(8, 8, 8, 176),
                         6.0f * scale);
@@ -374,9 +379,17 @@ void Draw() {
     text(x, y, 19.0f, Plain,
          fmt::format("frame {:.1f} ms     {} x {}", last_gap, int(display.x), int(display.y)));
     y += line;
+    // Two scales, each named: shares of the whole processor (all its threads together), and
+    // counts of single threads. "game 340%" on the first scale's line was read as a share of
+    // the whole; it was the game's time in percent of one thread.
+    const float threads = float(std::max(std::thread::hardware_concurrency(), 1u));
     text(x, y, 19.0f, Plain,
-         fmt::format("CPU {:.0f}%  game {:.0f}%  busiest thread {:.0f}%", sample.cpu_all,
-                     sample.cpu_process, sample.cpu_thread));
+         fmt::format("CPU: whole PC {:.0f}%, the game {:.0f}% (of {:.0f} threads)", sample.cpu_all,
+                     sample.cpu_process / threads, threads));
+    y += line;
+    text(x, y, 19.0f, Plain,
+         fmt::format("game keeps {:.1f} threads busy, its busiest at {:.0f}%",
+                     sample.cpu_process / 100.0f, sample.cpu_thread));
     y += line;
     text(x, y, 19.0f, Plain,
          // "Allocated": what the renderer has taken from the card, which is more than a frame
