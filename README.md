@@ -106,7 +106,7 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 13. The game saves by itself as you play. **Manual Save** in the pause menu saves on demand.
     Saves live in `dist\user`; keep that folder if you move or rebuild the program.
-14. **Quit Game** in the pause menu goes back to the title menu. **Quit** on the title menu
+14. **Main Menu** in the pause menu goes back to the title menu. **Quit** on the title menu
     closes the game.
 
 ### Free Play and Time Attack
@@ -177,7 +177,6 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
   game's memory allocator and render command buffers on its job threads; the cause has not been
   found, and limiting the frame rate to 60 did not remove them (1 in 14 runs). The port starts
   the game again when this happens.
-- The pause menu's "Quit Game" returns to the title menu; the label is the game's own.
 
 ## Licence
 
