@@ -16,6 +16,7 @@
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
 #include "common/singleton.h"
+#include "core/sotc/mem_trace.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -918,6 +919,7 @@ s32 PS4_SYSV_ABI sceKernelReleaseFlexibleMemory(void* addr, u64 len) {
     }
 
     LOG_DEBUG(Kernel_Vmm, "addr = {}, len = {:#x}", fmt::ptr(addr), len);
+    Sotc::MemTrace::Add('X', raw_addr, len);
 
 #if defined(_WIN32)
     if (!VirtualAlloc(addr, len, MEM_RESET, PAGE_READWRITE)) {

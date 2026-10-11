@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <atomic>
 #include <algorithm>
 #include <utility>
 #include "common/alignment.h"
@@ -449,6 +451,42 @@ struct SignalImpl : public PageManager::Impl {
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
         const bool is_write = Common::IsWriteError(context);
         ++Sotc::Hitch::memory_faults;
+        // With GPU readbacks off no page is ever closed to reading, so a read fault on memory
+        // the GPU knows cannot be one of ours. It happens all the same: when the game unmaps
+        // part of a mapping, Windows makes us take the whole mapping away and put the kept
+        // parts back, and a game thread reading a kept part in that moment faults. Answering
+        // it as a tracked read copied whatever the GPU side had ever written within half a
+        // megabyte back into the game's memory: stale index lists and zeros, over memory the
+        // game had long given other uses, such as its allocator's free blocks. That was the
+        // fault that showed about once in nine returns to the title menu. Such a read is now
+        // simply tried again; the mapping is back by then.
+        static const bool readbacks_off =
+            EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Disabled &&
+            std::getenv("SOTC_READ_FAULT_DOWNLOAD") == nullptr;
+        if (!is_write && readbacks_off) {
+            if (!rasterizer->IsMapped(addr, size)) {
+                return false;
+            }
+            static thread_local VAddr last_address = 0;
+            static thread_local u32 repeats = 0;
+            if (addr == last_address) {
+                // Not coming back: a real fault, for the crash report.
+                if (++repeats > 200000) {
+                    return false;
+                }
+            } else {
+                last_address = addr;
+                repeats = 0;
+                static std::atomic<u32> seen{0};
+                if (const u32 count = ++seen; count <= 20 || count % 256 == 0) {
+                    LOG_INFO(Render, "read fault at {:#x} while a mapping was being changed, "
+                                     "tried again ({} so far)",
+                             addr, count);
+                }
+            }
+            std::this_thread::yield();
+            return true;
+        }
         const auto handle = [&](VAddr target, u64 target_size) {
             return is_write ? rasterizer->InvalidateMemory(target, target_size, is_gpu_thread)
                             : rasterizer->ReadMemory(target, target_size, is_gpu_thread);

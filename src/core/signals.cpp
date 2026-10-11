@@ -9,6 +9,7 @@
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
 #endif
+#include "core/memory.h"
 #include "core/sotc/mem_trace.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/watchdog.h"
@@ -212,6 +213,65 @@ static LONG SignalHandlerBody(EXCEPTION_POINTERS* pExp) noexcept {
                     ++slot;
                 });
                 LOG_CRITICAL(Debug, "now {} ms", SDL_GetTicks());
+                // Where those addresses live, and every recent zeroing of backing memory (Z,
+                // by backing address) and page reset (X), to set against that.
+                auto* memory = Core::Memory::Instance();
+                const char* names[] = {"rax", "rbx", "rsi", "rdi", "r8", "r10", "r12", "r15"};
+                for (size_t i = 0; i < std::size(watched); i++) {
+                    if (watched[i] >= 0x10000) {
+                        LOG_CRITICAL(Debug, "{} {:#x}: {}", names[i], watched[i],
+                                     memory->DescribeAddress(watched[i]));
+                    }
+                }
+                // The game's allocator keeps free blocks on a ring through a head that sits
+                // 128 bytes into its state; the fault is usually a block on that ring whose link
+                // has been wiped. Walk the ring from the first block (r10 in the search routine)
+                // and say where the last good block and the bad link live.
+                for (const u64 head : {c.R9, c.Rdi}) {
+                    u64 first = 0;
+                    SIZE_T got = 0;
+                    if (head < 0x10000 ||
+                        !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(head),
+                                           &first, sizeof(first), &got) ||
+                        got != sizeof(first)) {
+                        continue;
+                    }
+                    u64 node = first, previous = head;
+                    int steps = 0;
+                    for (; steps < 50000 && node >= 0x10000 && node != head; steps++) {
+                        u64 links[2]{};
+                        if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(node),
+                                               links, sizeof(links), &got) ||
+                            got != sizeof(links)) {
+                            LOG_CRITICAL(Debug, "ring from {:#x}: block {:#x} (after {:#x}, {} steps) "
+                                                "cannot be read: {}",
+                                         head, node, previous, steps, memory->DescribeAddress(node));
+                            break;
+                        }
+                        if (links[1] < 0x10000) {
+                            LOG_CRITICAL(Debug, "ring from {:#x}: block {:#x} after {} steps has link "
+                                                "{:#x}: {}",
+                                         head, node, steps, links[1], memory->DescribeAddress(node));
+                            LOG_CRITICAL(Debug, "ring: the block before it, {:#x}: {}", previous,
+                                         memory->DescribeAddress(previous));
+                            dump("bad", node);
+                            dump("bad+", node + 192);
+                            dump("bad-", node - 192);
+                            break;
+                        }
+                        previous = node;
+                        node = links[1];
+                    }
+                    LOG_CRITICAL(Debug, "ring from {:#x}: walked {} blocks, ended at {:#x}", head,
+                                 steps, node);
+                }
+                Sotc::MemTrace::ForEach([&](const Sotc::MemTrace::Entry& entry) {
+                    if ((entry.kind == 'Z' || entry.kind == 'X') &&
+                        SDL_GetTicks() - entry.ms < 3000) {
+                        LOG_CRITICAL(Debug, "recent {} {:#x} size {:#x} at {} ms", entry.kind,
+                                     entry.address, entry.size, entry.ms);
+                    }
+                });
             }
             dump("rax", c.Rax);
             dump("rcx", c.Rcx);

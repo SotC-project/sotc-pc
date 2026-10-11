@@ -218,6 +218,49 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     return written;
 }
 
+std::string MemoryManager::DescribeAddress(VAddr address) {
+    if (!mutex.try_lock()) {
+        return "busy";
+    }
+    std::string text = "not mapped";
+    if (!vma_map.empty() && address >= vma_map.begin()->first) {
+        const auto it = std::prev(vma_map.upper_bound(address));
+        const auto& vma = it->second;
+        if (address < vma.base + vma.size) {
+            text = fmt::format("mapping {:#x}+{:#x} type {} name '{}'", vma.base, vma.size,
+                               static_cast<u32>(vma.type), vma.name);
+            const u64 offset = address - vma.base;
+            if (!vma.phys_areas.empty()) {
+                auto area = vma.phys_areas.upper_bound(offset);
+                if (area != vma.phys_areas.begin()) {
+                    --area;
+                    if (offset < area->first + area->second.size) {
+                        const PAddr backing = area->second.base + (offset - area->first);
+                        text += fmt::format(" backing {:#x}", backing);
+                        // The same backing memory mapped somewhere else as well?
+                        for (const auto& [other_base, other] : vma_map) {
+                            if (other.type != vma.type) {
+                                continue;
+                            }
+                            for (const auto& [other_offset, phys] : other.phys_areas) {
+                                if (backing >= phys.base && backing < phys.base + phys.size &&
+                                    !(other_base == vma.base && other_offset == area->first)) {
+                                    text += fmt::format(
+                                        " ALSO MAPPED at {:#x} (mapping {:#x}+{:#x})",
+                                        other_base + other_offset + (backing - phys.base),
+                                        other.base, other.size);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    mutex.unlock();
+    return text;
+}
+
 PAddr MemoryManager::PoolExpand(PAddr search_start, PAddr search_end, u64 size, u64 alignment) {
     std::scoped_lock lk{mutex, unmap_mutex};
     alignment = alignment > 0 ? alignment : 64_KB;
@@ -998,6 +1041,7 @@ u64 MemoryManager::UnmapBytesFromEntry(VAddr virtual_addr, VirtualMemoryArea vma
 
                 // Zero out the old memory data
                 const auto unmap_hardware_address = impl.BackingBase() + phys_addr;
+                Sotc::MemTrace::Add('Z', phys_addr, size_in_dma);
                 std::memset(unmap_hardware_address, 0, size_in_dma);
 
                 // Update flexible usage
