@@ -158,6 +158,10 @@ float GpuLoadRadeon() {
     return -1.0f;
 }
 
+// Readings of the driver's sensor since the last sample (sampler thread only).
+float radeon_sum = 0.0f;
+int radeon_count = 0;
+
 void TakeSample() {
     static u64 last_idle = 0, last_kernel = 0, last_user = 0, last_process = 0;
     static u64 last_wall = 0;
@@ -229,7 +233,12 @@ void TakeSample() {
     // are not the same measure and are never mixed: Windows' has been seen at 2% while the
     // game, which it keeps no account of here, had the card at half load.
     const float windows_figure = GpuLoad(elapsed); // always taken, it keeps running totals
-    const float driver_figure = GpuLoadRadeon();
+    // The driver's sensor is a momentary reading: taken once a second it jumped between 27
+    // and 88 at the same spot. The sampler reads it five times a second (see SamplerLoop) and
+    // the mean of the second is shown.
+    const float driver_figure = radeon_count > 0 ? radeon_sum / float(radeon_count) : -1.0f;
+    radeon_sum = 0.0f;
+    radeon_count = 0;
     next.gpu = driver_figure >= 0.0f ? driver_figure : windows_figure;
     std::scoped_lock lock{mutex};
     sample = next;
@@ -242,8 +251,18 @@ void TakeSample() {}
 /// sampling has a thread of its own.
 void SamplerLoop() {
     for (;;) {
-        TakeSample();
+#ifdef _WIN32
+        for (int reading = 0; reading < 5; reading++) {
+            if (const float load = GpuLoadRadeon(); load >= 0.0f) {
+                radeon_sum += load;
+                ++radeon_count;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+#else
         std::this_thread::sleep_for(std::chrono::seconds(1));
+#endif
+        TakeSample();
     }
 }
 

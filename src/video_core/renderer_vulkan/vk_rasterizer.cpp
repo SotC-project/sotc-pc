@@ -348,6 +348,12 @@ static void SubmitPeriodically(Scheduler& scheduler) {
     }
 }
 
+namespace {
+// Draws of the frame in hand and of the one before it.
+u32 frame_draws = 0;
+u32 last_frame_draws = 0;
+} // namespace
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     RENDERER_TRACE;
 
@@ -413,6 +419,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     // Set while binding when the draw uses a texture that is to stay off the screen.
     const bool left_out = Sotc::Screens::TakeSkipDraw();
     ++g_stats.drawn;
+    ++frame_draws;
     g_stats.verts_max = std::max<u32>(g_stats.verts_max, regs.num_indices);
     if (DrawLogActive()) {
         const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
@@ -967,11 +974,24 @@ void Rasterizer::FlushMirrors(u32 source) {
     // such event (SOTC_MIRROR_EAGER=1) more than doubles the round trips and cost 40% of the
     // frame rate in the heaviest scene, so the timing stays and the write is guarded instead:
     // see BufferCache::MirrorToGuest. SOTC_FLUSH_MASK overrides the set of sources.
-    static const bool eager = std::getenv("SOTC_MIRROR_EAGER") != nullptr;
-    static const u32 mask = [] {
-        const char* value = std::getenv("SOTC_FLUSH_MASK");
-        return value ? u32(std::atoi(value)) : eager ? 63u : (2u | 8u | 32u);
+    //
+    // Measured after the read-fault fix (page_manager.cpp): in 14 returns to the title menu
+    // not one late result met changed memory, so the guard has nothing to do there and the
+    // timing is left as it is. Every result it does drop is counted and logged.
+    // SOTC_MIRROR_LIGHT_DRAWS=<n> writes everything before every event in frames of fewer
+    // than n draws (level changes); tried at 400 it cost a third of the frame rate in the
+    // Shrine, where frames are that light in play, so it is off unless asked for.
+    static const bool always_eager = std::getenv("SOTC_MIRROR_EAGER") != nullptr;
+    static const u32 light_draws = [] {
+        const char* value = std::getenv("SOTC_MIRROR_LIGHT_DRAWS");
+        return value ? u32(std::atoi(value)) : 0u;
     }();
+    const bool eager = always_eager || std::max(frame_draws, last_frame_draws) < light_draws;
+    static const int forced_mask = [] {
+        const char* value = std::getenv("SOTC_FLUSH_MASK");
+        return value ? std::atoi(value) : -1;
+    }();
+    const u32 mask = forced_mask >= 0 ? u32(forced_mask) : eager ? 63u : (2u | 8u | 32u);
     if (pending_mirrors.empty() || !(mask & source)) {
         return;
     }
@@ -992,8 +1012,17 @@ void Rasterizer::FlushMirrors(u32 source) {
     std::ranges::sort(pending_mirrors);
     const auto dup = std::ranges::unique(pending_mirrors);
     pending_mirrors.erase(dup.begin(), dup.end());
+    const u64 dropped_before = buffer_cache.MirrorsDropped();
     buffer_cache.MirrorToGuest(pending_mirrors);
     pending_mirrors.clear();
+    if (const u64 dropped = buffer_cache.MirrorsDropped() - dropped_before) {
+        static u32 logged = 0;
+        if (logged++ < 40) {
+            LOG_INFO(Render, "{} late compute results dropped (source {}, eager {}, draws {} "
+                             "this frame, {} the one before)",
+                     dropped, source, eager, frame_draws, last_frame_draws);
+        }
+    }
 }
 
 void Rasterizer::OnSubmit() {
@@ -1027,6 +1056,8 @@ void Rasterizer::OnSubmit() {
         g_bisect.total_draws = 0;
     }
     ++g_stats.frames;
+    last_frame_draws = frame_draws;
+    frame_draws = 0;
     texture_cache.DebugDumpImages();
     buffer_cache.TickFrame();
     texture_cache.ProcessDownloadImages();

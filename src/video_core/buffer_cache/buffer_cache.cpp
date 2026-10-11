@@ -230,6 +230,7 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
             memory->TryWriteBacking(std::bit_cast<u8*>(addr), download.mapped + cursor, size);
         } else {
             ++dropped;
+            ++mirrors_dropped;
         }
         cursor += Common::AlignUp(size, 64);
     }
