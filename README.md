@@ -60,8 +60,9 @@ you start the game from a desktop shortcut like any other.
    builds its graphics programs now, which takes a few minutes once, and then plays without the
    small stops that building them during play would cause. **Skip** starts at once and prepares
    them as you go; expect short stops the first time you see each place.
-9. The title menu appears: **New Game** (and **Continue** once you have a save), **Settings**,
-   **Image Gallery**, **Free Play**, **Achievements**, **Quit**. Move with the arrow keys, the
+9. The opening film plays; press Esc and choose Skip Cinematic to pass it, then any key at the
+   title. The title menu appears: **Continue** and **Load Game** once you have a save, **New
+   Game**, **Settings**, **Image Gallery**, **Free Play**, **Achievements**, **Quit**. Move with the arrow keys, the
    mouse or a controller; confirm with Enter, a click, or the bottom face button.
 
 ### Controls
@@ -106,8 +107,8 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 13. The game saves by itself as you play. **Manual Save** in the pause menu saves on demand.
     Saves live in `dist\user`; keep that folder if you move or rebuild the program.
-14. **Main Menu** in the pause menu goes back to the title menu. **Quit** on the title menu
-    closes the game.
+14. **Quit Game** in the pause menu goes back to the title menu (in a free play battle the line
+    reads Main Menu). **Quit** on the title menu closes the game.
 
 ### Free Play and Time Attack
 
