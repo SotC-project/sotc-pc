@@ -212,7 +212,15 @@ void RenameQuitLine(int pass) {
             // Pages the game may write, and pages closed to writing for the moment because the
             // GPU side watches them: those are written through their backing memory.
             const bool watched = info.Protect == PAGE_READONLY;
-            if (info.State != MEM_COMMIT || (info.Protect != PAGE_READWRITE && !watched) ||
+            static const bool debug = std::getenv("SOTC_RENAME_DEBUG") != nullptr;
+            // Some of the game's memory is mapped open to running as well as writing; the
+            // runtime's second view of the game's memory is too, and is left out (it is the
+            // same memory).
+            const bool open = info.Protect == PAGE_EXECUTE_READWRITE &&
+                              Core::Memory::Instance()->IsValidMapping(
+                                  reinterpret_cast<VAddr>(info.BaseAddress), 1);
+            if (info.State != MEM_COMMIT ||
+                (info.Protect != PAGE_READWRITE && !watched && !open) ||
                 info.Type == MEM_IMAGE) {
                 continue;
             }
@@ -244,6 +252,22 @@ void RenameQuitLine(int pass) {
                             continue;
                         }
                         u8* const target = begin + offset + at;
+                        // Not the text being looked for itself, nor the copy just read: with
+                        // that one overwritten the rest of the search looks for the wrong words.
+                        const auto within = [&](const char* data, size_t size) {
+                            const u8* const first = reinterpret_cast<const u8*>(data);
+                            return target + from.size() > first && target < first + size;
+                        };
+                        if (within(old_text.data(), old_text.size()) ||
+                            within(old_wide.data(), old_wide.size()) ||
+                            within(block.data(), block.size())) {
+                            continue;
+                        }
+                        if (debug) {
+                            LOG_INFO(Core, "rename: at {:#x} protect {:#x} type {:#x} wide {}",
+                                     reinterpret_cast<u64>(target), u32(info.Protect),
+                                     u32(info.Type), wide);
+                        }
                         auto* memory = Core::Memory::Instance();
                         if (watched && !memory->IsValidMapping(reinterpret_cast<VAddr>(target),
                                                                to.size())) {
