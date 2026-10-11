@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <utility>
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -325,7 +326,19 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                                   const VideoCore::Buffer* buffer, u64 offset) {
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
-    ASSERT(src->info.resources.layers == dst->info.resources.layers && num_mips == 1);
+    // Only the first mip level and the layers both images have are carried over. That used to
+    // be asserted as the whole image (one level, equal layers); the battle with the sixth
+    // colossus copies between images where it is not, and stopped there. A part copied is
+    // better than no game.
+    if (src->info.resources.layers != dst->info.resources.layers || num_mips != 1) {
+        static bool warned = false;
+        if (!std::exchange(warned, true)) {
+            LOG_WARNING(Render_Vulkan,
+                        "Image copy through a buffer between {} and {} layers, {} mip levels: "
+                        "only level 0 of the shared layers is copied",
+                        src->info.resources.layers, dst->info.resources.layers, num_mips);
+        }
+    }
 
     SetBackingSamples(dst, dst->info.num_samples, false);
     SetBackingSamples(src, src->info.num_samples);
