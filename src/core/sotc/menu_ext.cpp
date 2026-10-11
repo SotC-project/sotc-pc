@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -17,11 +18,13 @@
 #include <vector>
 #include <utility>
 
+#include <SDL3/SDL_timer.h>
 #include <imgui.h>
 
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "core/libraries/pad/pad.h"
+#include "core/memory.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
@@ -41,19 +44,18 @@ using Libraries::Pad::OrbisPadButtonDataOffset;
 
 // All places are in the game's own screen units: -1 to 1 across, 1 (top) to -1 down.
 constexpr float RowStep = 1.0f / 12.0f; // one menu line
-constexpr float ArrowWidth = 0.042f;
 constexpr float ArrowHeight = 0.074f;
+constexpr float SameLine = 0.012f; // two cursor heights this close are the same line
 
 enum class Kind { None, Title, Pause };
 
 struct Root {
-    float arrow_x;  // left edge of the arrow
-    float arrow_y0; // bottom edge of the arrow on the first line
+    float arrow_x; // left edge of the arrow
     std::array<const char*, 3> lines;
     int num_lines;
 };
-constexpr Root TitleRoot{-0.786f, 0.139f, {"Free Play", "Achievements", "Quit"}, 3};
-constexpr Root PauseRoot{-0.695f, 0.087f, {"Achievements", nullptr, nullptr}, 1};
+constexpr Root TitleRoot{-0.786f, {"Free Play", "Achievements", "Quit"}, 3};
+constexpr Root PauseRoot{-0.695f, {"Achievements", nullptr, nullptr}, 1};
 
 const Root& RootOf(Kind kind) {
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
@@ -65,10 +67,18 @@ int extra_index = 0;
 std::array<bool, 4> swallowed{};
 std::atomic<Input::GameController*> pad{nullptr};
 
-// Lines in the game's title menu. It differs with the saves present, so it is found out: one
-// step up from the first line lands on the last. 0 = not known yet. The pause menu has four.
-std::atomic<int> title_lines{0};
-constexpr int PauseLines = 4;
+// Where the game's last line is (the height of the cursor on it). The extra lines go below it,
+// one line apart, and the game's Settings line is the one above it in the title menu.
+//
+// The pause menu always has the same four lines. The title menu does not: with a save it
+// starts with Continue and three lines about that save, set closer together than the lines
+// proper, and has Load Game as well; the whole list then sits elsewhere on the screen. So for
+// the title the place is found out each time the game runs, by sending the cursor one step up
+// from the first line, which lands on the last, and one step down again. Unknown = 2.
+constexpr float PauseFirstY = 0.087f;
+constexpr float PauseLastY = PauseFirstY - 3.0f * RowStep;
+constexpr float Unknown = 2.0f;
+std::atomic<float> title_last_y{Unknown};
 
 // Button presses sent to the game to move its cursor, one after the other.
 struct Tap {
@@ -77,61 +87,59 @@ struct Tap {
 };
 std::deque<Tap> taps;
 
-std::filesystem::path CountFile() {
-    return Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_title_menu.txt";
-}
+// A click on one of the game's own lines: the cursor is walked there by presses, and when it
+// has arrived the line is chosen.
+enum class Then { Nothing, Choose, Settings, StepToFirst };
+struct Seek {
+    bool active = false;
+    float y = 0.0f;
+    Then then = Then::Nothing;
+    int presses_left = 0;
+};
+Seek seek;
 
-void LoadCount() {
-    static bool loaded = false;
-    if (loaded) {
-        return;
-    }
-    loaded = true;
-    int count = 0;
-    std::ifstream{CountFile()} >> count;
-    if (count >= 1 && count <= 8) {
-        title_lines = count;
-    }
-}
+std::atomic_bool paused_in_cutscene{false};
 
-void StoreCount(int count) {
-    title_lines = count;
-    std::ofstream{CountFile()} << count << "\n";
-}
-
-/// The menu on screen with the cursor on one of its lines, and which line.
-Kind Current(int& line) {
-    float x, y;
+/// The menu on screen with the cursor on one of its lines, and how high the cursor is.
+Kind Current(float& y) {
+    float x;
     if (!Screens::Arrow(x, y)) {
         return Kind::None;
     }
     const Kind kind = Screens::PauseMenu() ? Kind::Pause : Kind::Title;
-    const Root& root = RootOf(kind);
-    if (std::abs(x - root.arrow_x) > 0.004f) {
+    if (std::abs(x - RootOf(kind).arrow_x) > 0.004f) {
         return Kind::None; // another list (a sub-menu)
     }
-    const float steps = (root.arrow_y0 - y) / RowStep;
-    const int nearest = static_cast<int>(std::lround(steps));
-    if (nearest < 0 || nearest > 7 || std::abs(steps - nearest) > 0.07f) {
+    // Pausing a cutscene brings up a menu of its own in the pause menu's place (Display,
+    // Audio, Open Photo Mode, Skip Cinematic). It is left alone. Whether a cutscene is on
+    // is taken from the black bars of the picture as it was before the menu came up.
+    if (kind == Kind::Pause && paused_in_cutscene.load()) {
         return Kind::None;
     }
-    line = nearest;
     return kind;
 }
 
-int LinesOf(Kind kind) {
-    return kind == Kind::Pause ? PauseLines : title_lines.load();
+float LastY(Kind kind) {
+    return kind == Kind::Pause ? PauseLastY : title_last_y.load();
+}
+
+bool Known(Kind kind) {
+    return LastY(kind) < 1.5f;
+}
+
+bool AtLast(Kind kind, float y) {
+    return Known(kind) && std::abs(y - LastY(kind)) < SameLine;
 }
 
 /// The game's own Settings line: first in the pause menu, and in the title menu the one above
 /// Image Gallery, its last. Confirming it opens the port's settings page, which holds the PC
 /// options and a line that carries on into the game's own settings.
-int SettingsLine(Kind kind) {
-    if (kind == Kind::Pause) {
-        return 0;
-    }
-    const int lines = title_lines.load();
-    return lines >= 2 ? lines - 2 : -1;
+float SettingsY(Kind kind) {
+    return kind == Kind::Pause ? PauseFirstY : LastY(kind) + RowStep;
+}
+
+bool AtSettings(Kind kind, float y) {
+    return Known(kind) && std::abs(y - SettingsY(kind)) < SameLine;
 }
 
 // Set by the settings page's "Game Settings" line: confirm the game's Settings line for real.
@@ -159,24 +167,41 @@ void Activate(Kind kind, int index) {
 /// menu is up, the copies of that one are found and given a name of the same length that says
 /// what the line does. Memory is read and written through the system, which reports a page that
 /// has gone away instead of faulting on it.
-void RenameQuitLine() {
+/// It is done twice: when the title menu first comes up, before the game has built its pause
+/// menu from those texts (the full-size menus lay their text out once and keep it), and when
+/// the pause menu first comes up, for the menus that read the text each time.
+void RenameQuitLine(int pass) {
 #ifdef _WIN32
-    static std::atomic_bool started{false};
-    if (started.exchange(true)) {
+    static std::atomic<int> passes_done{0};
+    if (passes_done.fetch_or(1 << pass) & (1 << pass)) {
         return;
     }
     std::thread{[] {
         const std::string old_text = std::string("Quit") + " Game";
         const std::string new_text = "Main Menu";
+        const auto widen = [](const std::string& text) {
+            std::string wide;
+            for (const char c : text) {
+                wide += c;
+                wide += '\0';
+            }
+            return wide;
+        };
+        const std::string old_wide = widen(old_text);
+        const std::string new_wide = widen(new_text);
         const HANDLE process = GetCurrentProcess();
         std::vector<char> block(4 << 20);
         u32 renamed = 0;
+        u32 renamed_watched = 0;
         u64 scanned = 0;
         MEMORY_BASIC_INFORMATION info{};
         for (u8* address = reinterpret_cast<u8*>(0x10000);
              VirtualQuery(address, &info, sizeof(info)) == sizeof(info);
              address = static_cast<u8*>(info.BaseAddress) + info.RegionSize) {
-            if (info.State != MEM_COMMIT || info.Protect != PAGE_READWRITE ||
+            // Pages the game may write, and pages closed to writing for the moment because the
+            // GPU side watches them: those are written through their backing memory.
+            const bool watched = info.Protect == PAGE_READONLY;
+            if (info.State != MEM_COMMIT || (info.Protect != PAGE_READWRITE && !watched) ||
                 info.Type == MEM_IMAGE) {
                 continue;
             }
@@ -190,28 +215,46 @@ void RenameQuitLine() {
                     break;
                 }
                 scanned += got;
-                const std::string_view view{block.data(), got};
-                for (size_t at = view.find(old_text); at != view.npos;
-                     at = view.find(old_text, at + 1)) {
-                    const size_t end = at + old_text.size();
-                    // A whole string only: ended by a zero or a line end, begun at a zero or
-                    // after the "=" of the text table.
-                    const bool ends = end < got && (view[end] == 0 || view[end] == 10 || view[end] == 13);
-                    const bool begins = at == 0 || view[at - 1] == 0 || view[at - 1] == '=';
-                    if (ends && begins &&
-                        WriteProcessMemory(process, begin + offset + at, new_text.data(),
-                                           new_text.size(), nullptr)) {
-                        ++renamed;
+                // The text as one byte a letter, and as two (the game keeps both kinds). A match
+                // inside a longer word is left alone; one followed by a question mark or the
+                // end of the text is the line.
+                for (const bool wide : {false, true}) {
+                    const std::string& from = wide ? old_wide : old_text;
+                    const std::string& to = wide ? new_wide : new_text;
+                    const std::string_view view{block.data(), got};
+                    for (size_t at = view.find(from); at != view.npos; at = view.find(from, at + 1)) {
+                        const size_t end = at + from.size();
+                        const bool letter_after =
+                            end < got && std::isalpha(static_cast<unsigned char>(view[end]));
+                        const bool letter_before =
+                            !wide && at > 0 &&
+                            std::isalpha(static_cast<unsigned char>(view[at - 1]));
+                        if (letter_after || letter_before) {
+                            continue;
+                        }
+                        u8* const target = begin + offset + at;
+                        auto* memory = Core::Memory::Instance();
+                        if (watched && !memory->IsValidMapping(reinterpret_cast<VAddr>(target),
+                                                               to.size())) {
+                            continue; // read-only memory of the program's own, not the game's
+                        }
+                        if (watched ? memory->TryWriteBacking(target, to.data(), to.size())
+                                    : WriteProcessMemory(process, target, to.data(), to.size(),
+                                                         nullptr) != 0) {
+                            ++renamed;
+                            renamed_watched += watched;
+                        }
                     }
                 }
                 if (got < want) {
                     break;
                 }
-                offset += want == block.size() ? want - old_text.size() - 1 : want;
+                offset += want == block.size() ? want - old_wide.size() - 2 : want;
             }
         }
-        LOG_INFO(Core, "Pause menu line renamed in {} places ({} MB looked through)", renamed,
-                 scanned >> 20);
+        LOG_INFO(Core, "Pause menu line renamed in {} places, {} of them in watched memory ({} MB "
+                       "looked through)",
+                 renamed, renamed_watched, scanned >> 20);
     }}.detach();
 #endif
 }
@@ -236,13 +279,12 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         swallowed[slot] = true;
         return true;
     }
-    int line = 0;
-    const Kind kind = Current(line);
+    float y = 0.0f;
+    const Kind kind = Current(y);
     if (kind == Kind::None) {
         on_extra = false;
         return false;
     }
-    const int lines = LinesOf(kind);
     const Root& root = RootOf(kind);
     if (on_extra) {
         switch (nav) {
@@ -266,12 +308,12 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         swallowed[slot] = true;
         return true;
     }
-    if (nav == Nav::Confirm && line == SettingsLine(kind) && taps.empty()) {
+    if (nav == Nav::Confirm && AtSettings(kind, y) && taps.empty()) {
         Menu::OpenSettings();
         swallowed[slot] = true;
         return true;
     }
-    if (nav == Nav::Down && lines > 0 && line == lines - 1 && taps.empty()) {
+    if (nav == Nav::Down && AtLast(kind, y) && taps.empty()) {
         on_extra = true;
         extra_index = 0;
         swallowed[slot] = true;
@@ -302,10 +344,9 @@ bool OnClick(float x, float y) {
     if (PanelOpen()) {
         return false;
     }
-    int line = 0;
-    const Kind kind = Current(line);
-    const int lines = LinesOf(kind);
-    if (kind == Kind::None || lines == 0 || !taps.empty()) {
+    float cursor_y = 0.0f;
+    const Kind kind = Current(cursor_y);
+    if (kind == Kind::None || !Known(kind) || !taps.empty() || seek.active) {
         return false;
     }
     const Root& root = RootOf(kind);
@@ -314,33 +355,41 @@ bool OnClick(float x, float y) {
     if (sx < root.arrow_x || sx > root.arrow_x + 0.36f) {
         return false;
     }
-    const float top = root.arrow_y0 + ArrowHeight * 0.5f + RowStep * 0.5f;
-    const int row = static_cast<int>(std::floor((top - sy) / RowStep));
-    if (row < 0 || row >= lines + root.num_lines) {
+    // Rows counted down from the game's last line: 0 is that line, 1 the first extra line;
+    // -1 the game's line above it, and so on.
+    const float last_middle = LastY(kind) + ArrowHeight * 0.5f;
+    const int row = static_cast<int>(std::lround((last_middle - sy) / RowStep));
+    if (row > root.num_lines) {
         return false;
     }
-    if (row >= lines) {
+    if (row >= 1) {
         on_extra = true;
-        extra_index = row - lines;
+        extra_index = row - 1;
         Activate(kind, extra_index);
         return true;
     }
-    // One of the game's lines: walk its cursor there, then confirm.
     on_extra = false;
-    const int current = line;
-    QueueTap(row > current ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up,
-             std::abs(row - current));
-    if (row == SettingsLine(kind)) {
-        Menu::OpenSettings();
+    if (kind == Kind::Pause && row < -3) {
+        return false;
+    }
+    // The four lines at the foot of either menu are a line apart. Higher up the title menu
+    // with a save has Continue and the lines about it: a click there means Continue, its first
+    // line, which is one step down from the last.
+    if (row >= -3) {
+        seek = {true, LastY(kind) - row * RowStep, row == -1 && kind == Kind::Title ? Then::Settings
+                                                    : Then::Choose, 10};
+        if (kind == Kind::Pause && row == -3) {
+            seek.then = Then::Settings;
+        }
     } else {
-        QueueTap(OrbisPadButtonDataOffset::Cross);
+        seek = {true, LastY(kind), Then::StepToFirst, 10};
     }
     return true;
 }
 
 bool AtTitleRoot() {
-    int line = 0;
-    return Current(line) == Kind::Title;
+    float y = 0.0f;
+    return Current(y) == Kind::Title;
 }
 
 void PassToGameSettings() {
@@ -356,8 +405,10 @@ bool HideText() {
 }
 
 void Draw() {
-    LoadCount();
     std::scoped_lock lock{mutex};
+    if (!Screens::PauseMenu()) {
+        paused_in_cutscene = Screens::Letterboxed();
+    }
     Input::GameController* controller = pad.load();
 
     if (!PanelOpen() && pass_settings.exchange(false)) {
@@ -376,55 +427,118 @@ void Draw() {
         }
     }
 
-    int line = 0;
-    const Kind kind = Current(line);
+    if (std::getenv("SOTC_MENULOG")) {
+        static u64 logged = 0;
+        float ax = 0.0f, ay = 0.0f;
+        if (Screens::Arrow(ax, ay) && SDL_GetTicks() - logged > 1500) {
+            logged = SDL_GetTicks();
+            LOG_INFO(Core, "menu cursor at {:.4f} {:.4f}, pause {}, last line {:.3f}, pad {}", ax,
+                     ay, Screens::PauseMenu(), title_last_y.load(), pad.load() != nullptr);
+        }
+    }
+    float y = 0.0f;
+    const Kind kind = Current(y);
     if (kind == Kind::None) {
         static int gone_frames = 0;
         if (!Screens::Arrow() && ++gone_frames > 20) {
             on_extra = false;
+            seek.active = false;
             gone_frames = 0;
         }
         return;
     }
+    RenameQuitLine(kind == Kind::Pause ? 1 : 0);
 
-    if (kind == Kind::Pause) {
-        RenameQuitLine();
+    // How long the cursor has rested where it is.
+    static float rest_y = Unknown;
+    static int rest_frames = 0;
+    if (std::abs(y - rest_y) < SameLine) {
+        ++rest_frames;
+    } else {
+        rest_y = y;
+        rest_frames = 0;
     }
-    // How many lines the title menu has: step up from its first line once and see where the
-    // cursor lands, then step back down.
-    static int probe = 0; // 0 idle, 1 stepped up and waiting, 2 done for this session
-    static int probe_frames = 0;
-    static int steady_frames = 0;
-    if (kind == Kind::Title && title_lines == 0 && !PanelOpen()) {
-        if (probe == 0) {
-            steady_frames = line == 0 ? steady_frames + 1 : 0;
-            if (line != 0) {
-                // The player moved first; go by what is seen.
-                title_lines = std::max(3, line + 1);
-            } else if (steady_frames > 30 && controller && taps.empty()) {
+
+    // Where the title menu's last line is: one step up from where the cursor rests when the
+    // menu comes up (its first line) lands on the last; a step down from there must then come
+    // back up to the first, or the start was not the first line and the cursor is walked down
+    // until it wraps. A cursor seen lower than what is known corrects it at any time.
+    static int probe = 0; // 0 not begun, 1 stepped up, 2 stepped down to check, 3 walking, 4 done
+    static float probe_start = 0.0f, probe_candidate = 0.0f;
+    static int probe_presses = 0;
+    if (kind == Kind::Title) {
+        if (Known(kind) && y < title_last_y.load() - SameLine && taps.empty() && rest_frames > 6) {
+            title_last_y = y;
+        }
+        if (!Known(kind) && !PanelOpen() && controller && taps.empty() && !seek.active) {
+            if (probe == 0 && rest_frames > 30) {
+                probe_start = y;
                 QueueTap(OrbisPadButtonDataOffset::Up);
                 probe = 1;
-                probe_frames = 0;
-            }
-        } else if (probe == 1) {
-            if (line != 0) {
-                StoreCount(line + 1);
-                LOG_INFO(Core, "Title menu has {} lines", line + 1);
+                rest_frames = 0;
+            } else if (probe == 1 && rest_frames > 8) {
+                probe_candidate = y;
                 QueueTap(OrbisPadButtonDataOffset::Down);
                 probe = 2;
-            } else if (++probe_frames > 90) {
-                title_lines = 3; // no answer; the usual count, not stored
-                probe = 2;
+                rest_frames = 0;
+            } else if (probe == 2 && rest_frames > 8) {
+                if (probe_candidate < probe_start - SameLine && y > probe_candidate + SameLine) {
+                    // Up went to a lower line and down came back up: the lower one is the last.
+                    title_last_y = probe_candidate;
+                    LOG_INFO(Core, "Title menu: last line at {:.3f}", probe_candidate);
+                    probe = 4;
+                } else {
+                    probe = 3;
+                    probe_presses = 0;
+                    probe_candidate = y;
+                }
+            } else if (probe == 3 && rest_frames > 8) {
+                if (y > probe_candidate + SameLine) {
+                    // Wrapped to the top: the line before was the last. Walk back to the start.
+                    title_last_y = probe_candidate;
+                    LOG_INFO(Core, "Title menu: last line at {:.3f} (found by walking)",
+                             probe_candidate);
+                    probe = 4;
+                    seek = {true, probe_start, Then::Nothing, 10};
+                } else if (++probe_presses > 10) {
+                    probe = 4; // gave up; the lowest line seen will do when it comes
+                    title_last_y = std::min(y, probe_candidate);
+                } else {
+                    probe_candidate = y;
+                    QueueTap(OrbisPadButtonDataOffset::Down);
+                    rest_frames = 0;
+                }
             }
         }
     }
-    // A cursor seen below the known last line corrects the count.
-    if (kind == Kind::Title && title_lines != 0 && line >= title_lines) {
-        StoreCount(line + 1);
+
+    // A click being followed up.
+    if (seek.active && taps.empty() && rest_frames > 6 && !PanelOpen()) {
+        if (std::abs(y - seek.y) < SameLine) {
+            seek.active = false;
+            switch (seek.then) {
+            case Then::Choose:
+                QueueTap(OrbisPadButtonDataOffset::Cross);
+                break;
+            case Then::Settings:
+                Menu::OpenSettings();
+                break;
+            case Then::StepToFirst:
+                QueueTap(OrbisPadButtonDataOffset::Down);
+                QueueTap(OrbisPadButtonDataOffset::Cross);
+                break;
+            case Then::Nothing:
+                break;
+            }
+        } else if (seek.presses_left-- <= 0) {
+            seek.active = false;
+        } else {
+            QueueTap(seek.y < y ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up);
+            rest_frames = 0;
+        }
     }
 
-    const int lines = LinesOf(kind);
-    if (lines == 0 || PanelOpen()) {
+    if (!Known(kind) || PanelOpen()) {
         return;
     }
     const Root& root = RootOf(kind);
@@ -437,7 +551,7 @@ void Draw() {
     constexpr ImU32 Ink = IM_COL32(22, 22, 20, 255);
     const float size = 34.0f * Ui::Scale();
     for (int i = 0; i < root.num_lines; i++) {
-        const float bottom = root.arrow_y0 - (lines + i) * RowStep;
+        const float bottom = LastY(kind) - (i + 1) * RowStep;
         const float middle = bottom + ArrowHeight * 0.5f;
         const ImVec2 text_at = to_pixels(root.arrow_x + 0.036f, middle);
         const ImVec2 extent = Ui::TextSize(size, root.lines[i]);

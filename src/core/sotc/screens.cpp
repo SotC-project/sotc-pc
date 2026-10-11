@@ -27,7 +27,10 @@ namespace {
 // Found with SOTC_TEXUSE runs. The first is drawn by every menu of the game (title menu, its
 // difficulty list, pause menu) and never in play, subtitles included; the second by the pause
 // menu only. So the title menu is "a menu without the pause menu's texture".
-constexpr std::array<u64, 1> TitleMenuTextures{0x3e6ebf384eebcdcdULL};
+// The menu cursor. The game has two sets of menu pictures: the full-size one of a normal
+// start (80x80) and a half-size one used when it is started straight into a scene, as
+// free play battles are (40x40).
+constexpr std::array<u64, 2> TitleMenuTextures{0x3e6ebf384eebcdcdULL, 0xc697b950114221edULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
 // Drawn only by the Game Over screen (the stone mask with Retry and End), found by comparing
 // what it draws on several deaths with what battles, the pause menu and the title draw. Both
@@ -74,12 +77,15 @@ bool Contains(const std::array<u64, N>& list, u64 hash) {
 
 } // namespace
 
-void TextureUsed(u64 content_hash) {
+void TextureUsed(u64 content_hash, u32 width, u32 height) {
     binds_now.fetch_add(1, std::memory_order_relaxed);
     // The sheet all the lettering of the game's menus is drawn from.
+    // In the half-size set it is known by its contents when first used; in the full-size
+    // set it is the one picture of 1920x540, which the game writes all its text into.
     constexpr u64 MenuLettering = 0xa7e173b9b30fa486ULL;
+    const bool lettering = content_hash == MenuLettering || (width == 1920 && height == 540);
     if (content_hash == skip_probe.load(std::memory_order_relaxed) ||
-        (content_hash == MenuLettering && MenuExt::HideText())) {
+        (lettering && MenuExt::HideText())) {
         skip_draw.store(true, std::memory_order_relaxed);
     }
     if (Contains(TitleMenuTextures, content_hash)) {
@@ -192,6 +198,46 @@ void EndFrame() {
 
 u32 FrameBinds() {
     return binds_last.load(std::memory_order_relaxed);
+}
+
+namespace {
+std::atomic<u64> column_ms{0};
+std::atomic_bool letterboxed{false};
+} // namespace
+
+bool WantsColumn() {
+    const u64 now = SDL_GetTicks();
+    if (now < 3000 || now - column_ms.load(std::memory_order_relaxed) < 200) {
+        return false;
+    }
+    column_ms.store(now, std::memory_order_relaxed);
+    return true;
+}
+
+void OnColumn(std::span<const u8> rgba, u32 height) {
+    if (height < 100 || rgba.size() < size_t(height) * 4) {
+        return;
+    }
+    const u32 width = static_cast<u32>(rgba.size() / 4 / height);
+    const auto lit = [&](u32 from, u32 to) {
+        for (u32 y = from; y < to; y++) {
+            for (u32 x = 0; x < width; x++) {
+                const u8* pixel = rgba.data() + (size_t(y) * width + x) * 4;
+                if (pixel[0] > 7 || pixel[1] > 7 || pixel[2] > 7) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    // Bars top and bottom (the game's are about a tenth of the height each), a picture
+    // between them.
+    letterboxed = !lit(0, height * 6 / 100) && !lit(height * 94 / 100, height) &&
+                  lit(height * 20 / 100, height * 80 / 100);
+}
+
+bool Letterboxed() {
+    return letterboxed.load(std::memory_order_relaxed);
 }
 
 bool PauseMenu() {

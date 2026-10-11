@@ -811,7 +811,8 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
     }
     UpdateImage(image_id);
     if (image.content_hash != 0) {
-        Sotc::Screens::TextureUsed(image.content_hash);
+        Sotc::Screens::TextureUsed(image.content_hash, image.info.size.width,
+                                   image.info.size.height);
     }
     return image.FindView(desc.view_info);
 }
@@ -1060,10 +1061,19 @@ void TextureCache::ApplyTexturePack(Image& image) {
     }
     const u64 hash = memory->HashSparseMemory(info.guest_address, info.guest_size);
     image.content_hash = hash;
+    if (std::getenv("SOTC_TEXINFO") &&
+        (info.size.width <= 64 || info.guest_size == 0x4b0000 || hash == 0xc697b950114221edULL ||
+         hash == 0x3e6ebf384eebcdcdULL || hash == 0xa7e173b9b30fa486ULL)) {
+        LOG_INFO(Render, "texture {:#x}: {}x{} format {} mips {} bytes {:#x} at {:#x}", hash,
+                 info.size.width, info.size.height, vk::to_string(info.pixel_format),
+                 info.resources.levels, info.guest_size, info.guest_address);
+    }
     // The game's menu arrow is drawn blank while the cursor is on a line this build adds to
     // the menu, which then draws its own.
+    // (Two cursors: the half-size and the full-size set of menu pictures.)
     constexpr u64 MenuArrow = 0x3e6ebf384eebcdcdULL;
-    if (hash == MenuArrow) {
+    constexpr u64 MenuArrowLarge = 0xc697b950114221edULL;
+    if (hash == MenuArrow || hash == MenuArrowLarge) {
         menu_arrow_range = {info.guest_address, info.guest_size};
         if (Sotc::MenuExt::HideArrow()) {
             const u32 size = info.guest_size;

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <span>
 #include <string>
 
 #include "common/types.h"
@@ -11,7 +12,12 @@ namespace Sotc::Screens {
 /// Called by the texture cache for every texture a draw uses, with the hash of its contents.
 /// The game says nothing about which of its screens is up, so that is read from the textures
 /// only that screen draws.
-void TextureUsed(u64 content_hash);
+void TextureUsed(u64 content_hash, u32 width = 0, u32 height = 0);
+/// A cutscene is playing: the picture has the black bars above and below it. Found from a
+/// thin column of the picture read back a few times a second.
+bool WantsColumn();
+void OnColumn(std::span<const u8> rgba, u32 height);
+bool Letterboxed();
 
 /// The game's menu arrow was drawn with its left edge at x and its bottom edge at y, in screen
 /// units (-1 to 1 across, 1 at the top to -1).

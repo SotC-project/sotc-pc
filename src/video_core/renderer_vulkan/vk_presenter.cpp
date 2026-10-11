@@ -946,6 +946,28 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
     }
 
+    // A thin column down the middle of the picture, to tell a cutscene by its black bars.
+    std::optional<ScreenshotReadback> pending_column;
+    if (Sotc::Screens::WantsColumn()) {
+        auto& readback = pending_column.emplace(
+            instance, ScreenshotKind::GameOnly, std::vector<std::filesystem::path>{}, 2u,
+            image_size.height, view_info.format, false);
+        const vk::BufferImageCopy copy_region = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {static_cast<s32>(image_size.width / 2), 0, 0},
+            .imageExtent = {2, image_size.height, 1},
+        };
+        runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
+    }
+
     // Two thin rows of the picture, to tell a plain black load screen.
     std::array<std::optional<ScreenshotReadback>, 2> pending_probes;
     if (Sotc::Loading::WantsProbe()) {
@@ -998,6 +1020,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     if (pending_record) {
         draw_scheduler.DeferPriorityOperation([frame_data = std::move(pending_record)]() {
             WriteRecordFrame(frame_data.value());
+        });
+    }
+    if (pending_column) {
+        draw_scheduler.DeferPriorityOperation([column = std::move(pending_column)]() {
+            std::vector<u8> rgba;
+            if (ConvertReadbackToRgba8(column.value(), rgba)) {
+                Sotc::Screens::OnColumn(rgba, column->height);
+            }
         });
     }
     for (auto& probe : pending_probes) {
