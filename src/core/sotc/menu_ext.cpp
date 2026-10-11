@@ -116,6 +116,17 @@ Kind Current(float& y) {
     if (kind == Kind::Pause && paused_in_cutscene.load()) {
         return Kind::None;
     }
+    // The list of difficulties that New Game opens (Easy, Normal, Hard) stands where the title
+    // menu does. Its three lines are a fraction of a line off the title menu's in both sets
+    // of menu pictures, and that is what tells them apart.
+    if (kind == Kind::Title) {
+        constexpr float NormalY = -0.0370f;
+        for (int line = -1; line <= 1; line++) {
+            if (std::abs(y - (NormalY + line * RowStep)) < 0.004f) {
+                return Kind::None;
+            }
+        }
+    }
     return kind;
 }
 
