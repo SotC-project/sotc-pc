@@ -102,6 +102,62 @@ float GpuLoad(float elapsed_100ns) {
     return std::min(busiest, 100.0f);
 }
 
+/// The same from the Radeon driver's own library, for systems where Windows keeps no account
+/// of the game's work on the card (the kernel statistics above stay at nothing here while the
+/// game runs). The library is the driver's, loaded only if it is installed. -1 when it is not,
+/// or has no such sensor.
+float GpuLoadRadeon() {
+    struct Sensor {
+        int supported;
+        int value;
+    };
+    struct Sensors {
+        int size;
+        Sensor sensors[256];
+    };
+    constexpr int ActivityGfx = 19; // ADL_PMLOG_INFO_ACTIVITY_GFX
+    using Alloc = void*(__stdcall*)(int);
+    using Create = int (*)(Alloc, int, void**);
+    using Count = int (*)(void*, int*);
+    using Query = int (*)(void*, int, Sensors*);
+    static void* context = nullptr;
+    static Query query = nullptr;
+    static int adapters = 0;
+    static int adapter = -1;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        if (const HMODULE library = LoadLibraryA("atiadlxx.dll")) {
+            const auto create =
+                reinterpret_cast<Create>(GetProcAddress(library, "ADL2_Main_Control_Create"));
+            const auto count = reinterpret_cast<Count>(
+                GetProcAddress(library, "ADL2_Adapter_NumberOfAdapters_Get"));
+            query = reinterpret_cast<Query>(
+                GetProcAddress(library, "ADL2_New_QueryPMLogData_Get"));
+            static const Alloc alloc = [](int size) -> void* { return std::malloc(size); };
+            if (!create || !count || !query || create(alloc, 1, &context) != 0 ||
+                count(context, &adapters) != 0) {
+                query = nullptr;
+            }
+        }
+    }
+    if (!query) {
+        return -1.0f;
+    }
+    static Sensors out;
+    for (int index = adapter >= 0 ? adapter : 0; index < adapters; index++) {
+        out = {};
+        if (query(context, index, &out) == 0 && out.sensors[ActivityGfx].supported) {
+            adapter = index;
+            return std::clamp(float(out.sensors[ActivityGfx].value), 0.0f, 100.0f);
+        }
+        if (adapter >= 0) {
+            break;
+        }
+    }
+    return -1.0f;
+}
+
 void TakeSample() {
     static u64 last_idle = 0, last_kernel = 0, last_user = 0, last_process = 0;
     static u64 last_wall = 0;
@@ -169,6 +225,9 @@ void TakeSample() {
 
     // Graphics load: Windows' own counter for this program's use of the 3D engines.
     next.gpu = GpuLoad(elapsed);
+    if (next.gpu <= 0.5f) {
+        next.gpu = std::max(next.gpu, GpuLoadRadeon());
+    }
     std::scoped_lock lock{mutex};
     sample = next;
 }

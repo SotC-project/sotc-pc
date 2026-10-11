@@ -430,6 +430,11 @@ void SaveDialogUi::Draw() {
         Sotc::Ui::MarkDialog();
         SetNextWindowPos({0.0f, 0.0f});
         SetNextWindowSize(io.DisplaySize);
+    } else {
+        // A slip stands to the right of the menu it was called from, clear of its lines.
+        SetNextWindowPos({std::max(io.DisplaySize.x * 0.30f,
+                                   (io.DisplaySize.x - window_size.x) * 0.5f),
+                          (io.DisplaySize.y - window_size.y) * 0.5f});
     }
     // A list stands where the game's own lists do: left, below the top third.
     PushStyleVar(ImGuiStyleVar_WindowPadding,
