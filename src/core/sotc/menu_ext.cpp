@@ -558,6 +558,13 @@ void Draw() {
         // Plain, as the game's own lines are: no shadow.
         draw->AddText(Ui::Serif(), size, {text_at.x, text_at.y - extent.y * 0.5f}, Ink,
                       root.lines[i]);
+        if (Screens::FullSizeMenus()) {
+            // The full-size menus are set in a heavier cut of the face: drawn once more a
+            // touch to the right, the added lines match them.
+            draw->AddText(Ui::Serif(), size,
+                          {text_at.x + 0.6f * Ui::Scale(), text_at.y - extent.y * 0.5f}, Ink,
+                          root.lines[i]);
+        }
         if (on_extra && extra_index == i) {
             const ImVec2 a = to_pixels(root.arrow_x + 0.005f, middle + 0.026f);
             const ImVec2 b = to_pixels(root.arrow_x + 0.005f, middle - 0.026f);

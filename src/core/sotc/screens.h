@@ -18,6 +18,9 @@ void TextureUsed(u64 content_hash, u32 width = 0, u32 height = 0);
 bool WantsColumn();
 void OnColumn(std::span<const u8> rgba, u32 height);
 bool Letterboxed();
+/// True while the game draws its menus from the full-size set of pictures (a normal start);
+/// its lettering is heavier there.
+bool FullSizeMenus();
 
 /// The game's menu arrow was drawn with its left edge at x and its bottom edge at y, in screen
 /// units (-1 to 1 across, 1 at the top to -1).

@@ -50,6 +50,7 @@ std::atomic<u64> pause_seen_ms{0};
 std::array<std::atomic<u64>, GameOverTextures.size()> game_over_seen_ms{};
 
 // Draws that use a texture from this list are left out (see TakeSkipDraw).
+std::atomic<u64> full_size_ms{0};
 std::atomic<u64> skip_probe{0};
 std::atomic_bool skip_draw{false};
 
@@ -84,6 +85,9 @@ void TextureUsed(u64 content_hash, u32 width, u32 height) {
     // set it is the one picture of 1920x540, which the game writes all its text into.
     constexpr u64 MenuLettering = 0xa7e173b9b30fa486ULL;
     const bool lettering = content_hash == MenuLettering || (width == 1920 && height == 540);
+    if (width == 1920 && height == 540) {
+        full_size_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+    }
     if (content_hash == skip_probe.load(std::memory_order_relaxed) ||
         (lettering && MenuExt::HideText())) {
         skip_draw.store(true, std::memory_order_relaxed);
@@ -234,6 +238,11 @@ void OnColumn(std::span<const u8> rgba, u32 height) {
     // between them.
     letterboxed = !lit(0, height * 6 / 100) && !lit(height * 94 / 100, height) &&
                   lit(height * 20 / 100, height * 80 / 100);
+}
+
+bool FullSizeMenus() {
+    const u64 seen = full_size_ms.load(std::memory_order_relaxed);
+    return seen != 0 && SDL_GetTicks() - seen < 2000;
 }
 
 bool Letterboxed() {
