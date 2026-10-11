@@ -224,9 +224,13 @@ void TakeSample() {
     }
 
     // Graphics load: Windows' own counter for this program's use of the 3D engines.
-    // The higher of the two: Windows' figure has been seen at 2% (other programs' work on the
-    // card) while the game, which it keeps no account of, had the card at 60%.
-    next.gpu = std::max(GpuLoad(elapsed), GpuLoadRadeon());
+    // One figure, of one kind: the card's own activity from its driver where that answers
+    // (Radeon), and only otherwise Windows' account of all programs' work on the card. The two
+    // are not the same measure and are never mixed: Windows' has been seen at 2% while the
+    // game, which it keeps no account of here, had the card at half load.
+    const float windows_figure = GpuLoad(elapsed); // always taken, it keeps running totals
+    const float driver_figure = GpuLoadRadeon();
+    next.gpu = driver_figure >= 0.0f ? driver_figure : windows_figure;
     std::scoped_lock lock{mutex};
     sample = next;
 }
