@@ -224,10 +224,9 @@ void TakeSample() {
     }
 
     // Graphics load: Windows' own counter for this program's use of the 3D engines.
-    next.gpu = GpuLoad(elapsed);
-    if (next.gpu <= 0.5f) {
-        next.gpu = std::max(next.gpu, GpuLoadRadeon());
-    }
+    // The higher of the two: Windows' figure has been seen at 2% (other programs' work on the
+    // card) while the game, which it keeps no account of, had the card at 60%.
+    next.gpu = std::max(GpuLoad(elapsed), GpuLoadRadeon());
     std::scoped_lock lock{mutex};
     sample = next;
 }
