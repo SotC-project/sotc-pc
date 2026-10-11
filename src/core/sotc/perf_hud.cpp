@@ -21,10 +21,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <pdh.h>
+typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
+#include <d3dkmthk.h>
 #include <psapi.h>
 #include <tlhelp32.h>
-#pragma comment(lib, "pdh.lib")
+#pragma comment(lib, "gdi32.lib")
 #endif
 
 namespace Sotc::PerfHud {
@@ -42,7 +43,7 @@ struct Sample {
     float cpu_all = 0.0f;     // whole machine, percent of all cores
     float cpu_process = 0.0f; // this program, percent of one core
     float cpu_thread = 0.0f;  // its busiest thread, percent of one core
-    float gpu = -1.0f;        // 3D engine use by this program, percent; -1 = not known
+    float gpu = -1.0f;        // busiest engine of the graphics card, percent; -1 = not known
     u64 ram = 0;              // working set, bytes
 };
 Sample sample;
@@ -50,6 +51,55 @@ Sample sample;
 #ifdef _WIN32
 u64 Ticks(const FILETIME& time) {
     return (static_cast<u64>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+}
+
+/// How busy the graphics card is: the share of the last interval its busiest engine was
+/// running, from the graphics kernel's own statistics (what Task Manager shows). It counts
+/// every program's work on the card, not this one's alone. -1 when it cannot be read.
+/// (Windows' performance counters for the same thing return nothing on some systems.)
+float GpuLoad(float elapsed_100ns) {
+    static std::map<std::pair<u64, u32>, u64> last_running;
+    D3DKMT_ENUMADAPTERS2 list{};
+    if (D3DKMTEnumAdapters2(&list) != 0 || list.NumAdapters == 0) {
+        return -1.0f;
+    }
+    std::vector<D3DKMT_ADAPTERINFO> adapters(list.NumAdapters);
+    list.pAdapters = adapters.data();
+    if (D3DKMTEnumAdapters2(&list) != 0) {
+        return -1.0f;
+    }
+    float busiest = -1.0f;
+    for (u32 i = 0; i < list.NumAdapters; i++) {
+        const LUID luid = adapters[i].AdapterLuid;
+        D3DKMT_QUERYSTATISTICS about{};
+        about.Type = D3DKMT_QUERYSTATISTICS_ADAPTER;
+        about.AdapterLuid = luid;
+        if (D3DKMTQueryStatistics(&about) == 0) {
+            const u32 nodes = about.QueryResult.AdapterInformation.NodeCount;
+            for (u32 node = 0; node < nodes && node < 64; node++) {
+                D3DKMT_QUERYSTATISTICS query{};
+                query.Type = D3DKMT_QUERYSTATISTICS_NODE;
+                query.AdapterLuid = luid;
+                query.QueryNode.NodeId = node;
+                if (D3DKMTQueryStatistics(&query) != 0) {
+                    continue;
+                }
+                const u64 running = static_cast<u64>(
+                    query.QueryResult.NodeInformation.GlobalInformation.RunningTime.QuadPart);
+                const auto key = std::make_pair(
+                    (static_cast<u64>(luid.HighPart) << 32) | luid.LowPart, node);
+                const auto before = last_running.find(key);
+                if (before != last_running.end() && elapsed_100ns > 0.0f && running >= before->second) {
+                    busiest = std::max(
+                        busiest, 100.0f * float(running - before->second) / elapsed_100ns);
+                }
+                last_running[key] = running;
+            }
+        }
+        D3DKMT_CLOSEADAPTER close{adapters[i].hAdapter};
+        D3DKMTCloseAdapter(&close);
+    }
+    return std::min(busiest, 100.0f);
 }
 
 void TakeSample() {
@@ -118,39 +168,7 @@ void TakeSample() {
     }
 
     // Graphics load: Windows' own counter for this program's use of the 3D engines.
-    // One instance per program and engine, named "pid_<n>_luid_..._engtype_<kind>"; ours are
-    // picked out by name.
-    static PDH_HQUERY query = nullptr;
-    static PDH_HCOUNTER counter = nullptr;
-    static bool tried = false;
-    if (!tried) {
-        tried = true;
-        if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS ||
-            PdhAddEnglishCounterW(query, L"\\GPU Engine(*)\\Utilization Percentage", 0,
-                                  &counter) != ERROR_SUCCESS) {
-            counter = nullptr;
-        }
-    }
-    if (counter && PdhCollectQueryData(query) == ERROR_SUCCESS) {
-        DWORD size = 0, count = 0;
-        PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &size, &count, nullptr);
-        std::vector<u8> buffer(size);
-        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
-        if (size != 0 && PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &size, &count,
-                                                      items) == ERROR_SUCCESS) {
-            const std::wstring ours = L"pid_" + std::to_wstring(pid) + L"_";
-            double sum = 0.0;
-            for (DWORD i = 0; i < count; i++) {
-                const std::wstring_view name{items[i].szName};
-                // The busiest of this program's engines: which engine a Vulkan program's work
-                // is booked on differs between drivers.
-                if (name.starts_with(ours)) {
-                    sum = std::max(sum, items[i].FmtValue.doubleValue);
-                }
-            }
-            next.gpu = static_cast<float>(std::min(sum, 100.0));
-        }
-    }
+    next.gpu = GpuLoad(elapsed);
     std::scoped_lock lock{mutex};
     sample = next;
 }
@@ -280,10 +298,14 @@ void Draw() {
                      sample.cpu_process, sample.cpu_thread));
     y += line;
     text(x, y, 19.0f, Plain,
-         // Windows reports no figure at all on some systems; then the line goes without it.
-         sample.gpu > 0.5f ? fmt::format("GPU {:.0f}%     video memory {:.1f} GB", sample.gpu,
+         // "Allocated": what the renderer has taken from the card, which is more than a frame
+         // needs (it keeps textures and buffers it may want again).
+         // The kernel reports no running time at all on some systems (a steady 0): then the
+         // line goes without the figure rather than show a wrong one.
+         sample.gpu > 0.5f ? fmt::format("GPU {:.0f}%     video memory allocated {:.1f} GB", sample.gpu,
                                           device_memory.load() / 1073741824.0)
-                            : fmt::format("video memory {:.1f} GB", device_memory.load() / 1073741824.0));
+                            : fmt::format("video memory allocated {:.1f} GB",
+                                          device_memory.load() / 1073741824.0));
     y += line;
     text(x, y, 19.0f, Plain, fmt::format("RAM {:.1f} GB", sample.ram / 1073741824.0));
     y += line;

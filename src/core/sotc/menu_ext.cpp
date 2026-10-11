@@ -13,6 +13,8 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 #include <utility>
 
 #include <imgui.h>
@@ -26,6 +28,10 @@
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
 #include "input/controller.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace Sotc::MenuExt {
 
@@ -146,6 +152,68 @@ void Activate(Kind kind, int index) {
     } else if (line == "Quit") {
         Menu::OpenQuit();
     }
+}
+
+/// The pause menu's last line reads "Quit Game" but leads to the title menu, not out of the
+/// game. The game keeps its menu texts in memory as plain strings; the first time the pause
+/// menu is up, the copies of that one are found and given a name of the same length that says
+/// what the line does. Memory is read and written through the system, which reports a page that
+/// has gone away instead of faulting on it.
+void RenameQuitLine() {
+#ifdef _WIN32
+    static std::atomic_bool started{false};
+    if (started.exchange(true)) {
+        return;
+    }
+    std::thread{[] {
+        const std::string old_text = std::string("Quit") + " Game";
+        const std::string new_text = "Main Menu";
+        const HANDLE process = GetCurrentProcess();
+        std::vector<char> block(4 << 20);
+        u32 renamed = 0;
+        u64 scanned = 0;
+        MEMORY_BASIC_INFORMATION info{};
+        for (u8* address = reinterpret_cast<u8*>(0x10000);
+             VirtualQuery(address, &info, sizeof(info)) == sizeof(info);
+             address = static_cast<u8*>(info.BaseAddress) + info.RegionSize) {
+            if (info.State != MEM_COMMIT || info.Protect != PAGE_READWRITE ||
+                info.Type == MEM_IMAGE) {
+                continue;
+            }
+            u8* const begin = static_cast<u8*>(info.BaseAddress);
+            for (size_t offset = 0; offset < info.RegionSize;) {
+                // Blocks overlap by the length of the text, so one across a boundary is seen.
+                const size_t want = std::min(block.size(), info.RegionSize - offset);
+                SIZE_T got = 0;
+                if (!ReadProcessMemory(process, begin + offset, block.data(), want, &got) ||
+                    got < old_text.size() + 1) {
+                    break;
+                }
+                scanned += got;
+                const std::string_view view{block.data(), got};
+                for (size_t at = view.find(old_text); at != view.npos;
+                     at = view.find(old_text, at + 1)) {
+                    const size_t end = at + old_text.size();
+                    // A whole string only: ended by a zero or a line end, begun at a zero or
+                    // after the "=" of the text table.
+                    const bool ends = end < got && (view[end] == 0 || view[end] == 10 || view[end] == 13);
+                    const bool begins = at == 0 || view[at - 1] == 0 || view[at - 1] == '=';
+                    if (ends && begins &&
+                        WriteProcessMemory(process, begin + offset + at, new_text.data(),
+                                           new_text.size(), nullptr)) {
+                        ++renamed;
+                    }
+                }
+                if (got < want) {
+                    break;
+                }
+                offset += want == block.size() ? want - old_text.size() - 1 : want;
+            }
+        }
+        LOG_INFO(Core, "Pause menu line renamed in {} places ({} MB looked through)", renamed,
+                 scanned >> 20);
+    }}.detach();
+#endif
 }
 
 void QueueTap(OrbisPadButtonDataOffset button, int times = 1) {
@@ -319,6 +387,9 @@ void Draw() {
         return;
     }
 
+    if (kind == Kind::Pause) {
+        RenameQuitLine();
+    }
     // How many lines the title menu has: step up from its first line once and see where the
     // cursor lands, then step back down.
     static int probe = 0; // 0 idle, 1 stepped up and waiting, 2 done for this session

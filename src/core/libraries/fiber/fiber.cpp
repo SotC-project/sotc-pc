@@ -278,6 +278,8 @@ s32 PS4_SYSV_ABI sceFiberFinalize(OrbisFiber* fiber) {
 
     FiberState expected = FiberState::Idle;
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Terminated)) {
+        LOG_ERROR(Lib_Fiber, "fiber {} not idle when finalized (state {})", static_cast<void*>(fiber),
+                  static_cast<u32>(expected));
         return ORBIS_FIBER_ERROR_STATE;
     }
     ReleaseHostStack(fiber);
@@ -312,6 +314,10 @@ s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size
 
     FiberState expected = FiberState::Idle;
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Run)) {
+        // A fiber asked to run while it is running elsewhere, or after it was finalized: worth
+        // knowing about when the game's job code faults.
+        LOG_ERROR(Lib_Fiber, "fiber {} not idle when run (state {})", static_cast<void*>(fiber),
+                  static_cast<u32>(expected));
         return ORBIS_FIBER_ERROR_STATE;
     }
 
@@ -388,6 +394,10 @@ s32 PS4_SYSV_ABI sceFiberSwitchImpl(OrbisFiber* fiber, void* addr_context, u64 s
 
     FiberState expected = FiberState::Idle;
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Run)) {
+        // A fiber asked to run while it is running elsewhere, or after it was finalized: worth
+        // knowing about when the game's job code faults.
+        LOG_ERROR(Lib_Fiber, "fiber {} not idle when run (state {})", static_cast<void*>(fiber),
+                  static_cast<u32>(expected));
         return ORBIS_FIBER_ERROR_STATE;
     }
 
