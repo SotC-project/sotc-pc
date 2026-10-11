@@ -85,8 +85,11 @@ if [ "${#parts[@]}" = "2" ]; then
     echo "first part ${d0:-?} s; in the second: animation ${as:-?} to ${ae:-?} s, scene at ${sc:-?} s"
     if [ -n "$d0" ] && [ -n "$sc" ]; then
         a=$(python -c "print($d0 - 3.5)")
-        b0=$(python -c "print($d0 + max($as, $ae - 4.5))"); b1=$(python -c "print($d0 + $ae + 0.4)")
-        c=$(python -c "print($d0 + $sc - 0.4)")
+        # When the animation runs right up to the scene (the port plays it over the whole wait),
+        # the middle piece simply ends where the last one begins.
+        b0=$(python -c "print($d0 + max($as, $ae - 4.5))")
+        c=$(python -c "print($d0 + max($sc - 0.4, min($ae, $sc) - 0.0))")
+        b1=$(python -c "print(min($d0 + $ae + 0.4, $c))")
         ffmpeg -y -loglevel error -i "$joined" -filter_complex "[0:v]trim=0:$a,setpts=PTS-STARTPTS[v0];[0:a]atrim=0:$a,asetpts=PTS-STARTPTS[a0];[0:v]trim=$b0:$b1,setpts=PTS-STARTPTS[v1];[0:a]atrim=$b0:$b1,asetpts=PTS-STARTPTS,afade=t=in:d=0.4[a1];[0:v]trim=start=$c,setpts=PTS-STARTPTS[v2];[0:a]atrim=start=$c,asetpts=PTS-STARTPTS,afade=t=in:d=0.6[a2];[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[v][a]" -map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out" && ls -la "$out"
     else
         cp "$joined" "$out" && ls -la "$out"
