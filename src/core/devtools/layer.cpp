@@ -6,6 +6,7 @@
 #include "core/sotc/challenge.h"
 #include "core/sotc/first_run.h"
 #include "core/sotc/loading.h"
+#include "core/sotc/perf_hud.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
@@ -506,6 +507,7 @@ void L::Draw() {
         PopFont();
     }
 
+    Sotc::PerfHud::Draw();
     Sotc::Menu::Draw();
     Sotc::Achievements::Draw();
     Sotc::Challenge::Draw();

@@ -10,6 +10,7 @@
 #include "core/sotc/challenge.h"
 #include "core/sotc/loading.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/perf_hud.h"
 #include "core/sotc/screens.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
@@ -884,6 +885,9 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
 
     Sotc::Screens::EndFrame();
+    if (Sotc::PerfHud::Enabled()) {
+        Sotc::PerfHud::device_memory = instance.GetDeviceMemoryUsage();
+    }
     frame->sotc_cover = Sotc::Menu::StartCovered();
     if (std::getenv("SOTC_BINDLOG")) {
         LOG_ERROR(Render, "frame binds {}", Sotc::Screens::FrameBinds());

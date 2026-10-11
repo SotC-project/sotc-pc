@@ -9,6 +9,7 @@
 #include <SDL3/SDL_timer.h>
 #include <chrono>
 #include "core/sotc/hitch.h"
+#include "core/sotc/perf_hud.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -270,6 +271,7 @@ void VideoOutDriver::Flip(const Request& req) {
     if (frametimes) {
         std::fprintf(frametimes, "%.3f %.3f\n", SDL_GetTicks() / 1000.0, gap_ms);
     }
+    Sotc::PerfHud::OnFrame(gap_ms);
     worst_ms = std::max(worst_ms, gap_ms);
     hitches += gap_ms > 40.0;
     {
