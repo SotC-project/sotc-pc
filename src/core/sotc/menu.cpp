@@ -1002,7 +1002,11 @@ void Draw() {
     }
     const float title_x = display.x * (in_place ? 0.076f : 0.15f);
     const float label_x = display.x * (in_place ? 0.089f : 0.20f);
-    const float value_x = display.x * (in_place ? 0.40f : 0.58f);
+    // On the title the ruin stands in the right half of the picture: the values are kept to
+    // the sky, left of it, where their dark arrows show.
+    const bool over_title = in_place && !Screens::PauseMenu();
+    const float value_x = display.x * (over_title ? 0.385f : in_place ? 0.40f : 0.58f);
+    const float arrow_reach = (over_title ? 165.0f : 200.0f) * scale;
     float y = display.y * (in_place ? 0.318f : 0.17f);
     Ui::Text(draw, (in_place ? 46.0f : 60.0f) * scale, {title_x, y}, Ui::TextBright, PageTitle());
     y += (in_place ? 68.0f : 100.0f) * scale;
@@ -1048,9 +1052,9 @@ void Draw() {
             Ui::TextCentered(draw, text_size, value_x, text_y, color, row.value);
             if (row.adjustable && row.enabled) {
                 const float arrow = 13.0f * scale;
-                Ui::Triangle(draw, {value_x - 200.0f * scale, row_y + row_height * 0.5f}, arrow,
+                Ui::Triangle(draw, {value_x - arrow_reach, row_y + row_height * 0.5f}, arrow,
                              false, color);
-                Ui::Triangle(draw, {value_x + 200.0f * scale, row_y + row_height * 0.5f}, arrow,
+                Ui::Triangle(draw, {value_x + arrow_reach, row_y + row_height * 0.5f}, arrow,
                              true, color);
             }
         }
@@ -1071,7 +1075,10 @@ void Draw() {
     }
     const Row& current = rows[selected];
     if (!current.description.empty()) {
-        Ui::TextCentered(draw, 28.0f * scale, display.x * 0.5f, display.y * 0.86f,
+        // On the title the left of the picture's foot is sky; the line is set further right,
+        // over the stone.
+        const float centre = in_place && !Screens::PauseMenu() ? 0.60f : 0.5f;
+        Ui::TextCentered(draw, 28.0f * scale, display.x * centre, display.y * 0.86f,
                          Ui::TextNormal, current.description);
     }
     const float prompt_x = display.x * 0.95f;

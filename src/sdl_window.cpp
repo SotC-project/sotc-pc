@@ -321,6 +321,23 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             Sotc::Screens::SetSkipProbe(std::stoull(action.substr(6), nullptr, 16));
         } else if (action.starts_with("texuse=")) {
             Sotc::Screens::DumpUsed(action.substr(7));
+        } else if (action.starts_with("click=")) {
+            // "click=0.08/0.55": a left click at that place of the window (fractions of its
+            // width and height), as the mouse sends it.
+            const auto comma = action.find('/');
+            int w = 0, h = 0;
+            SDL_GetWindowSize(SDL_GetWindowFromID(g_script_window), &w, &h);
+            if (comma != std::string::npos && w > 0 && h > 0) {
+                SDL_Event click{};
+                click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+                click.button.windowID = g_script_window;
+                click.button.button = SDL_BUTTON_LEFT;
+                click.button.down = true;
+                click.button.x = std::stof(action.substr(6, comma - 6)) * w;
+                click.button.y = std::stof(action.substr(comma + 1)) * h;
+                SDL_PushEvent(&click);
+                held_keys.push_back({click, now + 120});
+            }
         } else if (action.starts_with("mousey=")) {
             // The same, moving down (negative = up).
             const auto star = action.find('*');
