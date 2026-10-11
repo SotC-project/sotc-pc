@@ -109,8 +109,8 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
     choose **New Save Game**, or an existing save to write over it, with the arrow keys and Enter
     or the mouse.
     Saves live in `dist\user`; keep that folder if you move or rebuild the program.
-14. **Quit Game** in the pause menu goes back to the title menu (in a free play battle the line
-    reads Main Menu). **Quit** on the title menu closes the game.
+14. **Main Menu** in the pause menu goes back to the title menu. **Quit** on the title menu
+    closes the game.
 
 ### Free Play and Time Attack
 
