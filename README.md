@@ -128,10 +128,10 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 ### If something goes wrong
 
-- **The game stops and starts again by itself.** The game's own program sometimes faults while
-  it loads, most often on the way back to the title menu (about one time in eighteen in testing).
-  When that happens the port starts the game again and says so on screen. Your progress up to
-  the last save is kept.
+- **The game stops and starts again by itself.** If the game's own program faults, the port
+  starts the game again and says so on screen. Your progress up to the last save is kept. A
+  fault that used to happen about once in nine returns to the title menu has been fixed; if
+  you see a restart, please report it with the log (see below).
 - **Short stops when entering a new area.** Choosing Prepare at the first start removes most of
   them; a level load can still stall for a second or so.
 - **A message that the graphics driver stopped.** Seen with a screen recorder running on an AMD
@@ -172,12 +172,12 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
   game with a message.
 - Loading a new area can stall for a moment; level loads stall for about half a second to a
   second and a half once.
-- The game faults now and then when it leaves a level, most often on the way back to the title
-  menu: 14 times in 112 scripted runs of pause > Main Menu > Yes before the change below, 5 in
-  90 after it. One cause was found in the port itself: results of GPU compute work were copied
-  back into the game's memory late, sometimes after the game had freed it; that copy is now
-  made only if the memory is unchanged. What causes the remaining faults is not known. The
-  port starts the game again when one happens.
+- Until 11 October 2026 the game faulted about once in nine returns to the title menu (14 times
+  in 112 scripted runs). The cause was in the port: a read fault taken while Windows was
+  re-making a mapping the game had partly unmapped was answered by copying old GPU buffer
+  contents over the game's memory. With that corrected, 70 scripted runs of
+  pause > Main Menu > Yes gave no fault (10 more on the release build). Should the game's own program fault for another
+  reason, the port starts the game again and says so.
 
 ## Licence
 
