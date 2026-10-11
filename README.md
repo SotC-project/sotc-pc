@@ -60,7 +60,10 @@ you start the game from a desktop shortcut like any other.
    builds its graphics programs now, which takes a few minutes once, and then plays without the
    small stops that building them during play would cause. **Skip** starts at once and prepares
    them as you go; expect short stops the first time you see each place.
-9. The opening film plays; press Esc and choose Skip Cinematic to pass it, then any key at the
+9. The game asks for your language (English (UK) is preselected), then shows a short settings
+   page and a brightness screen. Confirm each with Enter. Careful with the arrow keys on the
+   language list: Down moves to another language.
+   The opening film plays; press Esc and choose Skip Cinematic to pass it, then any key at the
    title. The title menu appears: **Continue** and **Load Game** once you have a save, **New
    Game**, **Settings**, **Image Gallery**, **Free Play**, **Achievements**, **Quit**. Move with the arrow keys, the
    mouse or a controller; confirm with Enter, a click, or the bottom face button.
@@ -105,9 +108,11 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 ### Saving
 
-13. The game saves by itself as you play. **Manual Save** in the pause menu opens a plain list:
-    choose **New Save Game**, or an existing save to write over it, with the arrow keys and Enter
-    or the mouse.
+13. The game saves by itself as you play. **Manual Save** in the pause menu opens a list of
+    your saves: choose **New Save Game**, or an existing save to write over it (the game asks
+    first, with No preselected), with the arrow keys and Enter or the mouse. Esc leaves the
+    list. **Load Game** on the title menu shows the same list; one press of Enter loads the
+    save.
     Saves live in `dist\user`; keep that folder if you move or rebuild the program.
 14. **Main Menu** in the pause menu goes back to the title menu. **Quit** on the title menu
     closes the game.
@@ -136,7 +141,12 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
   fault that used to happen about once in nine returns to the title menu has been fixed; if
   you see a restart, please report it with the log (see below).
 - **Short stops when entering a new area.** Choosing Prepare at the first start removes most of
-  them; a level load can still stall for a second or so.
+  them. While a battle loads, the loading animation can hold still for about half a second,
+  once, before the battle appears.
+- **Something missing from the picture in one place** (a creature or object not drawn). The port
+  limits four oversized shader buffers to 64 MB each; nothing has been seen to need more. To
+  test without the limit, set the environment variable `SOTC_UNBOUNDED_CAP_MB=0` before
+  starting the game, and report it if that brings the object back.
 - **A message that the graphics driver stopped.** Seen with a screen recorder running on an AMD
   card. Close the recorder and start the game again.
 - **Intel and NVIDIA graphics cards have not been tested.** It may work; nobody has checked.
@@ -173,8 +183,16 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 - One PC tested. A graphics driver reset (seen with a screen recorder running on AMD) closes the
   game with a message.
-- Loading a new area can stall for a moment; level loads stall for about half a second to a
-  second and a half once.
+- Loading a new area can stall for a moment. Until 11 October 2026 a battle could begin with
+  a stall of one to three seconds: four shaders ask for buffers of about 4 GB, and in one frame
+  3 GB was bound and uploaded. Those requests are now held to 64 MB
+  (`SOTC_UNBOUNDED_CAP_MB` sets another size, 0 none). What remains is texture upload under
+  the loading screen: about half a second, once, during which the loading animation holds
+  still. Measured over three minutes in two arenas: nothing over 90 ms once the scene was on
+  screen, apart from one frame of 117 ms.
+- The performance readout for benchmark footage (`SOTC_PERFHUD=1`) shows GPU load on Radeon
+  cards only, from the driver. On the test PC Windows keeps no account of the game's work on
+  the card, so on other makes the line appears only if Windows' own figure works there.
 - Until 11 October 2026 the game faulted about once in nine returns to the title menu (14 times
   in 112 scripted runs). The cause was in the port: a read fault taken while Windows was
   re-making a mapping the game had partly unmapped was answered by copying old GPU buffer
