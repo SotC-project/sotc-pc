@@ -227,6 +227,9 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+    fetch_shader = nullptr;
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -306,6 +309,11 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // A pipeline given up halfway (a stage missing) must not leave its stages behind for the
+    // next one.
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+    fetch_shader = nullptr;
     graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};

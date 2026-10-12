@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <vector>
 #include <magic_enum/magic_enum.hpp>
 #include "common/parallel_for.h"
@@ -196,6 +197,7 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
     for (const auto& [addr, size] : ranges) {
         total += Common::AlignUp(size, 64);
     }
+    const auto mirror_start = std::chrono::steady_clock::now();
     const auto download = staging_pool.Request(total, VideoCore::MemoryType::HostCached);
     u64 cursor = 0;
     for (const auto& [addr, size] : ranges) {
@@ -204,7 +206,9 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
         runtime.CopyBuffer(buffer, download.buffer, std::span{&copy, 1});
         cursor += Common::AlignUp(size, 64);
     }
+    const auto mirror_queued = std::chrono::steady_clock::now();
     scheduler.Finish();
+    const auto mirror_finished = std::chrono::steady_clock::now();
     download.buffer->Invalidate(download.offset, total);
     // The copy back happens some time after the GPU work, and after the game may have been
     // told the work is done. If the game has since given that memory another use (it frees
@@ -249,6 +253,28 @@ void BufferCache::MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges) {
     }
     mirror_snapshots.clear();
     pending_mirror_ranges.Clear();
+    // For the hitch report: a copy back that took long, and where the time went.
+    const auto mirror_end = std::chrono::steady_clock::now();
+    const auto ms = [](auto a, auto b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    if (ms(mirror_start, mirror_end) > 15.0) {
+        LOG_ERROR(Render, "slow copy back: {} ranges, {} KB: queue {:.1f} ms, GPU wait {:.1f} ms, "
+                          "write {:.1f} ms",
+                  ranges.size(), total >> 10, ms(mirror_start, mirror_queued),
+                  ms(mirror_queued, mirror_finished), ms(mirror_finished, mirror_end));
+    }
+}
+
+// Debug aid: the GPU-side copy of a range. Waits for the GPU.
+void BufferCache::DebugRead(VAddr device_addr, u32 size, u8* out) {
+    const auto [buffer, offset] = ObtainBuffer(device_addr, size, false);
+    const auto download = staging_pool.Request(size, VideoCore::MemoryType::HostCached);
+    const vk::BufferCopy copy{offset, download.offset, size};
+    runtime.CopyBuffer(buffer, download.buffer, std::span{&copy, 1});
+    scheduler.Finish();
+    download.buffer->Invalidate(download.offset, size);
+    std::memcpy(out, download.mapped, size);
 }
 
 // Debug aid: bytes of the GPU-side copy of a range that differ from guest memory.
@@ -307,7 +333,17 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
     }
     const auto staging = staging_pool.Request(size, VideoCore::MemoryType::HostUncached,
                                               instance.StorageMinAlignment());
-    memory->CopySparseMemory(device_addr, staging.mapped, staging.size);
+    // Streamed textures arrive tens of megabytes at a time: copy large ones in pieces on the
+    // helper threads.
+    if (const u64 bytes = staging.size; bytes >= 1_MB) {
+        Common::ParallelFor::Instance().Run((bytes + 512_KB - 1) / 512_KB, [&](size_t i) {
+            const u64 done = i * 512_KB;
+            memory->CopySparseMemory(device_addr + done, staging.mapped + done,
+                                     std::min<u64>(512_KB, bytes - done));
+        });
+    } else {
+        memory->CopySparseMemory(device_addr, staging.mapped, staging.size);
+    }
     staging.Flush();
     return {staging.buffer, staging.offset};
 }

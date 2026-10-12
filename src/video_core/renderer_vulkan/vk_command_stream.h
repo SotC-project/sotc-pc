@@ -77,6 +77,17 @@ public:
                                        stride);
         });
     }
+    void writeTimestamp(vk::QueryPool pool, u32 query) {
+        Push(0, [=](vk::CommandBuffer c) {
+            c.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, pool, query);
+        });
+    }
+    void beginQuery(vk::QueryPool pool, u32 query) {
+        Push(0, [=](vk::CommandBuffer c) { c.beginQuery(pool, query, {}); });
+    }
+    void endQuery(vk::QueryPool pool, u32 query) {
+        Push(0, [=](vk::CommandBuffer c) { c.endQuery(pool, query); });
+    }
     void dispatch(u32 x, u32 y, u32 z) {
         Push(0, [=](vk::CommandBuffer c) { c.dispatch(x, y, z); });
     }

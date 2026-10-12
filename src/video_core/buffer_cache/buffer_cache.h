@@ -109,6 +109,7 @@ public:
 
     /// Copies GPU-written ranges back into guest memory with a single flush.
     void MirrorToGuest(std::span<const std::pair<VAddr, u32>> ranges);
+    void DebugRead(VAddr device_addr, u32 size, u8* out);
 
     /// Marks a range as written by the GPU and not yet copied back to guest memory.
     /// What the game's memory holds there now is kept: the copy back is made only if it still

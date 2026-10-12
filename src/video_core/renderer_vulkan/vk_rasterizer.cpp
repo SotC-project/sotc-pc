@@ -8,7 +8,11 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdlib>
+#include <optional>
 #include <string>
+#include "video_core/host_shaders/particle_clamp_comp.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "core/sotc/hitch.h"
 #include "common/debug.h"
 #include "core/sotc/screens.h"
@@ -257,6 +261,494 @@ struct DrawStats {
 };
 static DrawStats g_stats;
 
+// What was handed to the GPU since the last copy back, for the report of a long GPU wait.
+struct GpuLoad {
+    u64 dispatches{}, groups{}, max_groups{}, max_groups_hash{};
+    u64 draws{}, indices{}, max_indices{}, max_indices_hash{};
+    struct Draw {
+        u64 vs, fs, indices;
+        u32 width, height;
+    };
+    std::vector<Draw> list;
+};
+static GpuLoad g_load;
+
+// SOTC_GPUTIME=1: a GPU timestamp after every draw and dispatch, so that a long GPU wait can be
+// laid at the door of the shaders that took the time.
+struct GpuClock {
+    static constexpr u32 Capacity = 16384;
+    const bool on = std::getenv("SOTC_GPUTIME") != nullptr;
+    vk::UniqueQueryPool pool;
+    std::vector<u64> tags;
+    u64 last_tag{};
+
+    void Mark(const Instance& instance, Scheduler& scheduler, u64 tag) {
+        if (!on) {
+            return;
+        }
+        if (!pool) {
+            pool = instance.GetDevice().createQueryPoolUnique({
+                .queryType = vk::QueryType::eTimestamp,
+                .queryCount = Capacity,
+            }).value;
+            instance.GetDevice().resetQueryPool(*pool, 0, Capacity);
+        }
+        last_tag = tag;
+        if (tags.size() < Capacity) {
+            scheduler.Stream().writeTimestamp(*pool, u32(tags.size()));
+            tags.push_back(tag);
+        }
+    }
+
+    /// Call when the GPU has finished everything recorded so far.
+    void Collect(const Instance& instance, bool report) {
+        if (!on || !pool || tags.empty()) {
+            return;
+        }
+        const u32 count = u32(tags.size());
+        if (report) {
+            std::vector<u64> times(count);
+            const auto result = instance.GetDevice().getQueryPoolResults(
+                *pool, 0, count, count * sizeof(u64), times.data(), sizeof(u64),
+                vk::QueryResultFlagBits::e64);
+            if (result == vk::Result::eSuccess) {
+                const double period =
+                    instance.GetPhysicalDevice().getProperties().limits.timestampPeriod / 1e6;
+                std::map<u64, std::pair<double, u32>> by_tag;
+                for (u32 i = 1; i < count; ++i) {
+                    auto& e = by_tag[tags[i]];
+                    e.first += double(times[i] - times[i - 1]) * period;
+                    ++e.second;
+                }
+                std::vector<std::pair<double, u64>> top;
+                for (const auto& [tag, v] : by_tag) {
+                    top.emplace_back(v.first, tag);
+                }
+                std::ranges::sort(top, std::greater{});
+                std::string line;
+                for (size_t i = 0; i < std::min<size_t>(top.size(), 10); ++i) {
+                    line += fmt::format("{:x}:{:.1f}ms/{} ", top[i].second, top[i].first,
+                                        by_tag[top[i].second].second);
+                }
+                LOG_ERROR(Render, "GPU time by shader ({} marks, {:.1f} ms): {}", count,
+                          double(times[count - 1] - times[0]) * period, line);
+            } else {
+                LOG_ERROR(Render, "GPU time: results not ready ({})", vk::to_string(result));
+            }
+        }
+        instance.GetDevice().resetQueryPool(*pool, 0, count);
+        tags.clear();
+    }
+};
+static GpuClock g_clock;
+
+// One sprite draw of the game (pixel shader 0xec44ba2f: up to 36,000 sprites in the last arena)
+// cost the GPU hundreds of milliseconds a frame for some seconds when a blast landed on the
+// player. The cause was the first instance counted twice (see ClearFirstInstance below), which
+// made the draw show another part of the game's sprite list. What follows was built while
+// looking for that and is kept as a tool, off unless asked for:
+//   - Before the draw a small GPU pass adds up the share of the screen each sprite covers, in
+//     draw order, and cuts the instance count where the sum passes what the budget allows.
+//   - The draw's GPU time is measured every frame; it sets how much screen area the budget
+//     stands for, and as a last resort cuts the count outright for the following frames.
+// SOTC_PARTICLE_GUARD=<ms> turns it on with that time allowed; SOTC_PARTICLE_LOG=1 lists what
+// it measures (with the guard set to a large time, nothing is cut).
+struct ParticleGuard {
+    static constexpr u64 Shader = 0xec44ba2f;
+    static constexpr u32 Unlimited = ~0u;
+    static constexpr u32 PoolSize = 36000;
+    const double budget_ms = [] {
+        const char* env = std::getenv("SOTC_PARTICLE_GUARD");
+        return env ? std::atof(env) : 0.0;
+    }();
+    struct Constants {
+        float view_proj[16];
+        u32 args_index;
+        u32 order_base;
+        u32 sprite_base;
+        u32 first;
+        u32 start_index;
+        u32 kind_base;
+        u32 clear_word;
+        u32 mode;
+        u32 limit;
+        float budget;
+    };
+    vk::UniqueQueryPool pool;
+    /// SOTC_PARTICLE_LOG: vertex shader runs, primitives after clipping and pixel shader runs
+    /// of each measured draw.
+    vk::UniqueQueryPool stats_pool;
+    vk::UniqueDescriptorSetLayout desc_layout;
+    vk::UniquePipelineLayout layout;
+    vk::UniquePipeline pipeline;
+    std::optional<VideoCore::Buffer> sums;
+    /// The shader draws several groups of sprites a frame. Each draw takes the next of 32
+    /// places, with its own marks and sums; a place whose marks the GPU has not reached yet is
+    /// used again without new marks.
+    static constexpr u32 MaxDraws = 32;
+    static constexpr u32 SumBytes = 1024;
+    u32 next_place{};
+    /// For the log: the matrix each place's draw was given.
+    float matrices[MaxDraws][16]{};
+    u64 vertex_shaders[MaxDraws]{};
+    u64 vertex_shader{};
+    u32 place{};
+    u32 pending{};
+    bool marked{};
+    u32 limit{Unlimited};
+    u32 reports{};
+    u32 cuts{};
+    u32 relax_after{};
+    /// GPU milliseconds one screen of these sprites costs, learnt from the measurements.
+    double ms_per_screen{1.5};
+
+    bool Enabled() const {
+        return budget_ms > 0.0;
+    }
+
+    void Create(const Instance& instance) {
+        const auto device = instance.GetDevice();
+        pool = device.createQueryPoolUnique({
+            .queryType = vk::QueryType::eTimestamp,
+            .queryCount = MaxDraws * 2,
+        }).value;
+        device.resetQueryPool(*pool, 0, MaxDraws * 2);
+        if (std::getenv("SOTC_PARTICLE_LOG") &&
+            instance.GetPhysicalDevice().getFeatures().pipelineStatisticsQuery) {
+            stats_pool = device.createQueryPoolUnique({
+                .queryType = vk::QueryType::ePipelineStatistics,
+                .queryCount = MaxDraws,
+                .pipelineStatistics =
+                    vk::QueryPipelineStatisticFlagBits::eVertexShaderInvocations |
+                    vk::QueryPipelineStatisticFlagBits::eClippingPrimitives |
+                    vk::QueryPipelineStatisticFlagBits::eFragmentShaderInvocations,
+            }).value;
+            device.resetQueryPool(*stats_pool, 0, MaxDraws);
+        }
+        std::array<vk::DescriptorSetLayoutBinding, 6> bindings;
+        for (u32 i = 0; i < bindings.size(); ++i) {
+            bindings[i] = vk::DescriptorSetLayoutBinding{
+                .binding = i,
+                .descriptorType = vk::DescriptorType::eStorageBuffer,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eCompute,
+            };
+        }
+        desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = u32(bindings.size()),
+            .pBindings = bindings.data(),
+        }));
+        const vk::PushConstantRange range = {
+            .stageFlags = vk::ShaderStageFlagBits::eCompute,
+            .offset = 0,
+            .size = sizeof(Constants),
+        };
+        layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = &*desc_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &range,
+        }));
+        const auto module = CompileSPV(PARTICLE_CLAMP_COMP, device);
+        pipeline = Check(device.createComputePipelineUnique({}, vk::ComputePipelineCreateInfo{
+            .stage = {
+                .stage = vk::ShaderStageFlagBits::eCompute,
+                .module = module,
+                .pName = "main",
+            },
+            .layout = *layout,
+        }));
+        device.destroyShaderModule(module);
+        sums.emplace(instance, 0, MaxDraws * SumBytes, VideoCore::MemoryType::HostCached);
+        std::memset(sums->mapped_data.data(), 0, sums->mapped_data.size());
+    }
+
+    void TakeMeasurements(const Instance& instance) {
+        const auto device = instance.GetDevice();
+        const double period =
+            instance.GetPhysicalDevice().getProperties().limits.timestampPeriod / 1e6;
+        static const bool log_all = std::getenv("SOTC_PARTICLE_LOG") != nullptr;
+        for (u32 n = 0; n < MaxDraws; ++n) {
+            if (!(pending & (1u << n))) {
+                continue;
+            }
+            u64 times[2]{};
+            const auto result =
+                device.getQueryPoolResults(*pool, n * 2, 2, sizeof(times), times, sizeof(u64),
+                                           vk::QueryResultFlagBits::e64);
+            if (result != vk::Result::eSuccess) {
+                continue;
+            }
+            device.resetQueryPool(*pool, n * 2, 2);
+            pending &= ~(1u << n);
+            u64 stats[3]{};
+            if (stats_pool) {
+                (void)device.getQueryPoolResults(*stats_pool, n, 1, sizeof(stats), stats,
+                                                 sizeof(stats), vk::QueryResultFlagBits::e64);
+                device.resetQueryPool(*stats_pool, n, 1);
+            }
+            const double ms = double(times[1] - times[0]) * period;
+            // What the pass left in that draw, read without waiting for the GPU.
+            const u32* w =
+                reinterpret_cast<const u32*>(sums->mapped_data.data() + n * SumBytes);
+            const double screens = w[1] / 1024.0;
+            if (screens > 2.0 && ms > 1.0) {
+                const double rate = std::clamp(ms / screens, 0.1, 8.0);
+                ms_per_screen += (rate - ms_per_screen) * (rate > ms_per_screen ? 0.5 : 0.1);
+            }
+            if (log_all && ms > 30.0) {
+                const float* m = matrices[n];
+                LOG_ERROR(Render, "sprites matrix (vs {:#x}): [{} {} {} {}] [{} {} {} {}] [{} {} {} "
+                                  "{}] [{} {} {} {}]",
+                          vertex_shaders[n], m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10],
+                          m[11], m[12], m[13], m[14], m[15]);
+            }
+            if (log_all && (ms > std::min(budget_ms, 30.0) || reports++ % 600 == 0)) {
+                u32 total = 0;
+                for (u32 k = 0; k < 64; ++k) {
+                    total += w[66 + k];
+                }
+                LOG_ERROR(Render, "sprites: {:.1f} ms, place {}, asked {} kept {}, screens "
+                                  "before the cut {:.1f}, left {:.1f}, budget {:.1f} | vertices {} "
+                                  "primitives {} pixels {} M | first: GPU {} game {} shader {} | "
+                                  "unlinked streaks {}, linked by length from under 0.25, "
+                                  "doubling: {} {} {} {} {} {} {} {}",
+                          ms, n, w[130], w[131], total / 1024.0, screens,
+                          budget_ms / ms_per_screen, stats[0], stats[1], stats[2] / 1000000.0,
+                          w[132], w[133], w[138], w[156], w[148], w[149], w[150], w[151], w[152], w[153],
+                          w[154], w[155]);
+            }
+            if (ms > budget_ms * 2.0) {
+                const double count = double(std::min({limit, PoolSize, std::max(w[131], 400u)}));
+                limit = std::max<u32>(400, u32(count * budget_ms * 0.75 / ms));
+                if (cuts++ % 32 == 0) {
+                    LOG_INFO(Render, "A sprite draw took {:.0f} ms on the GPU ({:.2f} ms a "
+                                     "screen assumed): counts limited to {}",
+                             ms, ms_per_screen, limit);
+                }
+                relax_after = 0;
+            } else if (limit != Unlimited && ms < budget_ms && ++relax_after > MaxDraws) {
+                limit += limit / 4 + 1;
+                if (limit >= PoolSize) {
+                    limit = Unlimited;
+                }
+            }
+        }
+    }
+
+    struct Range {
+        vk::Buffer buffer;
+        u64 offset;
+    };
+
+    /// Before the draw, outside a render pass. `args` are the draw's arguments, `order` its
+    /// list of (key, sprite) pairs, `sprites` the 100-byte sprite records; `first` is the place
+    /// in the order the draw starts at and `view_proj` the matrix its vertex shader uses.
+    void BeforeDraw(const Instance& instance, Scheduler& scheduler, Range args, Range order,
+                    Range sprites, Range start, Range kinds, u32 first,
+                    const float* view_proj, bool clear_first) {
+        if (!pool) {
+            Create(instance);
+        }
+        if (pending != 0) {
+            TakeMeasurements(instance);
+        }
+        // The next place whose marks have been read; with all of them waiting, one is used
+        // again without marks.
+        for (u32 tries = 0; tries < MaxDraws; ++tries) {
+            place = next_place++ % MaxDraws;
+            if (!(pending & (1u << place))) {
+                break;
+            }
+        }
+        marked = !(pending & (1u << place));
+        const u32 slot = place;
+        if (marked) {
+            std::memcpy(matrices[place], view_proj, sizeof(matrices[place]));
+            vertex_shaders[place] = vertex_shader;
+        }
+
+        scheduler.EndRendering();
+        const auto aligned = [](const Range& r) { return r.offset & ~0xffULL; };
+        const std::array<vk::DescriptorBufferInfo, 6> infos = {{
+            {args.buffer, aligned(args), 512},
+            {order.buffer, aligned(order), VK_WHOLE_SIZE},
+            {sprites.buffer, aligned(sprites), VK_WHOLE_SIZE},
+            {sums->Handle(), slot * SumBytes, SumBytes},
+            {start.buffer, aligned(start), 512},
+            {kinds.buffer, aligned(kinds), VK_WHOLE_SIZE},
+        }};
+        std::array<vk::WriteDescriptorSet, 6> writes;
+        for (u32 i = 0; i < writes.size(); ++i) {
+            writes[i] = vk::WriteDescriptorSet{
+                .dstBinding = i,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eStorageBuffer,
+                .pBufferInfo = &infos[i],
+            };
+        }
+        Constants constants{};
+        std::memcpy(constants.view_proj, view_proj, sizeof(constants.view_proj));
+        constants.args_index = u32((args.offset - aligned(args)) / 4);
+        constants.order_base = u32((order.offset - aligned(order)) / 4);
+        constants.sprite_base = u32((sprites.offset - aligned(sprites)) / 4);
+        constants.first = first;
+        constants.start_index = u32((start.offset - aligned(start)) / 4);
+        constants.kind_base = u32((kinds.offset - aligned(kinds)) / 4);
+        constants.clear_word = clear_first ? 3 : 0;
+        constants.limit = limit;
+        constants.budget = float(budget_ms / ms_per_screen);
+
+        const auto barrier = [&](vk::Buffer buffer, vk::PipelineStageFlags2 src_stage,
+                                 vk::AccessFlags2 src_access, vk::PipelineStageFlags2 dst_stage,
+                                 vk::AccessFlags2 dst_access) {
+            return vk::BufferMemoryBarrier2{
+                .srcStageMask = src_stage,
+                .srcAccessMask = src_access,
+                .dstStageMask = dst_stage,
+                .dstAccessMask = dst_access,
+                .buffer = buffer,
+                .offset = 0,
+                .size = VK_WHOLE_SIZE,
+            };
+        };
+        const auto compute_access =
+            vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+        const auto cmdbuf = scheduler.CommandBuffer();
+        const std::array before = {
+            barrier(args.buffer, vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    compute_access),
+            barrier(order.buffer, vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    compute_access),
+            barrier(sprites.buffer, vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                    compute_access),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .bufferMemoryBarrierCount = u32(before.size()),
+            .pBufferMemoryBarriers = before.data(),
+        });
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *layout, 0, writes);
+        constants.mode = 0;
+        cmdbuf.pushConstants(*layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(constants),
+                             &constants);
+        cmdbuf.dispatch((PoolSize + 63) / 64, 1, 1);
+        const auto between = barrier(sums->Handle(), vk::PipelineStageFlagBits2::eComputeShader,
+                                     vk::AccessFlagBits2::eShaderWrite,
+                                     vk::PipelineStageFlagBits2::eComputeShader, compute_access);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &between,
+        });
+        constants.mode = 1;
+        cmdbuf.pushConstants(*layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(constants),
+                             &constants);
+        cmdbuf.dispatch(1, 1, 1);
+        const auto after = barrier(args.buffer, vk::PipelineStageFlagBits2::eComputeShader,
+                                   vk::AccessFlagBits2::eShaderWrite,
+                                   vk::PipelineStageFlagBits2::eAllCommands,
+                                   vk::AccessFlagBits2::eMemoryRead |
+                                       vk::AccessFlagBits2::eMemoryWrite);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &after,
+        });
+    }
+
+    /// Puts the first instance in an indirect draw's arguments to zero, on the GPU, where the
+    /// game's compute shaders write the rest of them. On the console the first instance reaches
+    /// a shader only through a register the draw names; a draw that names none has its shader
+    /// count instances from zero and add any offset itself (the game's sprite draws read theirs
+    /// from a buffer). Vulkan would add the first instance to the instance number as well, and
+    /// the draw would show the wrong part of the game's sprite list. `word` is the place of the
+    /// first instance in the arguments: 3, or 4 for an indexed draw.
+    void ClearFirstInstance(const Instance& instance, Scheduler& scheduler, Range args, u32 word) {
+        if (!pool) {
+            Create(instance);
+        }
+        scheduler.EndRendering();
+        const u64 aligned = args.offset & ~0xffULL;
+        const vk::DescriptorBufferInfo info = {args.buffer, aligned, 512};
+        std::array<vk::WriteDescriptorSet, 6> writes;
+        for (u32 i = 0; i < writes.size(); ++i) {
+            writes[i] = vk::WriteDescriptorSet{
+                .dstBinding = i,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eStorageBuffer,
+                .pBufferInfo = &info,
+            };
+        }
+        Constants constants{};
+        constants.args_index = u32((args.offset - aligned) / 4);
+        constants.clear_word = word;
+        constants.mode = 2;
+        const auto barrier = [&](vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                                 vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) {
+            return vk::BufferMemoryBarrier2{
+                .srcStageMask = src_stage,
+                .srcAccessMask = src_access,
+                .dstStageMask = dst_stage,
+                .dstAccessMask = dst_access,
+                .buffer = args.buffer,
+                .offset = 0,
+                .size = VK_WHOLE_SIZE,
+            };
+        };
+        const auto cmdbuf = scheduler.CommandBuffer();
+        const auto before =
+            barrier(vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite,
+                    vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &before,
+        });
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *layout, 0, writes);
+        cmdbuf.pushConstants(*layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(constants),
+                             &constants);
+        cmdbuf.dispatch(1, 1, 1);
+        const auto after =
+            barrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                    vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &after,
+        });
+    }
+
+    /// Around the draw itself, inside the render pass; `after` also ends the draw's turn.
+    void Mark(Scheduler& scheduler, bool after) {
+        if (marked) {
+            if (stats_pool && after) {
+                scheduler.Stream().endQuery(*stats_pool, place);
+            }
+            scheduler.Stream().writeTimestamp(*pool, place * 2 + after);
+            if (stats_pool && !after) {
+                scheduler.Stream().beginQuery(*stats_pool, place);
+            }
+            if (after) {
+                pending |= 1u << place;
+                marked = false;
+            }
+        }
+    }
+};
+static ParticleGuard g_particle_guard;
+/// SOTC_INDARGS_GPU: the draw arguments to read back after the frame's copy back, and a counter.
+static std::pair<VAddr, u32> g_pending_gpu_args{};
+struct SmokeBuffer {
+    u64 addr;
+    u32 stride, records;
+    bool gpu;
+};
+static std::vector<SmokeBuffer> g_smoke_buffers;
+
 } // namespace Vulkan
 
 void Sotc::Hitch::RendererTicks(u64 out[5]) {
@@ -422,6 +914,19 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     ++g_stats.drawn;
     ++frame_draws;
     g_stats.verts_max = std::max<u32>(g_stats.verts_max, regs.num_indices);
+    {
+        const u64 count = u64(regs.num_indices) * std::max<u32>(regs.num_instances.NumInstances(), 1);
+        ++g_load.draws;
+        g_load.indices += count;
+        if (count > g_load.max_indices) {
+            g_load.max_indices = count;
+            g_load.max_indices_hash = pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash;
+        }
+        const Shader::Info* fs_stage = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        g_load.list.push_back({pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
+                               fs_stage ? fs_stage->pgm_hash : 0, count,
+                               regs.screen_scissor.GetWidth(), regs.screen_scissor.GetHeight()});
+    }
     if (DrawLogActive()) {
         const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
         std::string bufs;
@@ -473,6 +978,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         cmdbuf.draw(regs.num_indices, regs.num_instances.NumInstances(), vertex_offset,
                     instance_offset);
     }
+    if (g_clock.on) {
+        const Shader::Info* fs = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        g_clock.Mark(instance, scheduler, fs ? fs->pgm_hash : 0xd);
+    }
     DebugState.IncDrawCall();
 
     ResetBindings(false);
@@ -503,6 +1012,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     static RepeatDraw repeat{};
     const bool can_repeat =
         repeat.valid && !liverpool->state_changed_since_draw && count_address == 0 &&
+        instance_sgpr_offset != 0 &&
         repeat.is_indexed == is_indexed && repeat.stride == stride &&
         repeat.vertex_sgpr_offset == vertex_sgpr_offset &&
         repeat.instance_sgpr_offset == instance_sgpr_offset && scheduler.IsRendering() &&
@@ -552,6 +1062,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
             } else {
                 scheduler.Stream().drawIndirect(buffer->Handle(), base, max_count, stride);
             }
+            g_clock.Mark(instance, scheduler, g_clock.last_tag);
             DebugState.IncDrawCall();
             ++g_stats.same_inputs;
             repeat.valid = true;
@@ -741,6 +1252,98 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
+    {
+        // SOTC_FIRSTINST=1: indirect draws whose arguments in game memory name a first instance
+        // or vertex other than zero, once per shader pair.
+        static const bool on = std::getenv("SOTC_FIRSTINST") != nullptr;
+        if (on && memory->IsValidMapping(arg_address + offset, 20)) {
+            const u32* a = reinterpret_cast<const u32*>(arg_address + offset);
+            const u32 first_instance = is_indexed ? a[4] : a[3];
+            const u32 first_vertex = is_indexed ? a[3] : a[2];
+            if (first_instance != 0 || first_vertex != 0) {
+                static std::unordered_set<u64> seen;
+                const Shader::Info* f = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+                const auto& v = pipeline->GetStage(Shader::SwStage::Vertex);
+                if (seen.insert(v.pgm_hash ^ ((f ? f->pgm_hash : 0) << 32)).second) {
+                    LOG_ERROR(Render, "firstinst vs {:#x} fs {:#x} indexed {} first instance {} "
+                                      "first vertex {} sgpr vertex {} instance {} loads instance "
+                                      "id {}",
+                              v.pgm_hash, f ? f->pgm_hash : 0, is_indexed, first_instance,
+                              first_vertex, vertex_sgpr_offset, instance_sgpr_offset,
+                              v.loads.Get(Shader::IR::Attribute::InstanceId));
+                }
+            }
+        }
+    }
+    const Shader::Info* guard_fs = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    bool guarded = g_particle_guard.Enabled() && !is_indexed && count_address == 0 &&
+                   max_count == 1 && guard_fs && guard_fs->pgm_hash == ParticleGuard::Shader;
+    // See ParticleGuard::ClearFirstInstance. SOTC_KEEP_FIRST_INSTANCE=1 leaves it as it was.
+    static const bool keep_first = std::getenv("SOTC_KEEP_FIRST_INSTANCE") != nullptr;
+    bool clear_first = !keep_first && instance_sgpr_offset == 0 && max_count == 1 &&
+                       count_address == 0;
+    // Game memory cannot say whether there is anything to clear: it was seen to hold a first
+    // instance of zero in the very frames where the GPU's copy held 43,000.
+    if (std::exchange(guarded, false)) {
+        // The vertex shader's buffers: [1] the draw order, [2] the sprites; its constants begin
+        // with the view-projection matrix; the draw starts at args[3] of the order.
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        const u64 srt = u64(vs.user_data[0]) | (u64(vs.user_data[1]) << 32);
+        const u64 constants = memory->IsValidMapping(srt, 8)
+                                  ? *reinterpret_cast<const u64*>(srt) & 0xffffffffffffULL
+                                  : 0;
+        if (vs.buffers.size() >= 4 && constants != 0 && memory->IsValidMapping(constants, 64) &&
+            memory->IsValidMapping(arg_address + offset, 16)) {
+            const auto start_sharp = vs.buffers[0].GetSharp(vs);
+            const auto order_sharp = vs.buffers[1].GetSharp(vs);
+            const auto sprite_sharp = vs.buffers[2].GetSharp(vs);
+            if (order_sharp.GetStride() == 8 && sprite_sharp.GetStride() == 100 &&
+                sprite_sharp.num_records == 131072) {
+                const auto [order_buffer, order_offset] = buffer_cache.ObtainBuffer(
+                    order_sharp.base_address, order_sharp.GetSize(), false);
+                const auto [sprite_buffer, sprite_offset] = buffer_cache.ObtainBuffer(
+                    sprite_sharp.base_address, sprite_sharp.GetSize(), false);
+                const auto [start_buffer, start_offset] = buffer_cache.ObtainBuffer(
+                    start_sharp.base_address, start_sharp.GetSize(), false);
+                const auto kind_sharp = vs.buffers[3].GetSharp(vs);
+                const auto [kind_buffer, kind_offset] = buffer_cache.ObtainBuffer(
+                    kind_sharp.base_address, kind_sharp.GetSize(), false);
+                const u32 first = reinterpret_cast<const u32*>(arg_address + offset)[3];
+                g_particle_guard.vertex_shader = vs.pgm_hash;
+                g_particle_guard.BeforeDraw(instance, scheduler, {buffer->Handle(), base},
+                                            {order_buffer->Handle(), order_offset},
+                                            {sprite_buffer->Handle(), sprite_offset},
+                                            {start_buffer->Handle(), start_offset},
+                                            {kind_buffer->Handle(), kind_offset}, first,
+                                            reinterpret_cast<const float*>(constants),
+                                            clear_first);
+                clear_first = false;
+                // The matrix as the shader gets it (the flattened constants, from word 18) against
+                // the one game memory holds now.
+                if (vs.flattened_ud_buf.size() >= 34) {
+                    const float* flat = reinterpret_cast<const float*>(&vs.flattened_ud_buf[18]);
+                    const float* now = reinterpret_cast<const float*>(constants);
+                    if (std::memcmp(flat, now, 64) != 0) {
+                        static u32 logged = 0;
+                        if (logged++ < 200) {
+                            LOG_ERROR(Render, "sprites: matrix given to the shader differs from "
+                                              "game memory: shader [{} {} {} {}] .. [{} {} {} {}], "
+                                              "memory [{} {} {} {}] .. [{} {} {} {}]",
+                                      flat[0], flat[1], flat[2], flat[3], flat[12], flat[13],
+                                      flat[14], flat[15], now[0], now[1], now[2], now[3], now[12],
+                                      now[13], now[14], now[15]);
+                        }
+                    }
+                }
+                guarded = true;
+            }
+        }
+    }
+
+    if (clear_first) {
+        g_particle_guard.ClearFirstInstance(instance, scheduler, {buffer->Handle(), base},
+                                            is_indexed ? 4 : 3);
+    }
 
     g_stats.tsc_stage3 += __rdtsc() - stage3_start;
     {
@@ -759,6 +1362,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
     auto& cmdbuf = scheduler.Stream();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    if (guarded) {
+        g_particle_guard.Mark(scheduler, false);
+    }
 
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
@@ -780,6 +1386,68 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
             cmdbuf.drawIndirect(buffer->Handle(), base, max_count, stride);
         }
         DebugState.IncDrawCall();
+    }
+    if (guarded) {
+        g_particle_guard.Mark(scheduler, true);
+    }
+    if (g_clock.on) {
+        const Shader::Info* fs = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        g_clock.Mark(instance, scheduler, (fs ? fs->pgm_hash : 0xd) | (1ULL << 40));
+    }
+    {
+        // SOTC_INDARGS_GPU=<pixel shader hash>: the arguments of that shader's indirect draws as
+        // the GPU holds them (one GPU wait per draw: a diagnostic only). Listed when the
+        // instance count is over 2000, and every 300th otherwise.
+        static const u64 want = [] {
+            const char* v = std::getenv("SOTC_INDARGS_GPU");
+            return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        }();
+        const Shader::Info* fs = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        if (want && fs && fs->pgm_hash == want) {
+            static u32 seen = 0;
+            g_pending_gpu_args = {arg_address + offset, seen++};
+            // The buffers its vertex shader reads, for SOTC_SMOKEDUMP.
+            g_smoke_buffers.clear();
+            const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+            for (const auto& desc : vs.buffers) {
+                if (desc.buffer_type == Shader::BufferType::Guest) {
+                    const auto sharp = desc.GetSharp(vs);
+                    g_smoke_buffers.push_back({u64(sharp.base_address), u32(sharp.GetStride()),
+                                               u32(sharp.num_records),
+                                               buffer_cache.IsRegionGpuModified(
+                                                   sharp.base_address, sharp.GetSize())});
+                }
+            }
+        }
+    }
+    {
+        // SOTC_INDARGS=<pixel shader hash>: the arguments of that shader's indirect draws as
+        // game memory holds them.
+        static const u64 want = [] {
+            const char* v = std::getenv("SOTC_INDARGS");
+            return v ? std::strtoull(v, nullptr, 16) : 0ULL;
+        }();
+        static u32 lines = 0;
+        const Shader::Info* fs = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        if (want && fs && fs->pgm_hash == want && lines++ % 100 == 0 &&
+            memory->IsValidMapping(arg_address + offset, stride)) {
+            const u32* args = reinterpret_cast<const u32*>(arg_address + offset);
+            const auto& regs = liverpool->regs;
+            LOG_ERROR(Render, "indargs vs {:#x} indexed {} args {} {} {} {} {} max_count {} "
+                              "count_addr {:#x} gpu {} target {}x{} frame_draws {} | depth test {} valid {} "
+                              "func {} write {} blend {} cb0 {}x{} samples {} db samples {}",
+                      pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash, is_indexed, args[0],
+                      args[1], args[2], args[3], is_indexed ? args[4] : 0, max_count,
+                      count_address,
+                      buffer_cache.IsRegionGpuModified(arg_address + offset, stride),
+                      regs.screen_scissor.GetWidth(), regs.screen_scissor.GetHeight(),
+                      frame_draws, u32(regs.depth_control.depth_enable),
+                      regs.depth_buffer.DepthValid(), u32(regs.depth_control.depth_func),
+                      u32(regs.depth_control.depth_write_enable),
+                      u32(regs.blend_control[0].enable), regs.color_buffers[0].Pitch(),
+                      regs.color_buffers[0].Height(), regs.color_buffers[0].NumSamples(),
+                      regs.depth_buffer.NumSamples());
+        }
     }
 
     ResetBindings(false);
@@ -808,6 +1476,15 @@ void Rasterizer::DispatchDirect() {
     }
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    {
+        const u64 count = u64(cs_program.dim_x) * cs_program.dim_y * cs_program.dim_z;
+        ++g_load.dispatches;
+        g_load.groups += count;
+        if (count > g_load.max_groups) {
+            g_load.max_groups = count;
+            g_load.max_groups_hash = cs.pgm_hash;
+        }
+    }
     {
         // Debug aid: SOTC_SKIP_CS=<hex hash> drops dispatches of that compute shader.
         static const u64 skip_cs = [] {
@@ -859,6 +1536,7 @@ void Rasterizer::DispatchDirect() {
     auto& cmdbuf = scheduler.Stream();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+    g_clock.Mark(instance, scheduler, cs.pgm_hash | (2ULL << 40));
     DebugState.IncDispatch();
 
     // Small compute outputs are constant blocks that later shaders read through SRT pointers,
@@ -1052,7 +1730,105 @@ void Rasterizer::FlushMirrors(u32 source) {
     const auto dup = std::ranges::unique(pending_mirrors);
     pending_mirrors.erase(dup.begin(), dup.end());
     const u64 dropped_before = buffer_cache.MirrorsDropped();
+    const auto mirror_begin = std::chrono::steady_clock::now();
     buffer_cache.MirrorToGuest(pending_mirrors);
+    const bool long_wait =
+        std::chrono::steady_clock::now() - mirror_begin > std::chrono::milliseconds(60);
+    if (g_pending_gpu_args.first != 0) {
+        u32 gpu[4]{};
+        buffer_cache.DebugRead(g_pending_gpu_args.first, 16, reinterpret_cast<u8*>(gpu));
+        if (gpu[1] > 2000 || long_wait || g_pending_gpu_args.second % 300 == 0) {
+            LOG_ERROR(Render, "indargs on the GPU: {} {} {} {} (long wait {})", gpu[0], gpu[1],
+                      gpu[2], gpu[3], long_wait);
+        }
+        // SOTC_SMOKEDUMP=<folder>: what the vertex shader's buffers hold in game memory, at a
+        // long wait and at four ordinary moments with a full pool.
+        static const char* dump_dir = std::getenv("SOTC_SMOKEDUMP");
+        static u32 dumps = 0, ordinary = 0;
+        const bool take = dump_dir && dumps < 12 &&
+                          (long_wait || (gpu[1] > 30000 && ordinary < 4 &&
+                                         g_pending_gpu_args.second % 200 == 0));
+        if (take) {
+            ordinary += !long_wait;
+            for (size_t i = 0; i < g_smoke_buffers.size(); ++i) {
+                const auto& b = g_smoke_buffers[i];
+                const u64 bytes = std::min<u64>(u64(b.stride) * b.records, 14ULL << 20);
+                LOG_ERROR(Render, "smokedump {} buffer {}: addr {:#x} stride {} records {} gpu {} "
+                                  "long wait {} args {} {} {} {}",
+                          dumps, i, b.addr, b.stride, b.records, b.gpu, long_wait, gpu[0], gpu[1],
+                          gpu[2], gpu[3]);
+                if (bytes != 0 && memory->IsValidMapping(b.addr, bytes)) {
+                    const auto path = fmt::format("{}/smoke_{}_{}.bin", dump_dir, dumps, i);
+                    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                        if (b.gpu) {
+                            std::vector<u8> data(bytes);
+                            buffer_cache.DebugRead(b.addr, u32(bytes), data.data());
+                            std::fwrite(data.data(), 1, bytes, f);
+                        } else {
+                            std::fwrite(reinterpret_cast<const void*>(b.addr), 1, bytes, f);
+                        }
+                        std::fclose(f);
+                    }
+                }
+            }
+            ++dumps;
+        }
+        g_pending_gpu_args.first = 0;
+    }
+    {
+        static const int every = [] {
+            const char* env = std::getenv("SOTC_GPUTIME");
+            return env ? std::atoi(env) : 0;
+        }();
+        static int counter = 0;
+        g_clock.Collect(instance, long_wait || (every > 1 && ++counter % every == 0));
+    }
+    if (long_wait) {
+        LOG_ERROR(Render, "long GPU wait after: {} dispatches, {} groups (largest {} by cs {:#x}); "
+                          "{} direct draws, {} indices (largest {} by vs {:#x}); {} indirect draws "
+                          "this frame",
+                  g_load.dispatches, g_load.groups, g_load.max_groups, g_load.max_groups_hash,
+                  g_load.draws, g_load.indices, g_load.max_indices, g_load.max_indices_hash,
+                  frame_draws);
+        // Direct draws by pixel shader and target size: count and indices.
+        std::map<std::tuple<u64, u32, u32>, std::pair<u32, u64>> by_fs;
+        for (const auto& d : g_load.list) {
+            auto& e = by_fs[{d.fs, d.width, d.height}];
+            ++e.first;
+            e.second += d.indices;
+        }
+        std::string line;
+        for (const auto& [k, v] : by_fs) {
+            line += fmt::format("{:x}@{}x{}:{}/{} ", std::get<0>(k), std::get<1>(k),
+                                std::get<2>(k), v.first, v.second);
+        }
+        LOG_ERROR(Render, "long GPU wait draws: {}", line);
+    }
+    {
+        // SOTC_LOADLOG=<n>: the same list for every n-th copy back, to compare with.
+        static const int every = [] {
+            const char* env = std::getenv("SOTC_LOADLOG");
+            return env ? std::atoi(env) : 0;
+        }();
+        static int counter = 0;
+        if (every > 0 && ++counter % every == 0) {
+            std::map<std::tuple<u64, u32, u32>, std::pair<u32, u64>> by_fs;
+            for (const auto& d : g_load.list) {
+                auto& e = by_fs[{d.fs, d.width, d.height}];
+                ++e.first;
+                e.second += d.indices;
+            }
+            std::string line;
+            for (const auto& [k, v] : by_fs) {
+                line += fmt::format("{:x}@{}x{}:{}/{} ", std::get<0>(k), std::get<1>(k),
+                                    std::get<2>(k), v.first, v.second);
+            }
+            LOG_ERROR(Render, "usual draws: {}", line);
+        }
+    }
+    g_load.list.clear();
+    g_load.dispatches = g_load.groups = g_load.max_groups = g_load.draws = g_load.indices =
+        g_load.max_indices = 0;
     pending_mirrors.clear();
     if (const u64 dropped = buffer_cache.MirrorsDropped() - dropped_before) {
         static u32 logged = 0;

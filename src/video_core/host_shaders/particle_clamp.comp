@@ -1,0 +1,191 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// Keeps one sprite draw of the game within a budget of screen area. The draw's arguments, its
+// draw order and the sprites themselves are written by the game's compute shaders, so the sum
+// has to be made on the GPU too.
+//   mode 0: every sprite adds the share of the screen its quad covers to one of 64 sums, by
+//           its place in the draw order.
+//   mode 1: the instance count is cut where the running sum passes the budget.
+//   mode 2: nothing but putting the draw's first instance to zero, for any indirect draw.
+
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer args_buf {
+    uint args[];
+};
+layout(std430, binding = 1) readonly buffer order_buf {
+    uint order[];
+};
+layout(std430, binding = 2) readonly buffer sprite_buf {
+    uint sprites[];
+};
+// [0] the count the sums were made for, [1] the area left in the draw, [2..65] the sums, in 1/1024
+// of a screen. [66..129] keep the last sums, [130] the count the game asked for and [131]
+// the count kept, for the log.
+layout(std430, binding = 3) buffer sum_buf {
+    uint sums[];
+};
+
+// The place in the order the draw starts at, as its vertex shader reads it.
+layout(std430, binding = 4) readonly buffer start_buf {
+    uint start[];
+};
+
+// The kinds of sprite, 15 words each; bit 0 of word 6 marks streaks.
+layout(std430, binding = 5) readonly buffer kind_buf {
+    uint kinds[];
+};
+
+layout(push_constant) uniform constants {
+    mat4 view_proj;
+    uint args_index;
+    uint order_base;
+    uint sprite_base;
+    uint first;
+    uint start_index;
+    uint kind_base;
+    uint clear_word;
+    uint mode;
+    uint limit;
+    float budget;
+} pc;
+
+const uint NUM_SUMS = 64u;
+const uint MAX_SPRITES = 131072u;
+const uint SPRITE_WORDS = 25u;
+
+vec3 Vec3(uint word) {
+    return vec3(uintBitsToFloat(sprites[word]), uintBitsToFloat(sprites[word + 1u]),
+                uintBitsToFloat(sprites[word + 2u]));
+}
+
+void main() {
+    if (pc.mode == 2u) {
+        // Only the first instance is put to zero (see ClearFirstInstance in the rasterizer).
+        if (gl_GlobalInvocationID.x == 0u) {
+            args[pc.args_index + pc.clear_word] = 0u;
+        }
+        return;
+    }
+    const uint count = min(args[pc.args_index + 1u], pc.limit);
+    if (pc.mode == 0u) {
+        const uint i = gl_GlobalInvocationID.x;
+        if (i >= count) {
+            return;
+        }
+        // For the log: entries of the draw's part of the order that hold no sprite, counted
+        // from the first instance game memory names and from the one the GPU holds.
+        if (order[pc.order_base + (i + pc.first) * 2u] == 0xffffffffu) {
+            atomicAdd(sums[134], 1u);
+        }
+        if (order[pc.order_base + (i + args[pc.args_index + 3u]) * 2u] == 0xffffffffu) {
+            atomicAdd(sums[135], 1u);
+        }
+        const uint sprite = order[pc.order_base + (i + start[pc.start_index]) * 2u + 1u];
+        if (sprite >= MAX_SPRITES) {
+            return;
+        }
+        const uint word = pc.sprite_base + sprite * SPRITE_WORDS;
+        const uint kind = sprites[word + 3u];
+        const bool streak = (kinds[pc.kind_base + kind * 15u + 6u] & 1u) != 0u;
+        // As the game's vertex shader places them. A plain sprite is a quad about its centre.
+        // A streak runs from this sprite to the one it is linked to (word 11), as wide at each
+        // end as that end's axis; with no link it has no width.
+        vec3 ends[2] = vec3[2](Vec3(word), Vec3(word));
+        vec3 widths[2] = vec3[2](Vec3(word + 12u), Vec3(word + 12u));
+        vec3 axis_x = Vec3(word + 8u);
+        if (streak) {
+            const uint link = sprites[word + 11u];
+            if (link >= MAX_SPRITES) {
+                atomicAdd(sums[139], 1u);
+                return;
+            }
+            const uint other = pc.sprite_base + link * SPRITE_WORDS;
+            ends[1] = Vec3(other);
+            if (sprites[other + 11u] == 0xffffffffu) {
+                widths[1] = normalize(widths[0]) * uintBitsToFloat(sprites[other + 13u]);
+            } else {
+                widths[1] = Vec3(other + 12u);
+            }
+            const float len = distance(ends[0], ends[1]);
+            atomicAdd(sums[140u + uint(clamp(log2(max(len, 0.126)) + 3.0, 0.0, 7.0))], 1u);
+        }
+        vec2 low = vec2(1e9);
+        vec2 high = vec2(-1e9);
+        uint behind = 0u;
+        for (uint corner = 0u; corner < 4u; ++corner) {
+            const float across = float(corner >> 1u) - 0.5;
+            vec3 at;
+            if (streak) {
+                at = ends[corner & 1u] + widths[corner & 1u] * across;
+            } else {
+                at = ends[0] + axis_x * (float(corner & 1u) - 0.5) + widths[0] * across;
+            }
+            const vec4 clip = pc.view_proj * vec4(at, 1.0);
+            if (clip.w <= 1e-3) {
+                ++behind;
+            } else {
+                const vec2 ndc = clip.xy / clip.w;
+                low = min(low, ndc);
+                high = max(high, ndc);
+            }
+        }
+        float area = 0.0;
+        if (behind == 4u) {
+            return;
+        } else if (behind != 0u) {
+            // Crosses the camera plane: it can cover anything up to the whole screen.
+            area = 1.0;
+        } else {
+            low = clamp(low, vec2(-1.0), vec2(1.0));
+            high = clamp(high, vec2(-1.0), vec2(1.0));
+            area = (high.x - low.x) * (high.y - low.y) * 0.25;
+        }
+        if (!(area > 0.0)) {
+            return;
+        }
+        atomicAdd(sums[2u + i * NUM_SUMS / count], uint(min(area, 1.0) * 1024.0 + 0.5));
+    } else if (gl_GlobalInvocationID.x == 0u) {
+        const float budget = pc.budget * 1024.0;
+        float running = 0.0;
+        float drawn = -1.0;
+        uint kept = count;
+        for (uint n = 0u; n < NUM_SUMS; ++n) {
+            const float next = running + float(sums[2u + n]);
+            if (next > budget && drawn < 0.0) {
+                // The budget runs out inside this part of the order: keep the share of it
+                // that fits.
+                const float fits = clamp((budget - running) / max(float(sums[2u + n]), 1.0), 0.0, 1.0);
+                kept = uint((float(n) + fits) * float(count) / float(NUM_SUMS));
+                drawn = running + fits * float(sums[2u + n]);
+            }
+            running = next;
+            sums[66u + n] = sums[2u + n];
+            sums[2u + n] = 0u;
+        }
+        sums[0] = count;
+        sums[130] = args[pc.args_index + 1u];
+        sums[132] = args[pc.args_index + 3u];
+        sums[133] = pc.first;
+        sums[138] = start[pc.start_index];
+        sums[156] = sums[139];
+        sums[139] = 0u;
+        for (uint n = 0u; n < 8u; ++n) {
+            sums[148u + n] = sums[140u + n];
+            sums[140u + n] = 0u;
+        }
+        sums[136] = sums[134];
+        sums[137] = sums[135];
+        sums[134] = 0u;
+        sums[135] = 0u;
+        sums[131] = kept;
+        sums[1] = uint(drawn < 0.0 ? running : drawn);
+        args[pc.args_index + 1u] = min(kept, count);
+        if (pc.clear_word != 0u) {
+            args[pc.args_index + pc.clear_word] = 0u;
+        }
+    }
+}

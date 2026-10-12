@@ -92,6 +92,9 @@ void WritePack(std::filesystem::path cache_path, std::filesystem::path pack_path
     auto temp_path = pack_path;
     temp_path += ".tmp";
     u32 count{};
+    // The pack is dated from before the first blob is read: a blob written again after that
+    // is newer than the pack and read from its own file (see LoadPack).
+    const auto started = std::filesystem::file_time_type::clock::now();
     {
         const auto out = IOFile{temp_path, FileAccessMode::Create};
         if (!out.IsOpen()) {
@@ -130,6 +133,10 @@ void WritePack(std::filesystem::path cache_path, std::filesystem::path pack_path
     // Swapped in whole, so a start never finds a pack that is half written.
     std::error_code ec;
     std::filesystem::rename(temp_path, pack_path, ec);
+    if (!ec) {
+        std::error_code time_ec;
+        std::filesystem::last_write_time(pack_path, started, time_ec);
+    }
     LOG_INFO(Render, "Cache pack written: {} blobs{}", count, ec ? " (not put in place)" : "");
 }
 
@@ -414,7 +421,21 @@ void DataBase::LoadPack(const std::function<void()>& tick) {
         tick();
     }
     ParsePack();
-    LOG_INFO(Render, "Cache pack: {} blobs, {} MB", pack_index.size(), pack_data.size() >> 20);
+    // A blob file written after the pack holds something newer than the pack's copy, which may
+    // be of the same size (a shader's description made again): the file is the one to read.
+    std::error_code ec;
+    const auto pack_time = std::filesystem::last_write_time(pack_path, ec);
+    u32 newer{};
+    if (!ec && !pack_index.empty()) {
+        for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
+            std::error_code entry_ec;
+            if (entry.last_write_time(entry_ec) > pack_time && !entry_ec) {
+                newer += u32(pack_index.erase(entry.path().filename().string()));
+            }
+        }
+    }
+    LOG_INFO(Render, "Cache pack: {} blobs, {} MB, {} left out as older than their files",
+             pack_index.size(), pack_data.size() >> 20, newer);
 }
 
 void DataBase::FinishPreload() {

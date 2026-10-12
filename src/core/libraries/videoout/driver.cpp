@@ -300,7 +300,12 @@ void VideoOutDriver::Flip(const Request& req) {
             previous_ticks[i] = ticks[i];
         }
         previous_tsc = tsc;
-        if (gap_ms > 40.0) {
+        // SOTC_HITCH_MS=<ms> reports shorter frames too.
+        static const double report_ms = [] {
+            const char* env = std::getenv("SOTC_HITCH_MS");
+            return env ? std::atof(env) : 40.0;
+        }();
+        if (gap_ms > report_ms) {
             LOG_ERROR(Lib_VideoOut,
                       "hitch {:.0f} ms: {} pipelines built in {} ms, {} textures uploaded ({} MB), "
                       "{} MB of buffers allocated ({} MB re-uploaded), {} images freed | renderer busy {} ms, {} "
