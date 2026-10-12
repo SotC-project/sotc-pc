@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <chrono>
 #include <intrin.h>
+#include <map>
 #include <unordered_map>
 #include <vector>
 #include <cstdlib>
@@ -506,6 +507,39 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         repeat.vertex_sgpr_offset == vertex_sgpr_offset &&
         repeat.instance_sgpr_offset == instance_sgpr_offset && scheduler.IsRendering() &&
         repeat.cmdbuf == scheduler.RawCommandBuffer();
+    {
+        static const bool on = std::getenv("SOTC_DRAWSIG") != nullptr;
+        if (on) {
+            static std::map<std::vector<u32>, u32> seen;
+            static u32 total = 0, repeated = 0;
+            std::vector<u32> sig(liverpool->change_sig.begin(),
+                                 liverpool->change_sig.begin() +
+                                     std::min<u32>(liverpool->change_count, 12));
+            sig.push_back(0xf0000000u | (can_repeat ? 1u : 0u) | (repeat.valid ? 2u : 0u) |
+                          (scheduler.IsRendering() ? 4u : 0u) | (liverpool->change_count << 8));
+            ++seen[sig];
+            repeated += can_repeat;
+            if (++total == 400000) {
+                std::vector<std::pair<u32, std::vector<u32>>> top;
+                for (auto& [k, v] : seen) {
+                    top.emplace_back(v, k);
+                }
+                std::ranges::sort(top, std::greater{});
+                LOG_ERROR(Render, "drawsig: {} indirect draws, {} repeated, {} kinds", total,
+                          repeated, top.size());
+                for (size_t i = 0; i < std::min<size_t>(top.size(), 14); ++i) {
+                    std::string line;
+                    for (const u32 v : top[i].second) {
+                        line += fmt::format("{:x}:{:x} ", v >> 16, v & 0xffff);
+                    }
+                    LOG_ERROR(Render, "drawsig {:6} x {}", top[i].first, line);
+                }
+                seen.clear();
+                total = repeated = 0;
+            }
+        }
+        liverpool->change_count = 0;
+    }
     repeat.valid = false;
     if (can_repeat) {
         const auto size = stride * max_count;
@@ -763,6 +797,11 @@ void Rasterizer::DispatchDirect() {
     SubmitPeriodically(scheduler);
 
     const auto& cs_program = liverpool->GetCsRegs();
+    // The game issues some two dozen dispatches of no groups a frame (cs 0x729c541e): nothing
+    // runs, so nothing needs binding.
+    if (cs_program.dim_x == 0 || cs_program.dim_y == 0 || cs_program.dim_z == 0) {
+        return;
+    }
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
     if (!pipeline) {
         return;

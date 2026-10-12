@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <condition_variable>
 #include <coroutine>
 #include <exception>
@@ -63,6 +64,9 @@ struct Liverpool {
     /// Set by every command other than an indirect draw; cleared by the rasterizer after one.
     /// While clear, the next indirect draw can only differ in its argument slot.
     bool state_changed_since_draw{true};
+    /// Diagnostic (SOTC_DRAWSIG): the packets seen since the last draw, as opcode << 16 | register.
+    std::array<u32, 12> change_sig{};
+    u32 change_count{};
     std::array<CbDbExtent, NUM_COLOR_BUFFERS> last_cb_extent{};
     CbDbExtent last_db_extent{};
 

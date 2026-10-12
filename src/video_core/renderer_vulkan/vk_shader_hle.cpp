@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include "common/parallel_for.h"
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -127,7 +128,9 @@ static bool ExecuteFillShaderHLE(const Shader::Info& info, const AmdGpu::Compute
     // Drop write protection and mark the range CPU-modified so the GPU copy is refreshed.
     rasterizer.InvalidateMemory(dst_sharp.base_address, u64(count) * sizeof(u32), true);
     if (src_len >= count) {
-        std::memcpy(dst, src, u64(count) * sizeof(u32));
+        // Some 200 of these a frame, 80 KB on average; once or twice a frame it is a block of
+        // megabytes (8 MB seen), which is shared out over several threads.
+        Common::ParallelFor::Instance().Copy(dst, src, u64(count) * sizeof(u32));
     } else {
         for (u32 i = 0; i < count; ++i) {
             dst[i] = src[i % src_len];

@@ -207,6 +207,13 @@ Voice* FindVoice(OrbisNgs2Handle handle) {
     return nullptr;
 }
 
+/// SOTC_AUDIO_DIAG: reports grains with jumps from sample to sample (per sampler voice and per
+/// bus, before and after the game's effect) and the predictor sets its ADPCM blocks use.
+bool AudioDiag() {
+    static const bool on = std::getenv("SOTC_AUDIO_DIAG") != nullptr;
+    return on;
+}
+
 bool IsSampler(const Voice& v) {
     return v.rack->id == RackSampler;
 }
@@ -241,6 +248,22 @@ void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
         {122.0f / 64, -60.0f / 64},
     };
     float h1 = 0, h2 = 0;
+    {
+        static int reported = 0;
+        u32 high_pred = 0, high_flag = 0, frames = 0, flags_seen = 0;
+        for (u32 off = 0; off + 16 <= b.info.dataSize; off += 16) {
+            const u8* f = b.data + b.info.dataOffset + off;
+            high_pred += (f[0] >> 4) > 4;
+            high_flag += (f[1] & 0xf0) != 0;
+            flags_seen |= 1u << (f[1] & 0xf);
+            ++frames;
+        }
+        if (AudioDiag() && reported++ < 40) {
+            LOG_ERROR(Lib_Ngs2, "vag block: {} frames, predictor over 4 in {}, high flag nibble "
+                                "in {}, low flag values seen {:#x}",
+                      frames, high_pred, high_flag, flags_seen);
+        }
+    }
     for (u32 off = 0; off + 16 <= b.info.dataSize; off += 16) {
         const u8* f = b.data + b.info.dataOffset + off;
         const u32 shift = f[0] & 0xf;
@@ -274,6 +297,15 @@ void DecodeAtrac9(Voice& v, const Block& b, std::vector<float>& out, u32 max_fra
     Atrac9CodecInfo info{};
     Atrac9GetCodecInfo(v.at9, &info);
     const size_t frame_floats = size_t(info.frameSamples) * info.channels;
+    {
+        static int mismatches = 0;
+        if (u32(info.channels) != std::clamp<u32>(v.format.numChannels, 1, MaxChannels) &&
+            v.block_off == 0 && mismatches++ < 40) {
+            LOG_ERROR(Lib_Ngs2, "ATRAC9 channels {} but voice format says {} (rate {} vs {})",
+                      info.channels, v.format.numChannels, info.samplingRate,
+                      v.format.sampleRate);
+        }
+    }
     if (v.block_off == 0) {
         v.at9_frame = 0;
         v.at9_super_left = info.superframeSize;
@@ -492,6 +524,33 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
             v.state = 0;
             ResetSampler(v);
             return ch;
+        }
+    }
+    {
+        // Diagnostic: a grain that swings from sample to sample (energy of the differences
+        // above that of the signal) at an audible level is not a sound the game made.
+        float energy = 0.0f, rough = 0.0f, peak = 0.0f;
+        for (u32 n = 1; n < frames; ++n) {
+            energy += out[n] * out[n];
+            rough += (out[n] - out[n - 1]) * (out[n] - out[n - 1]);
+            peak = std::max(peak, std::abs(out[n]));
+        }
+        static int reported = 0;
+        u32 jumps = 0;
+        for (u32 n = 1; n < frames; ++n) {
+            jumps += std::abs(out[n] - out[n - 1]) > 0.15f;
+        }
+        if (AudioDiag() && jumps >= 3 && reported++ < 80) {
+            LOG_ERROR(Lib_Ngs2, "rough grain: voice {:x} type {:#x} channels {} rate {} pitch "
+                                "{:.3f} peak {:.2f} rough/energy {:.2f} decoded {} blocks {} "
+                                "block size {} samples {} skip {} repeats {}",
+                      reinterpret_cast<uintptr_t>(&v) & 0xfffff, u32(v.format.waveformType),
+                      v.format.numChannels, v.format.sampleRate, v.pitch, peak, rough / energy,
+                      v.decoded_samples, v.blocks.size(),
+                      v.blocks.empty() ? 0 : v.blocks.front().info.dataSize,
+                      v.blocks.empty() ? 0 : v.blocks.front().info.numSamples,
+                      v.blocks.empty() ? 0 : v.blocks.front().info.numSkipSamples,
+                      v.blocks.empty() ? 0 : v.blocks.front().info.numRepeats);
         }
     }
     return ch;
@@ -1012,6 +1071,20 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
         for (u32 n = 0; n < ch * frames; ++n) {
             g_diag.bus_peak_pre = std::max(g_diag.bus_peak_pre, std::abs(scratch[n]));
         }
+        const auto roughness = [&](const float* x) {
+            float energy = 0.0f, rough = 0.0f, peak = 0.0f;
+            for (u32 n = 1; n < frames; ++n) {
+                energy += x[n] * x[n];
+                rough += (x[n] - x[n - 1]) * (x[n] - x[n - 1]);
+                peak = std::max(peak, std::abs(x[n]));
+            }
+            float jumps = 0.0f;
+            for (u32 n = 1; n < frames; ++n) {
+                jumps += std::abs(x[n] - x[n - 1]) > 0.25f;
+            }
+            return std::pair{peak, jumps};
+        };
+        const auto rough_before = roughness(scratch.data());
         if (voice->fx_handler && !no_fx) {
             // The game's own DSP (mixing, gain, compression) runs as a callback on the bus.
             float* channel_data[MaxChannels];
@@ -1029,6 +1102,17 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                 .sampleRate = SystemRate,
             };
             voice->fx_handler(&context);
+        }
+        {
+            const auto rough_after = roughness(scratch.data());
+            static int reported = 0;
+            if (AudioDiag() && rough_after.second >= 3.0f && reported++ < 120) {
+                LOG_ERROR(Lib_Ngs2, "rough bus: voice {:x} rack {:#x} channels {} fx {} before "
+                                    "peak {:.2f} rough {:.2f}, after peak {:.2f} rough {:.2f}",
+                          reinterpret_cast<uintptr_t>(voice) & 0xfffff, voice->rack->id, ch,
+                          voice->fx_handler != nullptr, rough_before.first, rough_before.second,
+                          rough_after.first, rough_after.second);
+            }
         }
         ++g_diag.bus_voices_used;
         for (const Port& port : voice->ports) {

@@ -272,6 +272,16 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             default:
                 state_changed_since_draw = true;
+                if (change_count < change_sig.size()) {
+                    const bool is_set =
+                        opcode == PM4ItOpcode::SetShReg || opcode == PM4ItOpcode::SetContextReg ||
+                        opcode == PM4ItOpcode::SetUconfigReg || opcode == PM4ItOpcode::SetConfigReg;
+                    change_sig[change_count] =
+                        (u32(opcode) << 16) |
+                        (is_set ? u32(reinterpret_cast<const PM4CmdSetData*>(header)->reg_offset)
+                                : 0u);
+                }
+                ++change_count;
                 break;
             }
             switch (opcode) {

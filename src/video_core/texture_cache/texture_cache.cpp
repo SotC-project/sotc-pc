@@ -692,11 +692,37 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         }
     }
 
+    // The same few hundred images are looked up thousands of times a frame, each time by a
+    // walk over every page the image covers. An exact match is remembered until the set of
+    // registered images changes.
+    if (find_memo_generation != registry_generation) {
+        find_memo.clear();
+        find_memo_generation = registry_generation;
+    }
+    const u64 memo_key = XXH3_64bits_withSeed(
+        &info.size, sizeof(info.size),
+        info.guest_address ^ (u64(info.guest_size) << 40) ^ (u64(info.pixel_format) << 20) ^
+            (u64(info.type) << 4) ^ u64(exact_fmt));
+    if (const auto it = find_memo.find(memo_key); it != find_memo.end()) {
+        Image& image = slot_images[it->second];
+        if (image.info.guest_address == info.guest_address &&
+            image.info.guest_size == info.guest_size && image.info.size == info.size &&
+            !(image.info.resources < info.resources) &&
+            IsVulkanFormatCompatible(image.info.pixel_format, info.pixel_format) &&
+            (image.info.type == info.type || info.size == Extent3D{1, 1, 1}) &&
+            (!exact_fmt || info.pixel_format == image.info.pixel_format)) {
+            image.tick_accessed_last = scheduler.CurrentTick();
+            TouchImage(image);
+            return it->second;
+        }
+    }
+
     SmallVector<ImageId, 8> image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,
                          [&](ImageId image_id, Image& image) { image_ids.push_back(image_id); });
 
     ImageId image_id{};
+    bool exact_match = false;
 
     // Check for a perfect match first
     for (const auto& cache_id : image_ids) {
@@ -718,6 +744,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
             continue;
         }
         image_id = cache_id;
+        exact_match = true;
     }
 
     // Try to resolve overlaps (if any)
@@ -760,6 +787,9 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     Image& image = slot_images[image_id];
     image.tick_accessed_last = scheduler.CurrentTick();
     TouchImage(image);
+    if (exact_match && find_memo_generation == registry_generation) {
+        find_memo[memo_key] = image_id;
+    }
 
     // If the image requested is a subresource of the image from cache record its location.
     if (view_mip > 0) {
@@ -1206,6 +1236,7 @@ void TextureCache::RegisterImage(ImageId image_id) {
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
+    ++registry_generation;
     total_used_memory += Common::AlignUp(image.info.guest_size, 1024);
     ++num_registered_images;
     registered_guest_bytes += image.info.guest_size;
@@ -1226,6 +1257,7 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
     image.flags &= ~ImageFlagBits::Registered;
+    ++registry_generation;
     image_lru_cache.Free(image);
     total_used_memory -= Common::AlignUp(image.info.guest_size, 1024);
     --num_registered_images;

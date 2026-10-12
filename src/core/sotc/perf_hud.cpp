@@ -351,9 +351,9 @@ void Draw() {
     const float pad = 14.0f * scale;
     const std::string label = EnvText("SOTC_PERFHUD_LABEL");
     const std::string note = EnvText("SOTC_PERFHUD_NOTE");
-    const float line = 26.0f * scale;
+    const float line = 28.0f * scale;
     const float graph_height = 70.0f * scale;
-    const float height = pad * 2 + (label.empty() ? 0.0f : line) + 46.0f * scale + line * 5 +
+    const float height = pad * 2 + (label.empty() ? 0.0f : line) + line * 5 +
                          graph_height + 10.0f * scale + (note.empty() ? 0.0f : line);
     draw->AddRectFilled({left, top}, {left + width, top + height}, IM_COL32(8, 8, 8, 176),
                         6.0f * scale);
@@ -370,39 +370,36 @@ void Draw() {
         text(x, y, 20.0f, Plain, label);
         y += line;
     }
-    text(x, y, 40.0f, Green, fmt::format("{:.0f} FPS", now_fps));
-    text(x + 190.0f * scale, y + 2.0f * scale, 19.0f, Bright,
-         fmt::format("average {:.0f}", average));
-    text(x + 190.0f * scale, y + 22.0f * scale, 19.0f, Bright, fmt::format("1% low {:.0f}", low));
-    y += 46.0f * scale;
+    // Rows of a label and its figures, as overlay tools show them: no sentences.
+    constexpr ImU32 Label = IM_COL32(232, 150, 60, 255);
+    const float col1 = x + 118.0f * scale;
+    const float col2 = x + 218.0f * scale;
+    const float col3 = x + 318.0f * scale;
+    const auto row = [&](const char* name, const std::string& a, const std::string& b = {},
+                         const std::string& c = {}) {
+        text(x, y, 21.0f, Label, name);
+        text(col1, y, 21.0f, Bright, a);
+        text(col2, y, 21.0f, Plain, b);
+        text(col3, y, 21.0f, Plain, c);
+        y += line;
+    };
     const float last_gap = frames.empty() ? 0.0f : frames.back();
-    text(x, y, 19.0f, Plain,
-         fmt::format("frame {:.1f} ms     {} x {}", last_gap, int(display.x), int(display.y)));
-    y += line;
-    // Two scales, each named: shares of the whole processor (all its threads together), and
-    // counts of single threads. "game 340%" on the first scale's line was read as a share of
-    // the whole; it was the game's time in percent of one thread.
-    const float threads = float(std::max(std::thread::hardware_concurrency(), 1u));
-    text(x, y, 19.0f, Plain,
-         fmt::format("CPU: whole PC {:.0f}%, the game {:.0f}% (of {:.0f} threads)", sample.cpu_all,
-                     sample.cpu_process / threads, threads));
-    y += line;
-    text(x, y, 19.0f, Plain,
-         fmt::format("game keeps {:.1f} threads busy, its busiest at {:.0f}%",
-                     sample.cpu_process / 100.0f, sample.cpu_thread));
-    y += line;
-    text(x, y, 19.0f, Plain,
-         // "Allocated": what the renderer has taken from the card, which is more than a frame
-         // needs (it keeps textures and buffers it may want again).
-         // The kernel reports no running time at all on some systems (a steady 0): then the
-         // line goes without the figure rather than show a wrong one.
-         sample.gpu > 0.5f ? fmt::format("GPU {:.0f}%     video memory allocated {:.1f} GB", sample.gpu,
-                                          device_memory.load() / 1073741824.0)
-                            : fmt::format("video memory allocated {:.1f} GB",
-                                          device_memory.load() / 1073741824.0));
-    y += line;
-    text(x, y, 19.0f, Plain, fmt::format("RAM {:.1f} GB", sample.ram / 1073741824.0));
-    y += line;
+    row("FPS", fmt::format("{:.0f}", now_fps), fmt::format("avg {:.0f}", average),
+        fmt::format("1% low {:.0f}", low));
+    // The kernel reports no graphics load at all on some systems (a steady 0): the row then
+    // shows memory alone rather than a wrong figure. Memory is what the renderer has taken
+    // from the card, which is more than a frame needs.
+    const std::string video_memory = fmt::format("{:.1f} GB", device_memory.load() / 1073741824.0);
+    if (sample.gpu > 0.5f) {
+        row("GPU", fmt::format("{:.0f} %", sample.gpu), video_memory);
+    } else {
+        row("GPU", video_memory);
+    }
+    // One scale: the whole processor, all its threads together.
+    row("CPU", fmt::format("{:.0f} %", sample.cpu_all));
+    row("RAM", fmt::format("{:.1f} GB", sample.ram / 1073741824.0));
+    row("Frametime", fmt::format("{:.1f} ms", last_gap), "",
+        fmt::format("{} x {}", int(display.x), int(display.y)));
     // Frame times, newest at the right; the top of the graph is 50 ms, lines at 16.7 and 33.3.
     const float graph_left = x;
     const float graph_right = left + width - pad;

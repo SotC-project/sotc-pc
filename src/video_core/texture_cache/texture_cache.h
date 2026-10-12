@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <tsl/robin_map.h>
 #include <atomic>
 #include <mutex>
 #include <absl/container/flat_hash_map.h>
@@ -401,6 +402,11 @@ private:
     u64 total_used_memory = 0;
     /// Registered images and the size of the game data they were made from.
     u64 num_registered_images = 0;
+    /// Exact matches of FindImage, by a hash of what was asked for; dropped whenever an image is
+    /// registered or unregistered (registry_generation).
+    tsl::robin_map<u64, ImageId> find_memo;
+    u64 registry_generation = 1;
+    u64 find_memo_generation = 0;
     u64 registered_guest_bytes = 0;
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
