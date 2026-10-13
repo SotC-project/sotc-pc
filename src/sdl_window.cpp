@@ -666,7 +666,7 @@ void WindowSDL::InitTimers() {
     for (int i = 0; i < 4; ++i) {
         SDL_AddTimer(4, &PollController, controllers[i]);
     }
-    SDL_AddTimer(33, Input::MousePolling, (void*)controllers[0]);
+    SDL_AddTimer(8, Input::MousePolling, (void*)controllers[0]);
     if (std::getenv("SOTC_SCRIPT")) {
         g_script_window = SDL_GetWindowID(window);
         if (std::getenv("SOTC_VPAD")) {

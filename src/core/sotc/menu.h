@@ -55,4 +55,10 @@ std::filesystem::path LaunchOptionsFile(const std::filesystem::path& original);
 /// previous one to exit so both never hold the GPU and the save at once.
 void WaitForPreviousInstance();
 
+/// A restart closes the window and opens another a few seconds later. So that the desktop is not
+/// seen in between, the closing instance first starts this program as a cover: a black window in
+/// the same place that says the game is loading and goes away when the new game window is up.
+/// Returns true when this process was started as that cover and has done its work.
+bool RunRestartCover();
+
 } // namespace Sotc::Menu

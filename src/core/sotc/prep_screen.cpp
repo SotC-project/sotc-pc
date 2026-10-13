@@ -433,6 +433,20 @@ Choice Screen::Ask() {
                 }
             }
         }
+        // The pointer chooses the line it is moved onto, as in the game's menus; a pointer at
+        // rest leaves the keys and the controller their say.
+        static POINT last_pointer{-1, -1};
+        POINT pointer{};
+        if (GetCursorPos(&pointer) && ScreenToClient(s.hwnd, &pointer) &&
+            (pointer.x != last_pointer.x || pointer.y != last_pointer.y)) {
+            last_pointer = pointer;
+            for (int i = 0; i < 2; i++) {
+                if (PtInRect(&areas[i], pointer) && selected != i) {
+                    selected = i;
+                    dirty = true;
+                }
+            }
+        }
 
         const int old_width = s.width, old_height = s.height;
         s.Fit();

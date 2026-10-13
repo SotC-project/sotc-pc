@@ -254,6 +254,10 @@ UnlockResult Unlock(s32 id, s32* platinum_id) {
     if (Entries[id].grade == 'P') {
         return UnlockResult::IsPlatinum;
     }
+    // Free play (a chosen battle, with helpers on offer) earns nothing.
+    if (const char* free_play = std::getenv("SOTC_FREEPLAY"); free_play && *free_play) {
+        return UnlockResult::AlreadyUnlocked;
+    }
     bool platinum = false;
     {
         std::lock_guard lock{mutex};

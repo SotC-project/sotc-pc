@@ -39,6 +39,9 @@
 #endif
 
 int main(int argc, char* argv[]) {
+    if (Sotc::Menu::RunRestartCover()) {
+        return 0;
+    }
     Sotc::Menu::WaitForPreviousInstance();
     Sotc::Watchdog::Start();
 #ifdef _WIN32

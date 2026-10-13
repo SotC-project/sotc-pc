@@ -101,6 +101,36 @@ void Relaunch(const std::string& freeplay_args, const std::string& challenge_spe
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
+    // First a cover over the window's picture, so that the restart is not seen as the game
+    // closing (see RunRestartCover). Test runs without a visible window need none.
+    HWND game_window = nullptr;
+    if (int count = 0; SDL_Window** windows = SDL_GetWindows(&count)) {
+        if (count > 0) {
+            game_window = static_cast<HWND>(
+                SDL_GetPointerProperty(SDL_GetWindowProperties(windows[0]),
+                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+        }
+        SDL_free(windows);
+    }
+    RECT client{};
+    POINT corner{};
+    if (game_window && IsWindowVisible(game_window) && !IsIconic(game_window) &&
+        std::getenv("SOTC_HEADLESS") == nullptr && GetClientRect(game_window, &client) &&
+        ClientToScreen(game_window, &corner) && client.right > 0) {
+        SetEnv("SOTC_COVER", fmt::format("{},{},{},{},{}", corner.x, corner.y, client.right,
+                                         client.bottom, GetCurrentProcessId()));
+        std::wstring cover_line = command_line;
+        PROCESS_INFORMATION cover{};
+        if (CreateProcessW(nullptr, cover_line.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                           nullptr, &startup, &cover)) {
+            // Until its window is up, at most two seconds.
+            WaitForInputIdle(cover.hProcess, 2000);
+            Sleep(150);
+            CloseHandle(cover.hThread);
+            CloseHandle(cover.hProcess);
+        }
+        SetEnv("SOTC_COVER", "");
+    }
     if (!CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
                         &startup, &process)) {
         LOG_ERROR(Core, "Free play: could not restart the game, error {}", GetLastError());
@@ -1137,6 +1167,137 @@ std::filesystem::path LaunchOptionsFile(const std::filesystem::path& original) {
         }
     }
     return replacement.empty() ? original : replacement;
+}
+
+#ifdef _WIN32
+namespace {
+
+std::wstring ProcessPath(DWORD pid) {
+    std::wstring path(1024, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process || !QueryFullProcessImageNameW(process, 0, path.data(), &size)) {
+        size = 0;
+    }
+    if (process) {
+        CloseHandle(process);
+    }
+    path.resize(size);
+    return path;
+}
+
+struct CoverSearch {
+    std::wstring path;
+    DWORD self;
+    DWORD old;
+    HWND found;
+};
+
+BOOL CALLBACK FindGameWindow(HWND hwnd, LPARAM param) {
+    auto& search = *reinterpret_cast<CoverSearch*>(param);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    RECT rect{};
+    if (pid == search.self || pid == search.old || !IsWindowVisible(hwnd) ||
+        !GetWindowRect(hwnd, &rect) || rect.right - rect.left < 300 ||
+        _wcsicmp(ProcessPath(pid).c_str(), search.path.c_str()) != 0) {
+        return TRUE;
+    }
+    search.found = hwnd;
+    return FALSE;
+}
+
+LRESULT CALLBACK CoverProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        const HDC dc = BeginPaint(hwnd, &paint);
+        RECT rect{};
+        GetClientRect(hwnd, &rect);
+        FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        const HFONT font = CreateFontW(-MulDiv(rect.bottom, 34, 1080), 0, 0, 0, FW_NORMAL, FALSE,
+                                       FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                                       L"Georgia");
+        const HGDIOBJ old_font = SelectObject(dc, font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(150, 146, 136));
+        DrawTextW(dc, L"Loading", -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND) {
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+} // namespace
+#endif
+
+bool RunRestartCover() {
+#ifdef _WIN32
+    const char* env = std::getenv("SOTC_COVER");
+    if (!env || !*env) {
+        return false;
+    }
+    int x = 0, y = 0, width = 0, height = 0;
+    unsigned long old_pid = 0;
+    if (std::sscanf(env, "%d,%d,%d,%d,%lu", &x, &y, &width, &height, &old_pid) != 5 ||
+        width <= 0 || height <= 0) {
+        return true;
+    }
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    WNDCLASSW cls{};
+    cls.lpfnWndProc = CoverProc;
+    cls.hInstance = instance;
+    cls.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    cls.lpszClassName = L"SotcRestartCover";
+    RegisterClassW(&cls);
+    // Not in the taskbar: the game's own button comes back with its window.
+    const HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, cls.lpszClassName,
+                                      L"Shadow of the Colossus", WS_POPUP, x, y, width, height,
+                                      nullptr, nullptr, instance, nullptr);
+    if (!hwnd) {
+        return true;
+    }
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    UpdateWindow(hwnd);
+
+    CoverSearch search{ProcessPath(GetCurrentProcessId()), GetCurrentProcessId(),
+                       static_cast<DWORD>(old_pid), nullptr};
+    const u64 start = GetTickCount64();
+    u64 found_at = 0;
+    for (;;) {
+        MSG msg{};
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        const u64 now = GetTickCount64();
+        if (found_at == 0) {
+            search.found = nullptr;
+            EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&search));
+            if (search.found) {
+                found_at = now;
+            }
+        } else if (now - found_at > 500) {
+            // The new window has had time to draw its first (black) picture.
+            SetForegroundWindow(search.found);
+            break;
+        }
+        if (now - start > 120000) {
+            break;
+        }
+        Sleep(30);
+    }
+    DestroyWindow(hwnd);
+    return true;
+#else
+    return false;
+#endif
 }
 
 void WaitForPreviousInstance() {

@@ -55,7 +55,8 @@ struct Root {
     int num_lines;
 };
 constexpr Root TitleRoot{-0.786f, {"Free Play", "Achievements", "Quit"}, 3};
-constexpr Root PauseRoot{-0.695f, {"Achievements", nullptr, nullptr}, 1};
+// The pause menu gets no line of its own: Achievements is reached from the title menu only.
+constexpr Root PauseRoot{-0.695f, {nullptr, nullptr, nullptr}, 0};
 
 const Root& RootOf(Kind kind) {
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
@@ -63,6 +64,10 @@ const Root& RootOf(Kind kind) {
 
 std::mutex mutex;
 bool on_extra = false; // the cursor is on one of the extra lines
+// While the cursor is on the extra lines the game's own cursor, which is not drawn then, is
+// walked along with it from the top of the game's list: the game so plays its sound for each
+// step. This is how many lines below its first line it stands (0 when it was not moved).
+int game_steps = 0;
 int extra_index = 0;
 std::array<bool, 4> swallowed{};
 std::atomic<Input::GameController*> pad{nullptr};
@@ -326,13 +331,28 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         switch (nav) {
         case Nav::Up:
             if (extra_index == 0) {
-                on_extra = false; // back onto the game's last line, where its cursor still is
+                // Back onto the game's last line: its cursor wraps there from its first line.
+                on_extra = false;
+                if (game_steps == 1) {
+                    game_steps = 0;
+                    return false;
+                }
             } else {
                 --extra_index;
+                if (game_steps > 1) {
+                    --game_steps;
+                    return false;
+                }
             }
             break;
         case Nav::Down:
-            extra_index = std::min(extra_index + 1, root.num_lines - 1);
+            if (extra_index + 1 < root.num_lines) {
+                ++extra_index;
+                if (game_steps > 0) {
+                    ++game_steps;
+                    return false;
+                }
+            }
             break;
         case Nav::Confirm:
             Activate(kind, extra_index);
@@ -349,11 +369,13 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         swallowed[slot] = true;
         return true;
     }
-    if (nav == Nav::Down && AtLast(kind, y) && taps.empty()) {
+    if (nav == Nav::Down && root.num_lines > 0 && AtLast(kind, y) && taps.empty()) {
+        // The press goes on to the game: its cursor wraps to its first line with the sound of
+        // a step, and is not drawn while the cursor is on the extra lines.
         on_extra = true;
         extra_index = 0;
-        swallowed[slot] = true;
-        return true;
+        game_steps = 1;
+        return false;
     }
     return false;
 }
@@ -401,6 +423,7 @@ bool OnClick(float x, float y) {
     if (row >= 1) {
         on_extra = true;
         extra_index = row - 1;
+        game_steps = 0;
         Activate(kind, extra_index);
         return true;
     }

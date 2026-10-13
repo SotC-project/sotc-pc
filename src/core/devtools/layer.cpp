@@ -62,6 +62,11 @@ static void UpdateMenuCursor() {
     const bool panel =
         show_quit_window || Sotc::Achievements::IsPanelOpen() || Sotc::Menu::IsOpen();
     panel_blocks_mouse = panel;
+    // The mouse turns the view in play only: not under a menu or a panel, and not in a
+    // cutscene (the picture then has its black bars).
+    Input::mouse_look_blocked = panel || !game_started || Sotc::Screens::PauseMenu() ||
+                                Sotc::Screens::TitleMenu() || Sotc::Screens::GameOver() ||
+                                Sotc::Screens::Letterboxed();
     const bool wanted = (panel || !game_started || Sotc::Screens::PauseMenu() ||
                          Sotc::Screens::TitleMenu()) &&
                         VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;

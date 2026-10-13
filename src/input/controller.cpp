@@ -16,6 +16,7 @@
 #include "core/libraries/system/userservice.h"
 #include "core/user_settings.h"
 #include "input/controller.h"
+#include "input/input_mouse.h"
 
 namespace Input {
 
@@ -95,6 +96,9 @@ int GameController::ReadStates(State* states, int states_num) {
 }
 
 void GameController::Button(OrbisPadButtonDataOffset button, bool is_pressed) {
+    if (button == OrbisPadButtonDataOffset::R1) {
+        Input::aim_held = is_pressed;
+    }
     std::lock_guard lock{m_state_mutex};
     m_state.OnButton(button, is_pressed);
     PushStateLocked();
