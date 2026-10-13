@@ -15,6 +15,7 @@ python - "$out" "$before" <<'PY'
 import glob, os, sys
 from PIL import Image
 fs = sorted(glob.glob('D:/sotc-pc/testrun/user/screenshots/*.png'), key=os.path.getmtime)[int(sys.argv[2]):]
+fs = [f for f in fs if os.path.getsize(f) > 0]  # a shot cut off by the quit is empty
 print(len(fs), 'shots')
 if fs:
     o = Image.new('RGB', (640 * 3, 360 * ((len(fs[:9]) + 2) // 3)))
