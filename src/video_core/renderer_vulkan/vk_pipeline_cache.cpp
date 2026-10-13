@@ -371,8 +371,17 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     }
     if (is_new && BuildInBackground()) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
-        LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x} in the background",
-                 pipeline_hash);
+        {
+            const auto& regs = liverpool->regs;
+            LOG_INFO(Render_Vulkan,
+                     "Compiling graphics pipeline {:#x} in the background: {} targets, first "
+                     "{}x{} at {:#x}, depth {}x{} at {:#x}, primitive {}, {} indices",
+                     pipeline_hash, graphics_key.num_color_attachments,
+                     regs.color_buffers[0].Pitch(), regs.color_buffers[0].Height(),
+                     regs.color_buffers[0].Address(), regs.depth_buffer.Pitch(),
+                     regs.depth_buffer.Height(), regs.depth_buffer.DepthAddress(),
+                     u32(regs.primitive_type), regs.num_indices);
+        }
         // What a saved pipeline is built from, made here because it reads the game's state.
         auto job = std::make_unique<PendingPipeline>();
         job->hash = pipeline_hash;
@@ -426,8 +435,13 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 }
 
 bool PipelineCache::BuildInBackground() const {
-    // SOTC_PIPELINE_WAIT=1: every pipeline is built in the frame that first uses it.
-    static const bool wait = std::getenv("SOTC_PIPELINE_WAIT") != nullptr;
+    // Off unless SOTC_PIPELINE_BACKGROUND=1: every pipeline is built in the frame that first
+    // uses it. Leaving the draws out for the time of the build removed the stalls at first
+    // sight, but the fight with the tenth colossus then stopped with a fault in the game's own
+    // code some seconds after two such builds, three runs out of three; with the builds in the
+    // frame it ran through. Until that is understood the stall is the lesser fault.
+    static const bool wait = std::getenv("SOTC_PIPELINE_BACKGROUND") == nullptr ||
+                             std::getenv("SOTC_PIPELINE_WAIT") != nullptr;
     if (wait || EmulatorSettings.IsShaderCollect()) {
         return false;
     }
