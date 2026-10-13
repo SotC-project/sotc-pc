@@ -6,6 +6,7 @@ Free Play	Freies Spiel
 Achievements	Erfolge
 Quit	Beenden
 Settings	Einstellungen
+Main Menu	Hauptmenü
 Quit to desktop?	Zum Desktop beenden?
 Yes	Ja
 No	Nein

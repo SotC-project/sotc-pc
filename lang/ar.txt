@@ -1,0 +1,278 @@
+# Arabic. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	لعب حر
+Achievements	الإنجازات
+Quit	خروج
+Settings	الإعدادات
+Main Menu	القائمة
+Quit to desktop?	الخروج إلى سطح المكتب؟
+Yes	نعم
+No	لا
+Back	رجوع
+Loading	جارٍ التحميل
+HOLD TO SKIP	اضغط مطولاً للتخطي
+The game stopped unexpectedly and was started again.	توقفت اللعبة بشكل مفاجئ وأعيد تشغيلها.
+# --- Prompts ---
+CHANGE	تغيير
+BACK	رجوع
+CONFIRM	تأكيد
+SCROLL	تمرير
+MENU	القائمة
+ACCEPT	قبول
+D-pad left / right	الأسهم يسار / يمين
+D-pad up / down	الأسهم أعلى / أسفل
+# --- Settings ---
+Graphics	الرسومات
+Graphics, display, button icons and sound	الرسومات والعرض وأيقونات الأزرار والصوت
+Key Bindings	ربط المفاتيح
+Choose the keys and mouse buttons	اختر المفاتيح وأزرار الفأرة
+Game Settings	إعدادات اللعبة
+The game's own display, audio, camera and controls	العرض والصوت والكاميرا والتحكم في اللعبة
+Return to the menu	العودة إلى القائمة
+Apply and Restart	تطبيق وإعادة التشغيل
+Saves the settings; the game restarts to use them	يحفظ الإعدادات وتعاد اللعبة لتطبيقها
+Leave without saving	خروج بدون حفظ
+Settings.ps1 was not found next to the game	لم يوجد Settings.ps1 بجانب اللعبة
+PowerShell 7 (pwsh) could not be started	تعذر تشغيل PowerShell 7 (pwsh)
+The settings could not be saved	تعذر حفظ الإعدادات
+Preset	إعداد مسبق
+Sets the detail options below together	يضبط خيارات التفاصيل أدناه معاً
+Frame Rate Limit	حد معدل الإطارات
+Highest frame rate the game will run at	أعلى معدل إطارات تعمل به اللعبة
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	يزيل التمزق ويقيد الإطارات بمعدل الشاشة
+Fullscreen	ملء الشاشة
+Fill the screen instead of a window	ملء الشاشة بدل النافذة
+Window Size	حجم النافذة
+Size of the game window	حجم نافذة اللعبة
+FSR Upscaling	تكبير FSR
+Sharper picture when the window is larger than 1080p. Switches at once	صورة أوضح عندما تتجاوز النافذة 1080p. يسري فوراً
+Shadows	الظلال
+Sun and spot shadows	ظلال الشمس والإضاءة الموضعية
+Motion Blur	ضبابية الحركة
+Blur on fast movement	تمويه عند الحركة السريعة
+Bloom	التوهج
+Glow around bright light	وهج حول الضوء الساطع
+Depth of Field	عمق المجال
+Soft focus in the distance and in cutscenes	تركيز ناعم في البعيد وفي المشاهد السينمائية
+Vignette	التعتيم الحافي
+Darkened picture corners	زوايا الصورة المعتمة
+Fur	الفرو
+Fur on the colossi	الفرو على العمالقة
+Fog	الضباب
+Distance fog	ضباب المسافة
+Mist Particles	جزيئات الضباب
+Drifting mist. Renders far too bright in this build; best left off	ضباب متحرك. يظهر ساطعاً جداً في هذا الإصدار؛ الأفضل إيقافه
+Texture Filtering	ترشيح الأنسجة
+Sharpness of surfaces seen at an angle	وضوح الأسطح المرئية بزاوية
+Draw Distance	مسافة الرسم
+How far small objects are drawn. Full costs frame rate	مدى رسم الأجسام الصغيرة. الكامل يخفض الإطارات
+Texture Detail	تفاصيل الأنسجة
+Sharpness of textures	وضوح الأنسجة
+Sharpening	الحدة
+Sharpening of the final picture	زيادة حدة الصورة النهائية
+Button Icons	أيقونات الأزرار
+Auto follows the device you are using	تلقائي يتبع الجهاز المستخدم
+Achievement Sound	صوت الإنجاز
+Loudness of the achievement sound, percent	مستوى صوت الإنجاز بالنسبة المئوية
+Startup Logos	شعارات البدء
+The company logos when the game starts, half a minute. Saved at once	شعارات الشركات عند بدء اللعبة، نصف دقيقة. يحفظ فوراً
+# --- Setting values ---
+On	تشغيل
+Off	إيقاف
+Custom	مخصص
+Low	منخفض
+Medium	متوسط
+High	عالٍ
+Ultra	فائق
+Uncapped	بلا حد
+Reduced	مخفض
+Full	كامل
+Normal	عادي
+Strong	قوي
+Auto	تلقائي
+Keyboard	لوحة المفاتيح
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	تقدم
+Move Back	تراجع
+Move Left	يسار
+Move Right	يمين
+Jump	قفز
+Attack	هجوم
+Grab / Use / Pray	إمساك / استخدام / صلاة
+Crouch / Roll	انحناء / تدحرج
+Raise Sword / Aim	رفع السيف / تصويب
+Mount / Spur Agro	ركوب / حث Agro
+Walk / Run	مشي / جري
+View Colossus	عرض العملاق
+Camera Focus	تركيز الكاميرا
+Change Sword	تبديل السيف
+Change Ranged Weapon	تبديل السلاح البعيد
+Unequip	نزع العتاد
+Photo Mode	وضع التصوير
+World Map	خريطة العالم
+Pause	إيقاف مؤقت
+Zoom (R3)	تقريب (R3)
+Press a key or mouse button	اضغط مفتاحاً أو زر الفأرة
+Esc cancels	Esc للإلغاء
+Select, then press the new key or button	اختر ثم اضغط المفتاح أو الزر الجديد
+Changes are saved as you make them	تحفظ التغييرات فور إجرائها
+Left Mouse	زر الفأرة الأيسر
+Right Mouse	زر الفأرة الأيمن
+Middle Mouse	زر الفأرة الأوسط
+Wheel Up	العجلة لأعلى
+Wheel Down	العجلة لأسفل
+# --- Free play ---
+Colossus	العملاق
+Choose the colossus to fight	اختر العملاق لقتاله
+Difficulty	الصعوبة
+Choose the difficulty	اختر الصعوبة
+Easy	سهل
+Hard	صعب
+Time Attack	تحدي الوقت
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	معركة موقوتة بشروط ثابتة، تصنف من D إلى S+ حسب الوقت والضرر.
+Target time	الوقت المستهدف
+(approximate)	(تقريبي)
+All Weapons and Items	كل الأسلحة والأغراض
+Start with every weapon and item	ابدأ بكل سلاح وغرض
+Invincibility	عدم القهر
+Wander takes no damage	Wander لا يتلقى ضرراً
+Unlimited Grip	قبضة لا نهائية
+The grip gauge never empties	مقياس القبضة لا ينفد
+Maximum Damage	أقصى ضرر
+Every sword strike deals full damage	كل ضربة سيف تسبب ضرراً كاملاً
+Begin Battle	بدء المعركة
+The game restarts and loads the battle	تعاد اللعبة وتحمل المعركة
+Return to the previous menu	العودة إلى القائمة السابقة
+# --- Time attack ---
+Target	الهدف
+Starts when you move	يبدأ عند التحرك
+Lost	خسارة
+Wander has fallen	سقط Wander
+the colossus has fallen	سقط العملاق
+Rank	الرتبة
+Time	الوقت
+Typical time	الوقت المعتاد
+Health lost	الصحة المفقودة
+# --- Achievements ---
+Platinum	بلاتيني
+Gold	ذهبي
+Silver	فضي
+Bronze	برونزي
+The Horned Boy	الفتى ذو القرنين
+Acquire all trophies	احصل على كل الكؤوس
+Speed King	ملك السرعة
+Obtain all Time Attack items together as one set	احصل على كل أغراض تحدي الوقت معاً كمجموعة
+Intrepid Mortal	الفاني الجسور
+Max out Wander's health and stamina bars	املأ شريطي صحة Wander وقدرته على التحمل
+Speed Demon	شيطان السرعة
+Complete Hard Mode under 5:41:28	أنهِ الوضع الصعب في أقل من 5:41:28
+Grounded Scaler	المتسلق الأرضي
+Defeat Colossus 8 before it can turn back over	اهزم العملاق 8 قبل أن ينقلب
+Resist the Wrist	قاوم المعصم
+Defeat Colossus 3 without breaking his wrist guard	اهزم العملاق 3 دون كسر واقي معصمه
+Reach the Gate	بلوغ البوابة
+Cross the bridge to the entrance of the Forbidden Lands	اعبر الجسر إلى مدخل الأراضي المحرمة
+Last Man Standing	آخر الصامدين
+Complete a single playthrough without dying once	أنهِ اللعبة مرة واحدة دون أن تموت أبداً
+Bearer of the Curse	حامل اللعنة
+Complete the game on any difficulty	أنهِ اللعبة على أي صعوبة
+Dormin's Rage	غضب Dormin
+Use Dormin's breath attack	استخدم هجوم نفس Dormin
+Seeking Salvation	البحث عن الخلاص
+Pray at all shrines	صلِّ في كل المزارات
+Trick Rider	فارس الحيل
+Perform all stunts with Agro	نفذ كل الحركات البهلوانية مع Agro
+Fruit of the Garden	ثمرة الحديقة
+Taste the poisoned fruit	تذوق الثمرة المسمومة
+Sword of Her Majesty	سيف جلالتها
+Defeat any colossus with the Queen's Sword	اهزم أي عملاق بسيف الملكة
+Paint the Target	حدد الهدف
+Use the sword to focus on a vital point	استخدم السيف للتركيز على نقطة حيوية
+Fruit of the Land	ثمرة الأرض
+Eat a piece of fruit	كل ثمرة
+Skilled Warrior	المحارب الماهر
+Defeat a colossus with a downward jump stab	اهزم عملاقاً بطعنة قفز نحو الأسفل
+The Past that Defines Thee	الماضي الذي يحددك
+Defeat any colossus while in Reminiscence Mode	اهزم أي عملاق في وضع الذكريات
+Five-Lined Skink	السقنقور خماسي الخطوط
+Collect a silver lizard tail	اجمع ذيل سحلية فضياً
+Animals of the Land	حيوانات الأرض
+Interact with a dove, hawk, fish and turtle	تفاعل مع حمامة وصقر وسمكة وسلحفاة
+Boon of the Nomad	نعمة الرحّال
+Find the barrel in the hidden cave	اعثر على البرميل في الكهف الخفي
+Trick Arrow Skills	مهارة السهم الخاص
+Shoot a lizard with a special arrow	اصطد سحلية بسهم خاص
+Valley of the Wanderer	وادي الجوّال
+Defeat the 1st colossus	اهزم العملاق الأول
+The Mammoth	الماموث
+Defeat the 2nd colossus	اهزم العملاق الثاني
+Wake the Knight	أيقظ الفارس
+Defeat the 3rd colossus	اهزم العملاق الثالث
+Land of the Gravestones	أرض شواهد القبور
+Defeat the 4th colossus	اهزم العملاق الرابع
+Riding the Wind	ركوب الريح
+Defeat the 5th colossus	اهزم العملاق الخامس
+Tomb of the Giant	قبر العملاق
+Defeat the 6th colossus	اهزم العملاق السادس
+Waves of Lightning	أمواج البرق
+Defeat the 7th colossus	اهزم العملاق السابع
+Scaler of the Colosseum	متسلق الكولوسيوم
+Defeat the 8th colossus	اهزم العملاق الثامن
+Lurker of the Cave	كامن الكهف
+Defeat the 9th colossus	اهزم العملاق التاسع
+Mystery in the Sand	لغز في الرمال
+Defeat the 10th colossus	اهزم العملاق العاشر
+Guardian and the Pit	الحارس والحفرة
+Defeat the 11th colossus	اهزم العملاق الحادي عشر
+Thunder of the Lake	رعد البحيرة
+Defeat the 12th colossus	اهزم العملاق الثاني عشر
+Signs amidst the Storm	علامات وسط العاصفة
+Defeat the 13th colossus	اهزم العملاق الثالث عشر
+Shield of the Colossus	درع العملاق
+Defeat the 14th colossus	اهزم العملاق الرابع عشر
+Valley of the Fallen	وادي الساقطين
+Defeat the 15th colossus	اهزم العملاق الخامس عشر
+Last of the Colossus	آخر العمالقة
+Defeat the 16th colossus	اهزم العملاق السادس عشر
+# --- First start ---
+We waited, yet no one answered.	انتظرنا ولم يجبنا أحد.
+Sometimes, we have to do things ourselves.	أحياناً علينا أن نفعل الأمور بأنفسنا.
+Prepare the shaders before playing?	تجهيز المظللات قبل اللعب؟
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	موصى به. يستغرق حتى دقيقة مرة واحدة، ثم تعمل اللعبة بسلاسة.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	عند التخطي تبدأ اللعبة فوراً وتتوقف لحظة كلما ظهر شيء جديد.
+You will be asked again at the next start.	سيطلب منك ذلك مجدداً عند التشغيل التالي.
+Prepare	تجهيز
+Skip	تخطي
+Preparing shaders	جارٍ تجهيز المظللات
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	مطلوب مرة بعد تحديث اللعبة أو برنامج تشغيل الرسومات. التشغيل لاحقاً يستغرق ثواني.
+# --- Saving and loading ---
+Save	حفظ
+Load	تحميل
+Delete	حذف
+New Save	حفظ جديد
+Cancel	إلغاء
+Corrupted	تالف
+There is no saved data	لا توجد بيانات محفوظة
+Do you want to save?	هل تريد الحفظ؟
+Do you want to load this saved data?	هل تريد تحميل هذه البيانات المحفوظة؟
+Do you want to delete this saved data?	هل تريد حذف هذه البيانات المحفوظة؟
+Do you want to overwrite the existing saved data?	هل تريد استبدال البيانات المحفوظة الحالية؟
+Saving...	جارٍ الحفظ...
+Loading...	جارٍ التحميل...
+Deleting...	جارٍ الحذف...
+Restoring saved data...	جارٍ استعادة البيانات المحفوظة...
+The saved data is corrupted.	البيانات المحفوظة تالفة.
+Saved successfully.	تم الحفظ بنجاح.
+Loading complete.	اكتمل التحميل.
+Deletion complete.	اكتمل الحذف.
+The saved data is corrupted and will be deleted.	البيانات المحفوظة تالفة وستحذف.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	البيانات المحفوظة تالفة. ستحذف وتنشأ بيانات جديدة.
+The saved data is corrupted. The data that was backed up by the system will be restored.	البيانات المحفوظة تالفة. ستستعاد النسخة الاحتياطية من النظام.
+Cannot create more saved data	لا يمكن إنشاء المزيد من البيانات المحفوظة
+There is not saved data.	لا توجد بيانات محفوظة.
+The data is corrupted.	البيانات تالفة.

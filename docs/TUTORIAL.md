@@ -116,14 +116,22 @@ The game's own language is set under Game Settings > Language (Text and Subtitle
 project adds (the extra menu lines, the Settings pages, Free Play, Time Attack, Achievements, the
 save list, the hints) follows the Text language after a restart of the game.
 
-Tables exist for Danish, Dutch, Finnish, French, German, Italian, Norwegian, Polish, Portuguese,
-Russian, Spanish, Swedish and Turkish. They are machine translations that no native reader has
-checked yet; corrections are welcome. Each is a plain text file in `lang` (English text, a tab,
-the translation; `keys.txt` is the English list), so you can correct a line and restart.
+Tables exist for all the game's languages besides English: Arabic, Danish, Dutch, Finnish,
+French, German, Italian, Norwegian, Polish, Portuguese, Russian, Spanish, Swedish and Turkish,
+and for Hebrew, which the game itself does not have. They are machine translations that no
+native reader has checked yet; corrections are welcome. Each is a plain text file in `lang`
+(English text, a tab, the translation; `keys.txt` is the English list), so you can correct a
+line and restart.
 
-Not translated: Arabic (the added texts stay English there, because the text drawing used
-cannot join Arabic letters or write right to left), the names of keys (Enter, Left Shift, Right
-mouse) and the achievement names, which are our own translations and not the official ones.
+Arabic and Hebrew are written from right to left with their letters joined; with the game in
+Arabic the added menu lines stand on the right as the game's own do. The Settings and Free Play
+pages keep their left-hand layout in those languages.
+
+To use a table the game has no language for, write its name (for Hebrew: `he`) into a file
+`sotc_language.txt` in the `user` folder. The game's own texts then stay in the game's language.
+
+Not translated: the names of keys (Enter, Left Shift, Right mouse). The achievement names are
+our own translations, not the official ones.
 
 ## Saving
 

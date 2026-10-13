@@ -6,6 +6,7 @@ Free Play	Gioco libero
 Achievements	Trofei
 Quit	Esci
 Settings	Impostazioni
+Main Menu	Menu iniziale
 Quit to desktop?	Uscire sul desktop?
 Yes	Sì
 No	No

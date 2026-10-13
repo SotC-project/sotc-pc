@@ -6,6 +6,7 @@ Free Play	Fri leg
 Achievements	Præstationer
 Quit	Afslut
 Settings	Indstillinger
+Main Menu	Hovedmenu
 Quit to desktop?	Afslut til skrivebordet?
 Yes	Ja
 No	Nej

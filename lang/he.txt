@@ -1,0 +1,278 @@
+# Hebrew. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	משחק חופשי
+Achievements	הישגים
+Quit	יציאה
+Settings	הגדרות
+Main Menu	תפריט ראשי
+Quit to desktop?	לצאת לשולחן העבודה?
+Yes	כן
+No	לא
+Back	חזרה
+Loading	טוען
+HOLD TO SKIP	החזק לדילוג
+The game stopped unexpectedly and was started again.	המשחק נעצר באופן בלתי צפוי והופעל מחדש.
+# --- Prompts ---
+CHANGE	שינוי
+BACK	חזרה
+CONFIRM	אישור
+SCROLL	גלילה
+MENU	תפריט
+ACCEPT	אישור
+D-pad left / right	חצים שמאלה / ימינה
+D-pad up / down	חצים למעלה / למטה
+# --- Settings ---
+Graphics	גרפיקה
+Graphics, display, button icons and sound	גרפיקה, תצוגה, סמלי כפתורים וקול
+Key Bindings	מקשים
+Choose the keys and mouse buttons	בחירת מקשים וכפתורי עכבר
+Game Settings	הגדרות משחק
+The game's own display, audio, camera and controls	תצוגה, שמע, מצלמה ובקרים של המשחק
+Return to the menu	חזרה לתפריט
+Apply and Restart	החל והפעל מחדש
+Saves the settings; the game restarts to use them	שומר את ההגדרות; המשחק יופעל מחדש
+Leave without saving	יציאה בלי לשמור
+Settings.ps1 was not found next to the game	הקובץ Settings.ps1 לא נמצא ליד המשחק
+PowerShell 7 (pwsh) could not be started	לא ניתן להפעיל את PowerShell 7 (pwsh)
+The settings could not be saved	לא ניתן לשמור את ההגדרות
+Preset	תצורה מוכנה
+Sets the detail options below together	קובע יחד את אפשרויות הפירוט שלמטה
+Frame Rate Limit	הגבלת קצב פריימים
+Highest frame rate the game will run at	קצב הפריימים הגבוה ביותר של המשחק
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	מונע קריעה; מגביל את הקצב לזה של המסך
+Fullscreen	מסך מלא
+Fill the screen instead of a window	מילוי המסך במקום חלון
+Window Size	גודל חלון
+Size of the game window	גודל חלון המשחק
+FSR Upscaling	הגדלת FSR
+Sharper picture when the window is larger than 1080p. Switches at once	תמונה חדה יותר בחלון גדול מ-1080p. נכנס לתוקף מיד
+Shadows	צללים
+Sun and spot shadows	צללי שמש וצללי נקודה
+Motion Blur	טשטוש תנועה
+Blur on fast movement	טשטוש בתנועה מהירה
+Bloom	זוהר
+Glow around bright light	הילה סביב אור בהיר
+Depth of Field	עומק שדה
+Soft focus in the distance and in cutscenes	מיקוד רך ברחוק ובסצנות
+Vignette	האפלת פינות
+Darkened picture corners	פינות תמונה כהות
+Fur	פרווה
+Fur on the colossi	פרווה על הענקים
+Fog	ערפל
+Distance fog	ערפל מרחק
+Mist Particles	חלקיקי אד
+Drifting mist. Renders far too bright in this build; best left off	אד נע. נראה בהיר מדי בגרסה זו; מומלץ לכבות
+Texture Filtering	סינון טקסטורות
+Sharpness of surfaces seen at an angle	חדות משטחים הנראים בזווית
+Draw Distance	טווח ציור
+How far small objects are drawn. Full costs frame rate	עד כמה רחוק מצוירים חפצים קטנים. מלא פוגע בקצב
+Texture Detail	פירוט טקסטורות
+Sharpness of textures	חדות הטקסטורות
+Sharpening	חידוד
+Sharpening of the final picture	חידוד התמונה הסופית
+Button Icons	סמלי כפתורים
+Auto follows the device you are using	אוטומטי לפי ההתקן שבו משתמשים
+Achievement Sound	צליל הישג
+Loudness of the achievement sound, percent	עוצמת צליל ההישג, באחוזים
+Startup Logos	לוגואים בהפעלה
+The company logos when the game starts, half a minute. Saved at once	לוגואי החברות בהפעלה, חצי דקה. נשמר מיד
+# --- Setting values ---
+On	פועל
+Off	כבוי
+Custom	מותאם
+Low	נמוך
+Medium	בינוני
+High	גבוה
+Ultra	אולטרה
+Uncapped	ללא הגבלה
+Reduced	מופחת
+Full	מלא
+Normal	רגיל
+Strong	חזק
+Auto	אוטומטי
+Keyboard	מקלדת
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	הליכה קדימה
+Move Back	הליכה אחורה
+Move Left	הליכה שמאלה
+Move Right	הליכה ימינה
+Jump	קפיצה
+Attack	התקפה
+Grab / Use / Pray	אחיזה / שימוש / תפילה
+Crouch / Roll	כריעה / גלגול
+Raise Sword / Aim	הרמת חרב / כיוון
+Mount / Spur Agro	רכיבה / דרבון Agro
+Walk / Run	הליכה / ריצה
+View Colossus	הצגת ענק
+Camera Focus	מיקוד מצלמה
+Change Sword	החלפת חרב
+Change Ranged Weapon	החלפת נשק טווח
+Unequip	הסרת ציוד
+Photo Mode	מצב צילום
+World Map	מפת העולם
+Pause	השהיה
+Zoom (R3)	זום (R3)
+Press a key or mouse button	לחץ על מקש או כפתור עכבר
+Esc cancels	Esc מבטל
+Select, then press the new key or button	בחר, ואז לחץ על המקש או הכפתור החדש
+Changes are saved as you make them	שינויים נשמרים מיד
+Left Mouse	עכבר שמאלי
+Right Mouse	עכבר ימני
+Middle Mouse	עכבר אמצעי
+Wheel Up	גלגל למעלה
+Wheel Down	גלגל למטה
+# --- Free play ---
+Colossus	ענק
+Choose the colossus to fight	בחר ענק להילחם בו
+Difficulty	קושי
+Choose the difficulty	בחר רמת קושי
+Easy	קל
+Hard	קשה
+Time Attack	מרוץ זמן
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	קרב עם שעון בתנאים קבועים, דירוג מ-D עד S+ לפי זמן ונזק שנספג.
+Target time	זמן יעד
+(approximate)	(בקירוב)
+All Weapons and Items	כל הנשקים והפריטים
+Start with every weapon and item	התחל עם כל נשק ופריט
+Invincibility	אל-פגיעות
+Wander takes no damage	Wander לא ניזוק
+Unlimited Grip	אחיזה בלתי מוגבלת
+The grip gauge never empties	מד האחיזה אינו מתרוקן
+Maximum Damage	נזק מרבי
+Every sword strike deals full damage	כל מכת חרב גורמת נזק מלא
+Begin Battle	התחל קרב
+The game restarts and loads the battle	המשחק יופעל מחדש ויטען את הקרב
+Return to the previous menu	חזרה לתפריט הקודם
+# --- Time attack ---
+Target	יעד
+Starts when you move	מתחיל כשאתה זז
+Lost	הפסד
+Wander has fallen	Wander נפל
+the colossus has fallen	הענק נפל
+Rank	דירוג
+Time	זמן
+Typical time	זמן אופייני
+Health lost	חיים שאבדו
+# --- Achievements ---
+Platinum	פלטינה
+Gold	זהב
+Silver	כסף
+Bronze	ארד
+The Horned Boy	הנער בעל הקרניים
+Acquire all trophies	השג את כל הגביעים
+Speed King	מלך המהירות
+Obtain all Time Attack items together as one set	השג את כל פריטי מרוץ הזמן יחד כסט אחד
+Intrepid Mortal	בן תמותה אמיץ
+Max out Wander's health and stamina bars	מלא את מדי החיים והכוח של Wander
+Speed Demon	שד המהירות
+Complete Hard Mode under 5:41:28	סיים במצב קשה תוך פחות מ-5:41:28
+Grounded Scaler	מטפס על הקרקע
+Defeat Colossus 8 before it can turn back over	הבס את ענק 8 לפני שיצליח להתהפך
+Resist the Wrist	עמוד בפני פרק היד
+Defeat Colossus 3 without breaking his wrist guard	הבס את ענק 3 בלי לשבור את מגן פרק ידו
+Reach the Gate	הגע אל השער
+Cross the bridge to the entrance of the Forbidden Lands	חצה את הגשר אל הכניסה לארץ האסורה
+Last Man Standing	האחרון שנותר
+Complete a single playthrough without dying once	סיים משחק אחד בלי למות אפילו פעם
+Bearer of the Curse	נושא הקללה
+Complete the game on any difficulty	סיים את המשחק בכל רמת קושי
+Dormin's Rage	זעמו של Dormin
+Use Dormin's breath attack	השתמש בהתקפת הנשימה של Dormin
+Seeking Salvation	מחפש גאולה
+Pray at all shrines	התפלל בכל המקדשים
+Trick Rider	רוכב ההטעיות
+Perform all stunts with Agro	בצע את כל התעלולים עם Agro
+Fruit of the Garden	פרי הגן
+Taste the poisoned fruit	טעם את הפרי המורעל
+Sword of Her Majesty	חרבה של הוד מלכותה
+Defeat any colossus with the Queen's Sword	הבס ענק כלשהו בחרב המלכה
+Paint the Target	סמן את המטרה
+Use the sword to focus on a vital point	השתמש בחרב כדי למקד נקודה חיונית
+Fruit of the Land	פרי הארץ
+Eat a piece of fruit	אכול פרי
+Skilled Warrior	לוחם מיומן
+Defeat a colossus with a downward jump stab	הבס ענק בדקירה מקפיצה כלפי מטה
+The Past that Defines Thee	העבר שמגדיר אותך
+Defeat any colossus while in Reminiscence Mode	הבס ענק כלשהו במצב זיכרונות
+Five-Lined Skink	שרשף חמשת הפסים
+Collect a silver lizard tail	אסוף זנב לטאה כסוף
+Animals of the Land	חיות הארץ
+Interact with a dove, hawk, fish and turtle	פעל הדדית עם יונה, נץ, דג וצב
+Boon of the Nomad	מתנת הנווד
+Find the barrel in the hidden cave	מצא את החבית במערה הנסתרת
+Trick Arrow Skills	מיומנות חץ מיוחדת
+Shoot a lizard with a special arrow	ירה בלטאה בחץ מיוחד
+Valley of the Wanderer	עמק הנודד
+Defeat the 1st colossus	הבס את הענק הראשון
+The Mammoth	הממותה
+Defeat the 2nd colossus	הבס את הענק השני
+Wake the Knight	הער את האביר
+Defeat the 3rd colossus	הבס את הענק השלישי
+Land of the Gravestones	ארץ המצבות
+Defeat the 4th colossus	הבס את הענק הרביעי
+Riding the Wind	רוכב על הרוח
+Defeat the 5th colossus	הבס את הענק החמישי
+Tomb of the Giant	קברו של הענק
+Defeat the 6th colossus	הבס את הענק השישי
+Waves of Lightning	גלי ברק
+Defeat the 7th colossus	הבס את הענק השביעי
+Scaler of the Colosseum	מטפס הקולוסיאום
+Defeat the 8th colossus	הבס את הענק השמיני
+Lurker of the Cave	אורב המערה
+Defeat the 9th colossus	הבס את הענק התשיעי
+Mystery in the Sand	תעלומה בחול
+Defeat the 10th colossus	הבס את הענק העשירי
+Guardian and the Pit	השומר והבור
+Defeat the 11th colossus	הבס את הענק האחד עשר
+Thunder of the Lake	רעם האגם
+Defeat the 12th colossus	הבס את הענק השנים עשר
+Signs amidst the Storm	אותות בלב הסערה
+Defeat the 13th colossus	הבס את הענק השלושה עשר
+Shield of the Colossus	מגן הענק
+Defeat the 14th colossus	הבס את הענק הארבעה עשר
+Valley of the Fallen	עמק הנופלים
+Defeat the 15th colossus	הבס את הענק החמישה עשר
+Last of the Colossus	אחרון הענקים
+Defeat the 16th colossus	הבס את הענק השישה עשר
+# --- First start ---
+We waited, yet no one answered.	חיכינו, אך איש לא ענה.
+Sometimes, we have to do things ourselves.	לפעמים אנחנו צריכים לעשות דברים בעצמנו.
+Prepare the shaders before playing?	להכין את השיידרים לפני המשחק?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	מומלץ. לוקח עד דקה, פעם אחת, ואז המשחק רץ בצורה חלקה.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	בדילוג המשחק מתחיל מיד ונעצר לרגע כשמופיע משהו חדש על המסך.
+You will be asked again at the next start.	תישאל שוב בהפעלה הבאה.
+Prepare	הכן
+Skip	דלג
+Preparing shaders	מכין שיידרים
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	נדרש פעם אחת אחרי עדכון המשחק או דרייבר הגרפיקה. הפעלות הבאות לוקחות כמה שניות.
+# --- Saving and loading ---
+Save	שמירה
+Load	טעינה
+Delete	מחיקה
+New Save	שמירה חדשה
+Cancel	ביטול
+Corrupted	פגום
+There is no saved data	אין נתונים שמורים
+Do you want to save?	לשמור?
+Do you want to load this saved data?	לטעון את הנתונים השמורים האלה?
+Do you want to delete this saved data?	למחוק את הנתונים השמורים האלה?
+Do you want to overwrite the existing saved data?	לדרוס את הנתונים השמורים הקיימים?
+Saving...	שומר...
+Loading...	טוען...
+Deleting...	מוחק...
+Restoring saved data...	משחזר נתונים שמורים...
+The saved data is corrupted.	הנתונים השמורים פגומים.
+Saved successfully.	השמירה הצליחה.
+Loading complete.	הטעינה הסתיימה.
+Deletion complete.	המחיקה הסתיימה.
+The saved data is corrupted and will be deleted.	הנתונים השמורים פגומים ויימחקו.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	הנתונים השמורים פגומים. הם יימחקו ויווצרו נתונים חדשים.
+The saved data is corrupted. The data that was backed up by the system will be restored.	הנתונים השמורים פגומים. הגיבוי של המערכת ישוחזר.
+Cannot create more saved data	לא ניתן ליצור עוד נתונים שמורים
+There is not saved data.	אין נתונים שמורים.
+The data is corrupted.	הנתונים פגומים.

@@ -6,6 +6,7 @@ Free Play	Serbest Oyun
 Achievements	Başarımlar
 Quit	Çık
 Settings	Ayarlar
+Main Menu	Ana Menü
 Quit to desktop?	Masaüstüne çıkılsın mı?
 Yes	Evet
 No	Hayır

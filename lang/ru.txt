@@ -6,6 +6,7 @@ Free Play	Свободная игра
 Achievements	Достижения
 Quit	Выход
 Settings	Настройки
+Main Menu	Главное меню
 Quit to desktop?	Выйти на рабочий стол?
 Yes	Да
 No	Нет

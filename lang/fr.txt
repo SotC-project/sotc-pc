@@ -6,6 +6,7 @@ Free Play	Partie libre
 Achievements	Succès
 Quit	Quitter
 Settings	Paramètres
+Main Menu	Menu principal
 Quit to desktop?	Quitter vers le bureau ?
 Yes	Oui
 No	Non
