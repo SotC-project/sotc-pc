@@ -87,11 +87,13 @@ pointer is hidden outside menus.
 A scene can be left by holding Enter (or the controller's confirm button); a hint says so when
 a scene begins.
 
-The game has button schemes of its own (Game Settings > Controls). If you choose its Legacy
-scheme, the keys keep their actions: Space still jumps and Q still calls Agro. Crouching
-and rolling are then on the grab button, as in that scheme, so C and E do the same. The scheme
-is read when the game starts; restart after changing it. A Free Play battle uses the same layout
-on a controller as the story.
+The game has four button schemes of its own (Game Settings > Controls: Classic, Classic
+Remapped, Modern, Modern Remapped). Under each of them the keys keep their actions: Space still
+jumps, Q still calls Agro, the right mouse button still aims. The key pictures on screen and the
+Controls page follow the scheme too. In the two Classic schemes crouching and rolling are on the
+grab button, as the game has it there, so C and E do the same. The scheme is read when the game
+starts; restart after changing it. A Free Play battle uses the same layout on a controller as
+the story.
 
 The game runs at the same speed at any frame rate.
 
