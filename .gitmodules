@@ -1,0 +1,4 @@
+[submodule "runtime"]
+	path = runtime
+	url = https://github.com/SotC-project/sotc-pc.git
+	branch = runtime

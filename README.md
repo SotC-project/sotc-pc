@@ -12,8 +12,9 @@ It has two parts:
 - **This repository**: the scripts and settings around the program (build, install, settings
   pages, key pictures, test and measurement scripts).
 - **The runtime**, a game-specific build of [shadPS4](https://github.com/shadps4-emu/shadPS4),
-  a PlayStation 4 emulator. It lives in a second repository,
-  [sotc-pc-runtime](https://github.com/SotC-project/sotc-pc-runtime), branch `sotc-pc`.
+  a PlayStation 4 emulator. It lives in this repository too, on the branch
+  [`runtime`](https://github.com/SotC-project/sotc-pc/tree/runtime), and is checked out into the
+  `runtime` folder as a submodule.
 
 It is not a recompilation or a decompilation. The game's own PlayStation 4 program runs
 unchanged on the runtime, which translates its system and graphics calls to Windows and Vulkan.
@@ -52,7 +53,8 @@ as a test version:
 ```
 git clone https://github.com/SotC-project/sotc-pc
 cd sotc-pc
-git clone --recursive -b sotc-pc https://github.com/SotC-project/sotc-pc-runtime runtime
+git submodule update --init runtime
+git -C runtime submodule update --init --recursive
 build-lto.bat
 cd dist
 pwsh -File Install.ps1 -GameDir "D:\Games\CUSA08809"

@@ -1,5 +1,3 @@
-# The runtime is its own repository.
-/runtime/
 /toolchain/
 
 # Never commit game data or anything made from it.
