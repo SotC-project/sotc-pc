@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Tutorial
+    url: https://github.com/SotC-project/sotc-pc/blob/main/docs/TUTORIAL.md
+    about: Building, the first start, controls, settings and what to do when something goes wrong.

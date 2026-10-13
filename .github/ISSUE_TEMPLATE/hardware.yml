@@ -1,0 +1,41 @@
+name: Hardware report
+description: Say how it runs on your PC, working or not (Intel and NVIDIA cards are untested)
+labels: ["hardware"]
+body:
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and driver version
+    validations:
+      required: true
+  - type: input
+    id: pc
+    attributes:
+      label: Processor, memory, Windows version
+    validations:
+      required: true
+  - type: dropdown
+    id: works
+    attributes:
+      label: Result
+      options:
+        - Plays without problems
+        - Plays with problems
+        - Starts but cannot be played
+        - Does not start
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: Details
+      description: Graphics preset, frame rate you saw, how long you played, what went wrong. Attach the log if anything did.
+    validations:
+      required: true
+  - type: input
+    id: commits
+    attributes:
+      label: Commits
+      description: "`git rev-parse --short HEAD` in the sotc-pc folder and in its runtime folder."
+    validations:
+      required: true
