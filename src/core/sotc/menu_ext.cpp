@@ -60,7 +60,21 @@ constexpr Root TitleRoot{-0.786f, {"Free Play", "Achievements", "Quit"}, 3};
 // The pause menu gets no line of its own: Achievements is reached from the title menu only.
 constexpr Root PauseRoot{-0.695f, {nullptr, nullptr, nullptr}, 0};
 
+// In Arabic the game sets its menus from the right: the title list ends at a column left of
+// the middle with the arrow, pointing left, after it; the pause list stands in the right half,
+// the mirror picture of its usual place. The lines are a hundredth higher in the title list.
+constexpr Root TitleRootRtl{-0.3177f, {"Free Play", "Achievements", "Quit"}, 3};
+constexpr Root PauseRootRtl{0.6531f, {nullptr, nullptr, nullptr}, 0};
+
+bool Mirrored() {
+    static const bool mirrored = Lang::GameCode() == "ar";
+    return mirrored;
+}
+
 const Root& RootOf(Kind kind) {
+    if (Mirrored()) {
+        return kind == Kind::Pause ? PauseRootRtl : TitleRootRtl;
+    }
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
 }
 
@@ -231,7 +245,9 @@ struct Spot {
 Spot SpotAt(Kind kind, float sx, float sy) {
     Spot spot;
     const Root& root = RootOf(kind);
-    if (!Known(kind) || sx < root.arrow_x || sx > root.arrow_x + 0.36f) {
+    // The lines stand right of the arrow, or left of it in the mirrored menus.
+    const float from = Mirrored() ? root.arrow_x + 0.045f - 0.36f : root.arrow_x;
+    if (!Known(kind) || sx < from || sx > from + 0.36f) {
         return spot;
     }
     // Rows counted down from the game's last line: 0 is that line, 1 the first extra line;
@@ -304,18 +320,62 @@ void RenameQuitLine(int pass) {
         return;
     }
     std::thread{[] {
-        const std::string old_text = std::string("Quit") + " Game";
-        const std::string new_text = "Main Menu";
+        // The line's wording in each of the game's languages (read off the game's screen),
+        // and what it is to say instead: "Main Menu" in that language, from the language
+        // table. The new text may not be longer than the old in the form it is stored in, and
+        // is filled up with spaces to the same length.
+        static constexpr std::pair<const char*, const char*> GameWording[] = {
+            {"en", "Quit Game"},        {"fi", "Lopeta peli"},      {"fr", "Quitter la partie"},
+            {"de", "Spiel beenden"},    {"it", "Esci dal gioco"},   {"no", "Avslutt spill"},
+            {"pl", "Opuść grę"},        {"pt", "Sair do jogo"},     {"ru", "Выйти из игры"},
+            {"es", "Salir del juego"},  {"sv", "Avsluta spel"},     {"tr", "Oyundan Çık"},
+            {"da", "Afslut spil"},      {"nl", "Game afsluiten"},   {"ar", "إنهاء اللعبة"},
+        };
+        std::string old_text;
+        for (const auto& [code, wording] : GameWording) {
+            if (Lang::GameCode() == code) {
+                old_text = wording;
+            }
+        }
+        std::string new_text = Lang::GameCode() == "en" ? "Main Menu" : "";
+        if (Lang::GameCode() == Lang::Code() && !Lang::Written("Main Menu").empty()) {
+            new_text = Lang::Written("Main Menu");
+        }
+        if (old_text.empty() || new_text.empty()) {
+            return;
+        }
+        // Two bytes a letter (UTF-16), as the game also keeps its texts.
         const auto widen = [](const std::string& text) {
             std::string wide;
-            for (const char c : text) {
-                wide += c;
-                wide += '\0';
+            for (size_t i = 0; i < text.size();) {
+                const u8 lead = static_cast<u8>(text[i]);
+                const size_t length = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : 3;
+                u32 cp = length == 1 ? lead : lead & (0xff >> (length + 1));
+                for (size_t k = 1; k < length && i + k < text.size(); k++) {
+                    cp = (cp << 6) | (static_cast<u8>(text[i + k]) & 0x3f);
+                }
+                wide += static_cast<char>(cp & 0xff);
+                wide += static_cast<char>(cp >> 8);
+                i += length;
             }
             return wide;
         };
+        const auto fitted = [](std::string to, const std::string& from, const std::string& space) {
+            if (to.size() > from.size()) {
+                return std::string{};
+            }
+            while (to.size() < from.size()) {
+                to += space;
+            }
+            return to.size() == from.size() ? to : std::string{};
+        };
         const std::string old_wide = widen(old_text);
-        const std::string new_wide = widen(new_text);
+        const std::string new_wide = fitted(widen(new_text), old_wide, std::string("\x20\x00", 2));
+        new_text = fitted(new_text, old_text, " ");
+        if (new_text.empty() && new_wide.empty()) {
+            LOG_INFO(Core, "Pause menu line: the new wording does not fit the old, left as it is");
+            return;
+        }
         const HANDLE process = GetCurrentProcess();
         std::vector<char> block(4 << 20);
         u32 renamed = 0;
@@ -356,6 +416,9 @@ void RenameQuitLine(int pass) {
                 for (const bool wide : {false, true}) {
                     const std::string& from = wide ? old_wide : old_text;
                     const std::string& to = wide ? new_wide : new_text;
+                    if (to.empty()) {
+                        continue;
+                    }
                     const std::string_view view{block.data(), got};
                     for (size_t at = view.find(from); at != view.npos; at = view.find(from, at + 1)) {
                         const size_t end = at + from.size();
@@ -452,7 +515,8 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
     if (!following || !taps.empty() || rest_frames <= 6) {
         return;
     }
-    if (pointer_x < arrow_x - 0.03f || pointer_x > arrow_x + 0.9f) {
+    if (Mirrored() ? pointer_x < arrow_x - 0.9f || pointer_x > arrow_x + 0.08f
+                   : pointer_x < arrow_x - 0.03f || pointer_x > arrow_x + 0.9f) {
         following = false;
         return;
     }
@@ -735,7 +799,8 @@ void Draw() {
         if (!Known(kind) && !PanelOpen() && controller && taps.empty() && !seek.active) {
             // With a save the list always stands in the same place, known by its first line
             // (Continue): nothing needs finding out, and the menu comes up without a sound.
-            constexpr float ContinueY = 0.3611f, WithSaveLastY = -0.1843f;
+            constexpr float ContinueY = 0.3611f;
+            const float WithSaveLastY = Mirrored() ? -0.1750f : -0.1843f;
             if (probe == 0 && rest_frames > 12 && std::abs(y - ContinueY) < 0.004f) {
                 title_first_y = y;
                 title_last_y = WithSaveLastY;
@@ -852,9 +917,13 @@ void Draw() {
     for (int i = 0; i < root.num_lines; i++) {
         const float bottom = LastY(kind) - (i + 1) * RowStep;
         const float middle = bottom + ArrowHeight * 0.5f;
-        const ImVec2 text_at = to_pixels(root.arrow_x + 0.036f, middle);
         const char* const line = Lang::Tr(root.lines[i]).c_str();
         const ImVec2 extent = Ui::TextSize(size, line);
+        // Left edge of the text: after the arrow, or ending before it in the mirrored menus.
+        ImVec2 text_at = to_pixels(root.arrow_x + 0.036f, middle);
+        if (Mirrored()) {
+            text_at.x = to_pixels(root.arrow_x - 0.008f, middle).x - extent.x;
+        }
         // Plain, as the game's own lines are: no shadow.
         draw->AddText(Ui::Serif(), size, {text_at.x, text_at.y - extent.y * 0.5f}, Ink,
                       line);
@@ -866,9 +935,11 @@ void Draw() {
                           line);
         }
         if (on_extra && extra_index == i) {
-            const ImVec2 a = to_pixels(root.arrow_x + 0.005f, middle + 0.026f);
-            const ImVec2 b = to_pixels(root.arrow_x + 0.005f, middle - 0.026f);
-            const ImVec2 c = to_pixels(root.arrow_x + 0.028f, middle);
+            // The marker points at the line: to the right, or to the left when mirrored.
+            const float back = Mirrored() ? 0.037f : 0.005f, tip = Mirrored() ? 0.014f : 0.028f;
+            const ImVec2 a = to_pixels(root.arrow_x + back, middle + 0.026f);
+            const ImVec2 b = to_pixels(root.arrow_x + back, middle - 0.026f);
+            const ImVec2 c = to_pixels(root.arrow_x + tip, middle);
             draw->AddTriangleFilled(a, c, b, Ink);
         }
     }

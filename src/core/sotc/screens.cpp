@@ -31,7 +31,9 @@ namespace {
 // The menu cursor. The game has two sets of menu pictures: the full-size one of a normal
 // start (80x80) and a half-size one used when it is started straight into a scene, as
 // free play battles are (40x40).
-constexpr std::array<u64, 2> TitleMenuTextures{0x3e6ebf384eebcdcdULL, 0xc697b950114221edULL};
+// The third is the arrow of the Arabic menus, which point the other way (full-size set).
+constexpr std::array<u64, 3> TitleMenuTextures{0x3e6ebf384eebcdcdULL, 0xc697b950114221edULL,
+                                               0x8a16d24f1bbf8e8aULL};
 constexpr std::array<u64, 1> PauseMenuTextures{0x53539718d28a642fULL};
 // Drawn only by the Game Over screen (the stone mask with Retry and End), found by comparing
 // what it draws on several deaths with what battles, the pause menu and the title draw. Both

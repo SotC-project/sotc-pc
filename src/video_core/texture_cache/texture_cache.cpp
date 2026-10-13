@@ -1103,6 +1103,7 @@ void TextureCache::ApplyTexturePack(Image& image) {
     image.content_hash = hash;
     if (std::getenv("SOTC_TEXINFO") &&
         (info.size.width <= 64 || info.guest_size == 0x4b0000 || hash == 0xc697b950114221edULL ||
+         hash == 0x8a16d24f1bbf8e8aULL ||
          hash == 0x3e6ebf384eebcdcdULL || hash == 0xa7e173b9b30fa486ULL)) {
         LOG_INFO(Render, "texture {:#x}: {}x{} format {} mips {} bytes {:#x} at {:#x}", hash,
                  info.size.width, info.size.height, vk::to_string(info.pixel_format),
@@ -1113,7 +1114,8 @@ void TextureCache::ApplyTexturePack(Image& image) {
     // (Two cursors: the half-size and the full-size set of menu pictures.)
     constexpr u64 MenuArrow = 0x3e6ebf384eebcdcdULL;
     constexpr u64 MenuArrowLarge = 0xc697b950114221edULL;
-    if (hash == MenuArrow || hash == MenuArrowLarge) {
+    constexpr u64 MenuArrowArabic = 0x8a16d24f1bbf8e8aULL;
+    if (hash == MenuArrow || hash == MenuArrowLarge || hash == MenuArrowArabic) {
         menu_arrow_range = {info.guest_address, info.guest_size};
         if (Sotc::MenuExt::HideArrow()) {
             const u32 size = info.guest_size;

@@ -366,6 +366,11 @@ void Caption(ImDrawList* draw, float size, float x, float y, float anchor, ImU32
     // UTF-8: a letter may be several bytes, which stay together, and the capitals of the
     // accented Latin, Cyrillic and Greek letters are found by their places in the code charts.
     const std::string& shown = Lang::Tr(text);
+    if (Lang::RightToLeft()) {
+        // Joined letters cannot be set apart, and these scripts have no capitals.
+        Ui::Text(draw, size, {x - Ui::TextSize(size, shown).x * anchor, y}, color, shown);
+        return;
+    }
     std::string spaced;
     for (size_t i = 0; i < shown.size();) {
         const unsigned char lead = static_cast<unsigned char>(shown[i]);
