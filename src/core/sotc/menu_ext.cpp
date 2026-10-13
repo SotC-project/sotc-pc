@@ -23,6 +23,7 @@
 
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "core/devtools/layer.h"
 #include "core/libraries/pad/pad.h"
 #include "core/memory.h"
 #include "core/sotc/achievements.h"
@@ -64,10 +65,10 @@ const Root& RootOf(Kind kind) {
 
 std::mutex mutex;
 bool on_extra = false; // the cursor is on one of the extra lines
-// While the cursor is on the extra lines the game's own cursor, which is not drawn then, is
-// walked along with it from the top of the game's list: the game so plays its sound for each
-// step. This is how many lines below its first line it stands (0 when it was not moved).
-int game_steps = 0;
+// While the cursor is on the extra lines the game's own cursor, which is not drawn then, takes
+// one step for each step made there: the game so plays its sound for it. Where it stands for
+// each extra line is chosen so that every step, and the step back onto the game's list at either
+// end, is one step of the game's cursor (see HiddenY).
 int extra_index = 0;
 std::array<bool, 4> swallowed{};
 std::atomic<Input::GameController*> pad{nullptr};
@@ -84,11 +85,15 @@ constexpr float PauseFirstY = 0.087f;
 constexpr float PauseLastY = PauseFirstY - 3.0f * RowStep;
 constexpr float Unknown = 2.0f;
 std::atomic<float> title_last_y{Unknown};
+// The title menu's first line: the list is a ring, and the extra lines stand between its last
+// line and its first.
+std::atomic<float> title_first_y{Unknown};
 
 // Button presses sent to the game to move its cursor, one after the other.
 struct Tap {
     OrbisPadButtonDataOffset button;
-    int frame = 0;
+    u64 pressed_ms = 0;
+    bool released = false;
 };
 std::deque<Tap> taps;
 
@@ -102,6 +107,9 @@ struct Seek {
     int presses_left = 0;
 };
 Seek seek;
+// The game's arrow stays blank while its cursor walks from its hidden place back onto a line of
+// the game's list.
+std::atomic_bool arrow_returning{false};
 
 std::atomic_bool paused_in_cutscene{false};
 
@@ -120,6 +128,17 @@ Kind Current(float& y) {
     // is taken from the black bars of the picture as it was before the menu came up.
     if (kind == Kind::Pause && paused_in_cutscene.load()) {
         return Kind::None;
+    }
+    // The game's settings list stands where the pause menu does and is drawn with its
+    // pictures, half a line lower: only a cursor on one of the pause menu's four lines counts.
+    if (kind == Kind::Pause) {
+        bool on_line = false;
+        for (int line = 0; line < 4; line++) {
+            on_line |= std::abs(y - (PauseFirstY - line * RowStep)) < 0.02f;
+        }
+        if (!on_line) {
+            return Kind::None;
+        }
     }
     // The list of difficulties that New Game opens (Easy, Normal, Hard) stands where the title
     // menu does. Its three lines are a fraction of a line off the title menu's in both sets
@@ -163,6 +182,97 @@ std::atomic_bool pass_settings{false};
 
 bool PanelOpen() {
     return Menu::IsOpen() || Achievements::IsPanelOpen();
+}
+
+/// Where the game's hidden cursor stands while the cursor is on an extra line of the title menu.
+/// On the first it is one line above the game's last, so one step down brings it out on that
+/// line; on the last it is one line below the game's first, so one step up brings it out there;
+/// in between it is on the line that is one step from both. That works out for the title menu's
+/// five lines with a save and its three without; a list of another length costs a step more
+/// here and there, which the walk to the wanted line makes up.
+float HiddenY(int index) {
+    const float last = title_last_y.load();
+    const float first = title_first_y.load();
+    if (index == 0) {
+        return last + RowStep;
+    }
+    if (index == 1) {
+        return last + 2.0f * RowStep;
+    }
+    // With a save the first line (Continue) has lines about the save under it; the four lines
+    // at the foot are a line apart.
+    const bool even = first < 1.5f && first - last < 3.2f * RowStep;
+    return even ? first - RowStep : last + 3.0f * RowStep;
+}
+
+/// Sends the game's cursor to a line. With `returning` its arrow is blank until it is there.
+void SeekTo(float y, Then then = Then::Nothing, bool returning = false) {
+    seek = {true, y, then, 6};
+    arrow_returning = returning;
+}
+
+/// Puts the cursor on an extra line.
+void GoToExtra(int index) {
+    on_extra = true;
+    extra_index = index;
+    SeekTo(HiddenY(index));
+}
+
+/// What stands at a place of the screen in a menu: nothing, an extra line, or a line of the
+/// game's (given by the height its cursor has there).
+struct Spot {
+    enum class What { None, Extra, Line } what = What::None;
+    int extra = 0;
+    float y = 0.0f;
+    Then then = Then::Choose; // what a click there does, for a line of the game's
+};
+
+Spot SpotAt(Kind kind, float sx, float sy) {
+    Spot spot;
+    const Root& root = RootOf(kind);
+    if (!Known(kind) || sx < root.arrow_x || sx > root.arrow_x + 0.36f) {
+        return spot;
+    }
+    // Rows counted down from the game's last line: 0 is that line, 1 the first extra line;
+    // -1 the game's line above it, and so on.
+    const float last_middle = LastY(kind) + ArrowHeight * 0.5f;
+    const int row = static_cast<int>(std::lround((last_middle - sy) / RowStep));
+    if (row > root.num_lines) {
+        return spot;
+    }
+    if (row >= 1) {
+        spot.what = Spot::What::Extra;
+        spot.extra = row - 1;
+        return spot;
+    }
+    if (kind == Kind::Pause && row < -3) {
+        return spot;
+    }
+    spot.what = Spot::What::Line;
+    // The four lines at the foot of either menu are a line apart. Higher up the title menu
+    // with a save has Continue and the lines about it: that place means Continue, its first
+    // line.
+    const float first = title_first_y.load();
+    if (kind == Kind::Title && first < 1.5f) {
+        if (sy > first + ArrowHeight * 0.5f + RowStep * 0.5f) {
+            spot.what = Spot::What::None;
+            return spot;
+        }
+        if (row < -3 || std::abs(first - (LastY(kind) - row * RowStep)) < RowStep * 0.5f) {
+            spot.y = first;
+            return spot;
+        }
+    }
+    if (row >= -3) {
+        spot.y = LastY(kind) - row * RowStep;
+        if ((row == -1 && kind == Kind::Title) || (row == -3 && kind == Kind::Pause)) {
+            spot.then = Then::Settings;
+        }
+    } else {
+        spot.y = LastY(kind);
+        spot.then = Then::StepToFirst;
+    }
+    return spot;
 }
 
 void Activate(Kind kind, int index) {
@@ -306,6 +416,90 @@ void QueueTap(OrbisPadButtonDataOffset button, int times = 1) {
     }
 }
 
+std::atomic<float> test_pointer_x{0.0f}, test_pointer_y{0.0f};
+std::atomic_bool test_pointer_moved{false};
+
+/// The pointer's place in the game's screen units; false when it has not moved this frame.
+bool PointerMoved(float& sx, float& sy) {
+    if (test_pointer_moved.exchange(false)) {
+        sx = test_pointer_x.load() * 2.0f - 1.0f;
+        sy = 1.0f - test_pointer_y.load() * 2.0f;
+        return true;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    if ((io.MouseDelta.x == 0.0f && io.MouseDelta.y == 0.0f) || io.DisplaySize.x <= 0.0f ||
+        io.DisplaySize.y <= 0.0f || !Overlay::MenuCursorActive()) {
+        return false;
+    }
+    sx = io.MousePos.x / io.DisplaySize.x * 2.0f - 1.0f;
+    sy = 1.0f - io.MousePos.y / io.DisplaySize.y * 2.0f;
+    return true;
+}
+
+/// The game's other lists (its settings, the difficulties, the save slots, ...): their lines are
+/// not known here, so the cursor is stepped towards the pointer and watched. It stops when it is
+/// on the pointer's line, at the end of the list, or when a step took it further away.
+void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
+    static bool following = false;
+    static int last_direction = 0;
+    static float last_distance = 0.0f, stepped_from = 0.0f;
+    static float pointer_x = 0.0f, pointer_y = 0.0f;
+    if (PointerMoved(pointer_x, pointer_y)) {
+        following = true;
+        last_direction = 0;
+    }
+    if (!following || !taps.empty() || rest_frames <= 6) {
+        return;
+    }
+    if (pointer_x < arrow_x - 0.03f || pointer_x > arrow_x + 0.9f) {
+        following = false;
+        return;
+    }
+    const float off = pointer_y - (arrow_y + ArrowHeight * 0.5f); // above the cursor: positive
+    const int direction = off > 0.0f ? -1 : 1;
+    if (std::abs(off) < RowStep * 0.55f ||
+        (last_direction != 0 &&
+         (direction != last_direction || std::abs(arrow_y - stepped_from) < SameLine ||
+          std::abs(off) >= last_distance))) {
+        following = false;
+        return;
+    }
+    QueueTap(direction < 0 ? OrbisPadButtonDataOffset::Up : OrbisPadButtonDataOffset::Down);
+    last_direction = direction;
+    last_distance = std::abs(off);
+    stepped_from = arrow_y;
+}
+
+/// A cutscene can be left by holding the confirm button, which the game only says once a
+/// button is pressed. Said here for the first seconds of every scene, in the black bar at the
+/// foot of the picture; not while a key is down or was a moment ago, when the game's own hint
+/// stands in that place.
+void DrawSkipHint() {
+    static u64 since_ms = 0, touched_ms = 0;
+    const bool scene = Screens::Letterboxed() && !Screens::PauseMenu() && !Screens::Arrow() &&
+                       !Overlay::InTitleMenu() && !PanelOpen() && !Ui::DialogOpen();
+    if (!scene) {
+        since_ms = 0;
+        return;
+    }
+    const u64 now = SDL_GetTicks();
+    if (since_ms == 0) {
+        since_ms = now;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++) {
+        if (ImGui::IsKeyDown(static_cast<ImGuiKey>(key))) {
+            touched_ms = now;
+            break;
+        }
+    }
+    if (now - since_ms > 8000 || (touched_ms != 0 && now - touched_ms < 4000)) {
+        return;
+    }
+    Ui::Prompt(ImGui::GetForegroundDrawList(), io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.938f,
+               "HOLD TO SKIP", Ui::Action::Confirm);
+}
+
 } // namespace
 
 bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
@@ -331,27 +525,20 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         switch (nav) {
         case Nav::Up:
             if (extra_index == 0) {
-                // Back onto the game's last line: its cursor wraps there from its first line.
+                // Back onto the game's last line.
                 on_extra = false;
-                if (game_steps == 1) {
-                    game_steps = 0;
-                    return false;
-                }
+                SeekTo(LastY(kind), Then::Nothing, true);
             } else {
-                --extra_index;
-                if (game_steps > 1) {
-                    --game_steps;
-                    return false;
-                }
+                GoToExtra(extra_index - 1);
             }
             break;
         case Nav::Down:
             if (extra_index + 1 < root.num_lines) {
-                ++extra_index;
-                if (game_steps > 0) {
-                    ++game_steps;
-                    return false;
-                }
+                GoToExtra(extra_index + 1);
+            } else if (title_first_y.load() < 1.5f) {
+                // Round to the game's first line.
+                on_extra = false;
+                SeekTo(title_first_y.load(), Then::Nothing, true);
             }
             break;
         case Nav::Confirm:
@@ -369,13 +556,19 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         swallowed[slot] = true;
         return true;
     }
-    if (nav == Nav::Down && root.num_lines > 0 && AtLast(kind, y) && taps.empty()) {
-        // The press goes on to the game: its cursor wraps to its first line with the sound of
-        // a step, and is not drawn while the cursor is on the extra lines.
-        on_extra = true;
-        extra_index = 0;
-        game_steps = 1;
-        return false;
+    if (root.num_lines > 0 && taps.empty() && !seek.active) {
+        // The extra lines stand between the game's last line and its first: down from the
+        // last and up from the first lead onto them.
+        if (nav == Nav::Down && AtLast(kind, y)) {
+            GoToExtra(0);
+            swallowed[slot] = true;
+            return true;
+        }
+        if (nav == Nav::Up && std::abs(y - title_first_y.load()) < SameLine) {
+            GoToExtra(root.num_lines - 1);
+            swallowed[slot] = true;
+            return true;
+        }
     }
     return false;
 }
@@ -404,46 +597,35 @@ bool OnClick(float x, float y) {
     }
     float cursor_y = 0.0f;
     const Kind kind = Current(cursor_y);
-    if (kind == Kind::None || !Known(kind) || !taps.empty() || seek.active) {
+    if (kind == Kind::None || !Known(kind) || !taps.empty() ||
+        (seek.active && seek.then != Then::Nothing)) {
         return false;
     }
-    const Root& root = RootOf(kind);
-    const float sx = x * 2.0f - 1.0f;
-    const float sy = 1.0f - y * 2.0f;
-    if (sx < root.arrow_x || sx > root.arrow_x + 0.36f) {
+    const Spot spot = SpotAt(kind, x * 2.0f - 1.0f, 1.0f - y * 2.0f);
+    if (spot.what == Spot::What::None) {
         return false;
     }
-    // Rows counted down from the game's last line: 0 is that line, 1 the first extra line;
-    // -1 the game's line above it, and so on.
-    const float last_middle = LastY(kind) + ArrowHeight * 0.5f;
-    const int row = static_cast<int>(std::lround((last_middle - sy) / RowStep));
-    if (row > root.num_lines) {
-        return false;
-    }
-    if (row >= 1) {
-        on_extra = true;
-        extra_index = row - 1;
-        game_steps = 0;
-        Activate(kind, extra_index);
+    if (spot.what == Spot::What::Extra) {
+        if (!on_extra || extra_index != spot.extra) {
+            GoToExtra(spot.extra);
+        }
+        Activate(kind, spot.extra);
         return true;
     }
     on_extra = false;
-    if (kind == Kind::Pause && row < -3) {
-        return false;
-    }
-    // The four lines at the foot of either menu are a line apart. Higher up the title menu
-    // with a save has Continue and the lines about it: a click there means Continue, its first
-    // line, which is one step down from the last.
-    if (row >= -3) {
-        seek = {true, LastY(kind) - row * RowStep, row == -1 && kind == Kind::Title ? Then::Settings
-                                                    : Then::Choose, 10};
-        if (kind == Kind::Pause && row == -3) {
-            seek.then = Then::Settings;
-        }
-    } else {
-        seek = {true, LastY(kind), Then::StepToFirst, 10};
-    }
+    SeekTo(spot.y, spot.then);
+    seek.presses_left = 10;
     return true;
+}
+
+void SetPad(Input::GameController* controller) {
+    pad = controller;
+}
+
+void TestPointer(float x, float y) {
+    test_pointer_x = x;
+    test_pointer_y = y;
+    test_pointer_moved = true;
 }
 
 bool AtTitleRoot() {
@@ -456,7 +638,7 @@ void PassToGameSettings() {
 }
 
 bool HideArrow() {
-    return on_extra || HideText();
+    return on_extra || arrow_returning.load() || HideText();
 }
 
 bool HideText() {
@@ -473,15 +655,18 @@ void Draw() {
     if (!PanelOpen() && pass_settings.exchange(false)) {
         QueueTap(OrbisPadButtonDataOffset::Cross);
     }
-    // Presses on their way to the game: down for three frames, up for three.
+    // Presses on their way to the game: down for a twentieth of a second, then up for one. By
+    // the clock: the picture may be drawn several times for each time the game reads the pad.
+    const u64 now_ms = SDL_GetTicks();
     if (!taps.empty() && controller) {
         Tap& tap = taps.front();
-        if (tap.frame == 0) {
+        if (tap.pressed_ms == 0) {
             controller->Button(tap.button, true);
-        } else if (tap.frame == 3) {
+            tap.pressed_ms = now_ms;
+        } else if (!tap.released && now_ms - tap.pressed_ms >= 50) {
             controller->Button(tap.button, false);
-        }
-        if (++tap.frame > 6) {
+            tap.released = true;
+        } else if (now_ms - tap.pressed_ms >= 110) {
             taps.pop_front();
         }
     }
@@ -495,27 +680,44 @@ void Draw() {
                      ay, Screens::PauseMenu(), title_last_y.load(), pad.load() != nullptr);
         }
     }
+    DrawSkipHint();
+
+    // How long the game's cursor has rested where it is, in sixtieths of a second.
+    static float rest_y = Unknown;
+    static u64 rest_since = 0;
+    float arrow_x = 0.0f, arrow_y = 0.0f;
+    const bool arrow = Screens::Arrow(arrow_x, arrow_y);
+    if (!arrow || std::abs(arrow_y - rest_y) >= SameLine) {
+        rest_y = arrow ? arrow_y : Unknown;
+        rest_since = now_ms;
+    }
+    int rest_frames = static_cast<int>((now_ms - rest_since) * 60 / 1000);
+
     float y = 0.0f;
     const Kind kind = Current(y);
     if (kind == Kind::None) {
-        static int gone_frames = 0;
-        if (!Screens::Arrow() && ++gone_frames > 20) {
+        static u64 arrow_seen_ms = 0;
+        if (arrow) {
+            arrow_seen_ms = now_ms;
+        } else if (now_ms - arrow_seen_ms > 330) {
             on_extra = false;
             seek.active = false;
-            gone_frames = 0;
+            arrow_returning = false;
+        }
+        if (arrow && controller && !PanelOpen() && !Ui::DialogOpen()) {
+            FollowPointer(arrow_x, arrow_y, rest_frames);
         }
         return;
     }
     RenameQuitLine(kind == Kind::Pause ? 1 : 0);
 
-    // How long the cursor has rested where it is.
-    static float rest_y = Unknown;
-    static int rest_frames = 0;
-    if (std::abs(y - rest_y) < SameLine) {
-        ++rest_frames;
-    } else {
-        rest_y = y;
-        rest_frames = 0;
+    // Free play has no title menu of its own: leaving a battle for the main menu (the pause
+    // menu's last line, or End after a defeat) starts the game again plainly.
+    static bool pause_seen = false, leaving = false;
+    pause_seen |= kind == Kind::Pause;
+    if (kind == Kind::Title && pause_seen && !leaving) {
+        leaving = true;
+        Menu::LeaveFreePlay();
     }
 
     // Where the title menu's last line is: one step up from where the cursor rests when the
@@ -530,21 +732,37 @@ void Draw() {
             title_last_y = y;
         }
         if (!Known(kind) && !PanelOpen() && controller && taps.empty() && !seek.active) {
-            if (probe == 0 && rest_frames > 30) {
+            // With a save the list always stands in the same place, known by its first line
+            // (Continue): nothing needs finding out, and the menu comes up without a sound.
+            constexpr float ContinueY = 0.3611f, WithSaveLastY = -0.1843f;
+            if (probe == 0 && rest_frames > 12 && std::abs(y - ContinueY) < 0.004f) {
+                title_first_y = y;
+                title_last_y = WithSaveLastY;
+                probe = 4;
+            } else if (probe == 0 && rest_frames > 45) {
                 probe_start = y;
                 QueueTap(OrbisPadButtonDataOffset::Up);
                 probe = 1;
-                rest_frames = 0;
+                rest_frames = 0, rest_since = now_ms;
+            } else if (probe == 1 && rest_frames > 8 && std::abs(y - probe_start) < 0.03f &&
+                       probe_presses < 8) {
+                // The menu was not taking presses yet (it fades in): once more.
+                ++probe_presses;
+                probe_start = y;
+                QueueTap(OrbisPadButtonDataOffset::Up);
+                rest_frames = 0, rest_since = now_ms;
             } else if (probe == 1 && rest_frames > 8) {
                 probe_candidate = y;
                 QueueTap(OrbisPadButtonDataOffset::Down);
                 probe = 2;
-                rest_frames = 0;
+                rest_frames = 0, rest_since = now_ms;
             } else if (probe == 2 && rest_frames > 8) {
                 if (probe_candidate < probe_start - SameLine && y > probe_candidate + SameLine) {
                     // Up went to a lower line and down came back up: the lower one is the last.
                     title_last_y = probe_candidate;
-                    LOG_INFO(Core, "Title menu: last line at {:.3f}", probe_candidate);
+                    title_first_y = y;
+                    LOG_INFO(Core, "Title menu: last line at {:.3f}, first at {:.3f}",
+                             probe_candidate, y);
                     probe = 4;
                 } else {
                     probe = 3;
@@ -555,8 +773,10 @@ void Draw() {
                 if (y > probe_candidate + SameLine) {
                     // Wrapped to the top: the line before was the last. Walk back to the start.
                     title_last_y = probe_candidate;
-                    LOG_INFO(Core, "Title menu: last line at {:.3f} (found by walking)",
-                             probe_candidate);
+                    title_first_y = y;
+                    LOG_INFO(Core, "Title menu: last line at {:.3f}, first at {:.3f} (found by "
+                                   "walking)",
+                             probe_candidate, y);
                     probe = 4;
                     seek = {true, probe_start, Then::Nothing, 10};
                 } else if (++probe_presses > 10) {
@@ -565,7 +785,7 @@ void Draw() {
                 } else {
                     probe_candidate = y;
                     QueueTap(OrbisPadButtonDataOffset::Down);
-                    rest_frames = 0;
+                    rest_frames = 0, rest_since = now_ms;
                 }
             }
         }
@@ -575,6 +795,7 @@ void Draw() {
     if (seek.active && taps.empty() && rest_frames > 6 && !PanelOpen()) {
         if (std::abs(y - seek.y) < SameLine) {
             seek.active = false;
+            arrow_returning = false;
             switch (seek.then) {
             case Then::Choose:
                 QueueTap(OrbisPadButtonDataOffset::Cross);
@@ -591,14 +812,32 @@ void Draw() {
             }
         } else if (seek.presses_left-- <= 0) {
             seek.active = false;
+            arrow_returning = false;
         } else {
             QueueTap(seek.y < y ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up);
-            rest_frames = 0;
+            rest_frames = 0, rest_since = now_ms;
         }
     }
 
     if (!Known(kind) || PanelOpen() || Ui::DialogOpen()) {
         return;
+    }
+    // The pointer over a line puts the cursor on it.
+    if (float sx, sy; controller && PointerMoved(sx, sy) &&
+                      !(seek.active && seek.then != Then::Nothing)) {
+        const Spot spot = SpotAt(kind, sx, sy);
+        if (spot.what == Spot::What::Extra) {
+            if (!on_extra || extra_index != spot.extra) {
+                GoToExtra(spot.extra);
+            }
+        } else if (spot.what == Spot::What::Line && spot.then != Then::StepToFirst) {
+            const bool there = seek.active ? std::abs(seek.y - spot.y) < SameLine
+                                           : std::abs(y - spot.y) < SameLine;
+            if (on_extra || !there) {
+                const bool from_extra = std::exchange(on_extra, false);
+                SeekTo(spot.y, Then::Nothing, from_extra);
+            }
+        }
     }
     const Root& root = RootOf(kind);
     const ImVec2 display = ImGui::GetIO().DisplaySize;

@@ -232,6 +232,16 @@ std::string JsonValue(const std::string& text, const std::string& key) {
     return text.substr(start, end - start);
 }
 
+/// The company logos at the start are shown when this file is in the user folder.
+std::filesystem::path LogosMarker() {
+    return Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_show_logos.txt";
+}
+
+bool ShowLogos() {
+    std::error_code ec;
+    return std::filesystem::exists(LogosMarker(), ec) || std::getenv("SOTC_LOGOS") != nullptr;
+}
+
 // ---- Graphics and other settings ----
 // The same options Settings.bat offers. They are engine start options and program settings, read
 // when the game starts, so applying them writes them through Settings.ps1 and restarts.
@@ -298,7 +308,10 @@ void LoadOptions() {
          "Auto follows the device you are using"},
         {"Achievement Sound", "AchievementVolume", {"0", "25", "50", "75", "100"},
          "Loudness of the achievement sound, percent"},
+        {"Startup Logos", "Logos", OnOffValues,
+         "The company logos when the game starts, half a minute. Saved at once"},
     };
+    SetOption("Logos", ShowLogos() ? "on" : "off");
     // Defaults, as Settings.ps1 has them, for options no file names yet.
     for (const char* param : {"Shadows", "MotionBlur", "Bloom", "DepthOfField", "Vignette", "Fur", "Fog"}) {
         SetOption(param, "on");
@@ -383,8 +396,9 @@ void ApplyOptions() {
     std::wstring command = L"pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"" +
                            script.wstring() + L"\" -GameDir \"" + game_dir.wstring() + L"\"";
     for (const Option& option : options) {
-        if (std::string_view{option.param} == "Preset") {
-            continue; // its effect is already in the options it sets
+        if (std::string_view{option.param} == "Preset" ||
+            std::string_view{option.param} == "Logos") {
+            continue; // the one's effect is in the options it sets, the other is kept here
         }
         const std::string value = option.values[option.index];
         command += L" -" + std::wstring(option.param, option.param + std::strlen(option.param)) +
@@ -594,12 +608,8 @@ std::string KeyLabel(const std::string& key) {
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
     if (page == Page::Main) {
-        // Outside free play this page is the PC settings; free play and the achievements have
-        // their own lines in the game's menus.
-        if (InFreePlay()) {
-            rows.push_back({"Free Play", "", "Fight any colossus", true, false,
-                            [](int) { GoTo(Page::FreePlay); }});
-        }
+        // The PC settings, opened from the Settings line of the game's title and pause menus;
+        // free play and the achievements have their own lines in the title menu.
         rows.push_back({"Graphics", "", "Graphics, display, button icons and sound",
                         true, false, [](int) {
                             LoadOptions();
@@ -610,32 +620,13 @@ std::vector<Row> BuildRows() {
                             bindings_dirty = true;
                             GoTo(Page::Controls);
                         }});
-        if (!InFreePlay()) {
-            rows.push_back({"Game Settings", "", "The game's own display, audio, camera and controls",
-                            true, false, [](int) {
-                                open = false;
-                                MenuExt::PassToGameSettings();
-                            }});
-        }
-        if (InFreePlay()) {
-            rows.push_back({"Achievements", "", "View your achievements", true, false, [](int) {
-                                open = false;
-                                if (!Achievements::IsPanelOpen()) {
-                                    Achievements::TogglePanel();
-                                }
-                            }});
-        }
-        if (InFreePlay()) {
-            // Leaving to the desktop is on the main menu only.
-            rows.push_back({"Return to Main Menu", "", "Leave free play; the game restarts",
-                            true, false, [](int) { Relaunch("", ""); }});
-            rows.push_back({"Resume", "", "Return to the game", true, false,
-                            [](int) { open = false; }});
-        } else {
-            // Opened from the game's Settings line: its menu, with its own way out, is behind.
-            rows.push_back({"Back", "", "Return to the menu", true, false,
-                            [](int) { open = false; }});
-        }
+        rows.push_back({"Game Settings", "", "The game's own display, audio, camera and controls",
+                        true, false, [](int) {
+                            open = false;
+                            MenuExt::PassToGameSettings();
+                        }});
+        // The game's menu, with its own way out, is behind.
+        rows.push_back({"Back", "", "Return to the menu", true, false, [](int) { open = false; }});
     } else if (page == Page::Quit) {
         rows.push_back({"No", "", "", true, false, [](int) { open = false; }});
         rows.push_back({"Yes", "", "", true, false, [](int) { QuitGame(); }});
@@ -678,11 +669,7 @@ std::vector<Row> BuildRows() {
                         }});
         rows.push_back({"Back", "", "Return to the previous menu", true, false, [](int d) {
                             if (d == 0) {
-                                if (opened_on_page) {
-                                    open = false;
-                                } else {
-                                    GoTo(Page::Main);
-                                }
+                                open = false;
                             }
                         }});
     } else if (page == Page::Graphics) {
@@ -699,12 +686,19 @@ std::vector<Row> BuildRows() {
                                     presenter->GetFsrSettingsRef().enable =
                                         changed.values[changed.index] == "on";
                                 }
-                                if (param == "Preset") {
+                                if (param == "Logos") {
+                                    std::error_code ec;
+                                    if (changed.values[changed.index] == "on") {
+                                        std::ofstream{LogosMarker()} << "on\n";
+                                    } else {
+                                        std::filesystem::remove(LogosMarker(), ec);
+                                    }
+                                } else if (param == "Preset") {
                                     ApplyPreset(changed.values[changed.index]);
                                 } else if (param != "Fps" && param != "VSync" &&
                                            param != "Fullscreen" && param != "Window" &&
                                            param != "Upscaling" && param != "Prompts" &&
-                                           param != "AchievementVolume") {
+                                           param != "AchievementVolume" && param != "Logos") {
                                     SetOption("Preset", "custom");
                                 }
                             }});
@@ -758,7 +752,7 @@ const char* PageTitle() {
     case Page::Quit:
         return "Quit to desktop?";
     default:
-        return InFreePlay() ? "Shadow of the Colossus" : "Settings";
+        return "Settings";
     }
 }
 
@@ -813,7 +807,7 @@ void LeaveFreePlay() {
 }
 
 bool ReplacesGameMenu() {
-    return open && !InFreePlay();
+    return open;
 }
 
 float SceneShift() {
@@ -905,7 +899,8 @@ bool StartCovered(bool period_only) {
 }
 
 void HotkeyToggle() {
-    if (open || InFreePlay()) {
+    // The pages are reached from the game's own menus; the key only closes one.
+    if (open) {
         Toggle();
     }
 }
@@ -1020,9 +1015,8 @@ void Draw() {
     auto* draw = GetForegroundDrawList();
     // Opened from one of the game's menus, the page takes that menu's place: the game's
     // lettering is left out meanwhile (see MenuExt::HideText) and the page is written where
-    // it stood, in ink on the game's picture, like the game's own sub-menus. Over a free play
-    // battle it is a pale page on a veil.
-    const bool in_place = !InFreePlay();
+    // it stood, in ink on the game's picture, like the game's own sub-menus.
+    const bool in_place = true;
     struct InkScope {
         explicit InkScope(bool ink) {
             Ui::SetInk(ink);
@@ -1144,21 +1138,27 @@ std::filesystem::path LaunchOptionsFile(const std::filesystem::path& original) {
     std::lock_guard lock{mutex};
     if (!built) {
         built = true;
+        std::ifstream in(original, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        while (!text.empty() &&
+               (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) {
+            text.pop_back();
+        }
         const char* env = std::getenv("SOTC_FREEPLAY");
-        if (env && *env) {
+        std::string args = env ? env : "";
+        // The company logos at the start take half a minute and cannot be cut short while
+        // they play; the game has a start option that leaves them out.
+        if (!ShowLogos() && text.find("skipSplash") == std::string::npos &&
+            args.find("skipSplash") == std::string::npos) {
+            args += args.empty() ? "+skipSplash=true" : " +skipSplash=true";
+        }
+        if (!args.empty()) {
             std::error_code ec;
             const auto dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "temp";
             std::filesystem::create_directories(dir, ec);
             const auto path = dir / "CommandLineArgs.freeplay.txt";
-            std::ifstream in(original, std::ios::binary);
-            std::string text((std::istreambuf_iterator<char>(in)),
-                             std::istreambuf_iterator<char>());
-            while (!text.empty() &&
-                   (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) {
-                text.pop_back();
-            }
+            LOG_INFO(Core, "Added launch options: {}", args);
             // One option per line with CRLF ends, as the file is written elsewhere.
-            std::string args = env;
             for (size_t pos = 0; (pos = args.find(' ', pos)) != std::string::npos; pos += 2) {
                 args.replace(pos, 1, "\r\n");
             }
@@ -1166,7 +1166,6 @@ std::filesystem::path LaunchOptionsFile(const std::filesystem::path& original) {
             out << text << "\r\n" << args << "\r\n";
             if (out) {
                 replacement = path;
-                LOG_INFO(Core, "Free play launch options: {}", env);
             }
         }
     }

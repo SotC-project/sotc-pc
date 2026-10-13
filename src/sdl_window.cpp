@@ -30,7 +30,6 @@
 #include "core/debug_state.h"
 #include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
-#include "core/libraries/kernel/time.h"
 #include "core/libraries/pad/pad.h"
 #include "core/libraries/system/userservice.h"
 #include "core/user_settings.h"
@@ -342,6 +341,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 click.button.y = std::stof(action.substr(comma + 1)) * h;
                 SDL_PushEvent(&click);
                 held_keys.push_back({click, now + 120});
+            }
+        } else if (action.starts_with("hover=")) {
+            // "hover=0.08/0.55": the pointer moved to that place of the window.
+            const auto slash = action.find('/');
+            if (slash != std::string::npos) {
+                Sotc::MenuExt::TestPointer(std::stof(action.substr(6, slash - 6)),
+                                           std::stof(action.substr(slash + 1)));
             }
         } else if (action.starts_with("mousey=")) {
             // The same, moving down (negative = up).
@@ -667,6 +673,7 @@ void WindowSDL::InitTimers() {
         SDL_AddTimer(4, &PollController, controllers[i]);
     }
     SDL_AddTimer(8, Input::MousePolling, (void*)controllers[0]);
+    Sotc::MenuExt::SetPad(controllers[0]);
     if (std::getenv("SOTC_SCRIPT")) {
         g_script_window = SDL_GetWindowID(window);
         if (std::getenv("SOTC_VPAD")) {
@@ -756,7 +763,8 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
             if (event->type != SDL_EVENT_MOUSE_BUTTON_UP) {
                 return;
             }
-        } else if (Overlay::InTitleMenu() || Sotc::Screens::PauseMenu()) {
+        } else if (Overlay::InTitleMenu() || Sotc::Screens::PauseMenu() ||
+                   Sotc::Screens::GameOver()) {
             // The game's menus only know pad buttons: left click confirms, right click goes
             // back, the wheel moves the selection.
             SDL_Event key{};

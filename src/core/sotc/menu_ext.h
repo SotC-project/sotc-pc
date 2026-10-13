@@ -29,6 +29,10 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller);
 int FilterLeftY(int value, Input::GameController* controller);
 /// A left click at a place in the window (0 to 1 across and down). True when a menu line took it.
 bool OnClick(float x, float y);
+/// The pad the game reads: the presses that move its menu cursor go to it.
+void SetPad(Input::GameController* controller);
+/// Test runs: the pointer was moved to a place in the window (0 to 1 across and down).
+void TestPointer(float x, float y);
 /// Draws the extra lines and runs the cursor bookkeeping. Call once per frame from the overlay.
 void Draw();
 /// True while the lettering of the game's menus is left out: one of this build's pages is

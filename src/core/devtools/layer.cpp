@@ -67,8 +67,10 @@ static void UpdateMenuCursor() {
     Input::mouse_look_blocked = panel || !game_started || Sotc::Screens::PauseMenu() ||
                                 Sotc::Screens::TitleMenu() || Sotc::Screens::GameOver() ||
                                 Sotc::Screens::Letterboxed();
-    const bool wanted = (panel || !game_started || Sotc::Screens::PauseMenu() ||
-                         Sotc::Screens::TitleMenu()) &&
+    // Shown where there is something to point at: a panel or one of the game's menus. Not
+    // over the logos at the start, a loading screen or a cutscene.
+    const bool wanted = (panel || Sotc::Screens::PauseMenu() || Sotc::Screens::TitleMenu() ||
+                         Sotc::Screens::GameOver()) &&
                         VideoCore::ActivePromptSet() == VideoCore::PromptSet::Keyboard;
     if (menu_cursor.exchange(wanted) == wanted) {
         return;
