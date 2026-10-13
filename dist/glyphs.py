@@ -60,6 +60,8 @@ def keycap(label):
 # each side, which the game captions with the action names. The replacement keeps the slots and
 # names the bound key or mouse button next to each.
 DIAGRAM_HASH = '4cc0bdb755626df7'
+# The same drawing at twice the size, in the menus of a normal start.
+DIAGRAM_LARGE_HASH = 'a385b4851288a6a9'
 DIAGRAM_ROWS = (44, 102, 160, 218, 277, 335, 393, 451)
 DIAGRAM_LEFT = ('Tab', 'R', 'Z', 'X  /  Up', 'Wheel up  /  2', 'P  /  Down',
                 'Wheel down  /  1', 'W  A  S  D')
@@ -67,7 +69,7 @@ DIAGRAM_RIGHT = ('Esc', 'Right mouse  /  E', 'Q  /  Middle mouse', 'Left Shift',
                  'C  /  Left Ctrl', 'Space  /  Enter', 'Left mouse button', 'Mouse')
 
 
-def diagram():
+def diagram(large=False):
     scale = 2
     image = Image.new('RGBA', (812 * scale, 524 * scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -79,7 +81,7 @@ def diagram():
         draw.text((102 * scale, y), left, font=font, fill=ink, anchor='lm')
         draw.line((722 * scale, y, 770 * scale, y), fill=ink, width=2 * scale)
         draw.text((710 * scale, y), right, font=font, fill=ink, anchor='rm')
-    return image.resize((812, 524), Image.LANCZOS)
+    return image if large else image.resize((812, 524), Image.LANCZOS)
 
 
 def pad_button(label, colour):
@@ -115,12 +117,13 @@ BUTTON_GLYPHS = {
 STICK_GLYPH = '59acf8ac22bce6e6'
 MOVE_OUTPUTS = ('axis_left_y_minus', 'axis_left_x_minus', 'axis_left_y_plus', 'axis_left_x_plus')
 # Names of keys on a keycap (short) and in the Controls diagram (long).
-SHORT = {'leftbutton': 'LMB', 'rightbutton': 'RMB', 'middlebutton': 'MMB', 'mousewheelup': 'Wh+',
+SHORT = {'sidebuttonback': 'M4', 'sidebuttonforward': 'M5', 'leftbutton': 'LMB', 'rightbutton': 'RMB', 'middlebutton': 'MMB', 'mousewheelup': 'Wh+',
          'mousewheeldown': 'Wh-', 'lshift': 'Shift', 'rshift': 'Shift', 'lctrl': 'Ctrl',
          'rctrl': 'Ctrl', 'lalt': 'Alt', 'ralt': 'Alt', 'space': 'Space', 'enter': 'Enter',
          'escape': 'Esc', 'tab': 'Tab', 'backspace': 'Bksp', 'up': 'Up', 'down': 'Down',
          'left': 'Left', 'right': 'Right'}
-LONG = {'leftbutton': 'Left mouse button', 'rightbutton': 'Right mouse', 'middlebutton': 'Middle mouse',
+LONG = {'sidebuttonback': 'Mouse back', 'sidebuttonforward': 'Mouse forward',
+        'leftbutton': 'Left mouse button', 'rightbutton': 'Right mouse', 'middlebutton': 'Middle mouse',
         'mousewheelup': 'Wheel up', 'mousewheeldown': 'Wheel down', 'lshift': 'Left Shift',
         'rshift': 'Right Shift', 'lctrl': 'Left Ctrl', 'rctrl': 'Right Ctrl', 'lalt': 'Left Alt',
         'space': 'Space', 'enter': 'Enter', 'escape': 'Esc', 'tab': 'Tab', 'backspace': 'Backspace',
@@ -138,9 +141,25 @@ def long_name(key):
     return LONG.get(key, key.upper() if len(key) <= 3 else key.capitalize())
 
 
-def read_bindings(path):
-    """Keyboard and mouse inputs per pad output, in file order."""
-    bound = {}
+# The bindings file is written for the game's default button scheme (Modern). In the story under
+# another scheme the runtime moves each key to the button that has the same action there (see
+# ButtonSchemes in the runtime's input_handler.cpp; keep the two alike): Enter and Backspace stay
+# where they are for the menus, and in the classic schemes the crouch key goes to the grab button.
+# Scheme name in the game's profile -> (button in the default scheme -> button there, roll button).
+SCHEMES = {
+    'Legacy': ({'cross': 'triangle', 'triangle': 'cross', 'r2': 'r1', 'r1': 'circle',
+                'l2': 'l1', 'l1': 'l2', 'r3': 'r2'}, 'r1'),
+    'LegacyRemap': ({'r1': 'circle', 'r3': 'r1'}, 'r2'),
+    'ModernRemap': ({'cross': 'triangle', 'triangle': 'cross', 'r2': 'r1', 'r1': 'r2',
+                     'l2': 'l1', 'l1': 'l2'}, ''),
+}
+MENU_KEYS = ('enter', 'backspace')
+
+
+def read_bindings(path, scheme=None):
+    """Keyboard and mouse inputs per pad button, in file order; the menu keys come last, so a
+    button is pictured by the key that does its action in play."""
+    bound, menu = {}, {}
     for line in open(path, encoding='utf-8', errors='replace'):
         line = line.split('#')[0]
         if '=' not in line:
@@ -148,14 +167,22 @@ def read_bindings(path):
         output, key = (part.strip() for part in line.split('=', 1))
         if not output or not key or ',' in key or key in PAD_NAMES:
             continue
+        if key in MENU_KEYS:
+            menu.setdefault(output, []).append(key)
+            continue
+        if scheme:
+            moved, roll = SCHEMES[scheme]
+            output = roll if output == 'circle' and roll else moved.get(output, output)
         bound.setdefault(output, []).append(key)
+    for output, keys in menu.items():
+        bound.setdefault(output, []).extend(keys)
     return bound
 
 
-def apply_bindings(path):
+def apply_bindings(path, scheme=None):
     """Replaces the default labels by the keys the bindings file gives."""
     global DIAGRAM_LEFT, DIAGRAM_RIGHT
-    bound = read_bindings(path)
+    bound = read_bindings(path, scheme)
     for output, name in BUTTON_GLYPHS.items():
         if bound.get(output):
             GLYPHS[name] = short_name(bound[output][0])
@@ -179,23 +206,33 @@ def apply_bindings(path):
         DIAGRAM_RIGHT)) + (DIAGRAM_RIGHT[7],)
 
 
-def main(out_dir):
-    # <out>/keyboard and <out>/xbox, the folder names the runtime looks for.
-    keyboard = Path(out_dir) / 'keyboard'
-    xbox = Path(out_dir) / 'xbox'
-    keyboard.mkdir(parents=True, exist_ok=True)
-    xbox.mkdir(parents=True, exist_ok=True)
+def write_keyboard(folder):
+    folder.mkdir(parents=True, exist_ok=True)
     for name, label in GLYPHS.items():
-        write(keyboard, name, keycap(label))
+        write(folder, name, keycap(label))
+    for name, image in ((DIAGRAM_HASH, diagram()), (DIAGRAM_LARGE_HASH, diagram(True))):
+        (folder / f'{name}.bin').write_bytes(image.tobytes())
+        image.save(folder / f'{name}.png')
+
+
+def main(out_dir, ini=None):
+    # <out>/keyboard, one <out>/keyboard_<scheme> for each other scheme and <out>/xbox, the
+    # folder names the runtime looks for.
+    global DIAGRAM_LEFT, DIAGRAM_RIGHT
+    defaults = (dict(GLYPHS), DIAGRAM_LEFT, DIAGRAM_RIGHT)
+    for scheme in (None, *SCHEMES):
+        GLYPHS.clear()
+        GLYPHS.update(defaults[0])
+        DIAGRAM_LEFT, DIAGRAM_RIGHT = defaults[1], defaults[2]
+        if ini:
+            apply_bindings(ini, scheme)
+        write_keyboard(Path(out_dir) / ('keyboard_' + scheme.lower() if scheme else 'keyboard'))
+    xbox = Path(out_dir) / 'xbox'
+    xbox.mkdir(parents=True, exist_ok=True)
     for name, (label, colour) in XBOX.items():
         write(xbox, name, pad_button(label, colour))
-    image = diagram()
-    (keyboard / f'{DIAGRAM_HASH}.bin').write_bytes(image.tobytes())
-    image.save(keyboard / f'{DIAGRAM_HASH}.png')
 
 
 if __name__ == '__main__':
     # python glyphs.py <out dir> [--ini <bindings file>]
-    if '--ini' in sys.argv:
-        apply_bindings(sys.argv[sys.argv.index('--ini') + 1])
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[sys.argv.index('--ini') + 1] if '--ini' in sys.argv else None)

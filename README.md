@@ -21,6 +21,34 @@ unchanged on the runtime, which translates its system and graphics calls to Wind
 
 **No game file is here and none may be added.** You need your own copy of the game.
 
+## How this works
+
+The game is not rewritten. Its PlayStation 4 program file runs as it is, on a runtime that
+stands in for the console:
+
+- **The runtime is a custom build of [shadPS4](https://github.com/shadps4-emu/shadPS4)**, the
+  open source PlayStation 4 emulator, licensed GPL-2.0-or-later like shadPS4 itself. It was
+  branched from shadPS4 `main` at commit `945dbc3` (6 October 2026) and carries about a hundred
+  commits on top, all on the branch
+  [`runtime`](https://github.com/SotC-project/sotc-pc/tree/runtime). The emulator's general
+  parts (loading the program, the system libraries, the translation of PS4 shaders and
+  graphics commands to Vulkan) are shadPS4's work.
+- **What this build changes** is aimed at this one game: fixes for the faults that stopped it
+  from starting and rendering; work on frame rate and frame pacing (saved pipelines, parallel
+  loading, fewer stalls); keyboard and mouse input mapped to the game's button schemes with
+  matching key pictures; mouse use of the game's menus; lines added to the game's own menus
+  (Settings, Free Play, Achievements, Quit); PC graphics options passed to the game's engine;
+  achievements in place of trophies; and a start that goes straight into the game instead of
+  an emulator front end.
+- **This repository (the wrapper)** adds what surrounds the program: build and install
+  scripts, the settings script, the default key layout, the generator for the key pictures,
+  test and measurement scripts, and the documents.
+- **You supply the game.** Nothing of the game is in either part: no program files, data,
+  keys, pictures or sound.
+
+It is one game on one runtime build, not a general emulator release, and nothing here is
+offered to or endorsed by the shadPS4 project. For any other game use shadPS4 itself.
+
 ## Where to go
 
 | You want to | Read |
