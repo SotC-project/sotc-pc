@@ -5,7 +5,7 @@
 1. Read "If something goes wrong" at the end of [docs/TUTORIAL.md](docs/TUTORIAL.md) and the
    "Known limits" in the [README](README.md).
 2. Search the open and closed issues for the same problem.
-3. Try once more with the newest source of both repositories, built again.
+3. Try once more with the newest source of both branches (`main` and `runtime`), built again.
 
 ## Opening an issue
 
@@ -46,7 +46,7 @@ Issues that contain such files or ask where to get the game are closed and the f
 ## Sending a change
 
 - Changes to the scripts, settings and documents go to this repository; changes to the program
-  itself go to the runtime repository, branch `sotc-pc`.
+  itself go to the branch `runtime` of this repository.
 - Keep a pull request to one subject, and say how you tested it and on which hardware.
 - For the runtime, follow the surrounding code's style; a change that affects every game
   rather than this one belongs upstream in shadPS4 first.

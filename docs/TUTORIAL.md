@@ -21,7 +21,8 @@ project does not provide the game and cannot tell you how to get it.
    ```
    git clone https://github.com/SotC-project/sotc-pc
    cd sotc-pc
-   git clone --recursive -b sotc-pc https://github.com/SotC-project/sotc-pc-runtime runtime
+   git submodule update --init runtime
+   git -C runtime submodule update --init --recursive
    ```
    The build files expect the Clang compiler in `toolchain\clang+llvm-23.1.3-x86_64-pc-windows-msvc`.
    Download that release from the LLVM project and unpack it there, or change the `PATH` line
