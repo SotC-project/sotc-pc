@@ -96,7 +96,9 @@ int GameController::ReadStates(State* states, int states_num) {
 }
 
 void GameController::Button(OrbisPadButtonDataOffset button, bool is_pressed) {
-    if (button == OrbisPadButtonDataOffset::R1) {
+    static const auto aim_button = Input::AimOnCircle() ? OrbisPadButtonDataOffset::Circle
+                                                        : OrbisPadButtonDataOffset::R1;
+    if (button == aim_button) {
         Input::aim_held = is_pressed;
     }
     std::lock_guard lock{m_state_mutex};

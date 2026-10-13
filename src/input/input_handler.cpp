@@ -5,6 +5,7 @@
 #include "core/sotc/menu_ext.h"
 #include "input_handler.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -361,6 +362,114 @@ std::optional<int> parseInt(const std::string& s) {
     }
 };
 
+namespace {
+
+/// The button scheme the player chose in the game's own settings (Default, Legacy, ...), read
+/// from the game's profile save: the name stands after a fixed mark, as one byte of length and
+/// the letters. Empty when there is no profile yet.
+std::string ProfileButtonScheme() {
+    static constexpr u8 Mark[] = {0x21, 0xb7, 0x83, 0x6a, 0xef, 0xbe, 0x0c, 0x00};
+    std::error_code ec;
+    const auto home = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "home";
+    for (const auto& user : std::filesystem::directory_iterator(home, ec)) {
+        const auto path = user.path() / "savedata" / "CUSA08809" / "SAVEDATA0ShadowProfile0" /
+                          "USR-DATA";
+        std::ifstream file(path, std::ios::binary);
+        if (!file) {
+            continue;
+        }
+        std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        const size_t at = data.find(std::string_view(reinterpret_cast<const char*>(Mark), 8));
+        if (at == std::string::npos || at + 13 >= data.size()) {
+            continue;
+        }
+        const size_t length = static_cast<u8>(data[at + 12]);
+        if (length == 0 || length > 16 || at + 13 + length > data.size()) {
+            continue;
+        }
+        return data.substr(at + 13, length);
+    }
+    return {};
+}
+
+/// The keyboard layout is written for the game's default scheme. In the Legacy scheme the same
+/// actions are on other buttons; a key keeps its action by pressing the button that has it there.
+const std::map<std::string, std::string> DefaultToLegacy = {
+    {"cross", "triangle"}, // jump
+    {"triangle", "cross"}, // call and spur the horse
+    {"r2", "r1"},          // grab
+    {"r1", "circle"},      // raise the sword, aim
+    {"l2", "l1"},          // view the colossus
+    {"l1", "l2"},          // camera focus
+    {"r3", "r2"},          // zoom
+};
+
+/// True when this run starts without the profile (Free Play, or launch options that skip the
+/// title menu): the game is then in its default scheme.
+bool DefaultSchemeRun() {
+    const char* free_play = std::getenv("SOTC_FREEPLAY");
+    return (free_play && *free_play) || std::getenv("SOTC_NO_PROFILE") != nullptr;
+}
+
+const std::string& ChosenScheme() {
+    static const std::string scheme = [] {
+        std::string name = ProfileButtonScheme();
+        LOG_INFO(Input, "Button scheme in the game's profile: {}", name.empty() ? "none" : name);
+        return name;
+    }();
+    return scheme;
+}
+
+/// The button a binding's output stands for under the scheme in effect.
+/// - A battle from Free Play starts without the profile, so the game is in its default scheme
+///   there whatever the player chose: keys need no change, and a controller's buttons are turned
+///   into the default scheme's so that the pad keeps the layout the player chose.
+/// - In the story the game is in the chosen scheme: the controller is right as it is, and the
+///   keys are moved to that scheme's buttons.
+std::string SchemeOutput(const std::string& output, const InputBinding& binding) {
+    if (ChosenScheme() != "Legacy" || std::getenv("SOTC_SCHEME_OFF")) {
+        return output;
+    }
+    static const bool free_play = DefaultSchemeRun();
+    bool from_pad = false;
+    for (const auto& key : binding.keys) {
+        from_pad |= key.type == InputType::Controller || key.type == InputType::Axis;
+    }
+    if (from_pad != free_play) {
+        return output;
+    }
+    if (!free_play) {
+        // Enter and Backspace stay the confirm and back buttons of the menus, which no scheme
+        // moves.
+        for (const auto& key : binding.keys) {
+            if (key.type == InputType::KeyboardMouse &&
+                (key.sdl_id == SDLK_RETURN || key.sdl_id == SDLK_BACKSPACE)) {
+                return output;
+            }
+        }
+        // Crouching and rolling have no button of their own there: they are on the grab button.
+        if (output == "circle") {
+            return "r1";
+        }
+        const auto it = DefaultToLegacy.find(output);
+        return it == DefaultToLegacy.end() ? output : it->second;
+    }
+    for (const auto& [in_default, in_legacy] : DefaultToLegacy) {
+        if (in_legacy == output) {
+            return in_default;
+        }
+    }
+    return output;
+}
+
+} // namespace
+
+bool AimOnCircle() {
+    static const bool legacy_game =
+        ChosenScheme() == "Legacy" && !DefaultSchemeRun() && !std::getenv("SOTC_SCHEME_OFF");
+    return legacy_game;
+}
+
 void ParseInputConfig(const std::string game_id = "") {
     std::string game_id_or_default =
         EmulatorSettings.IsUseUnifiedInputConfig() ? "default" : game_id;
@@ -571,6 +680,7 @@ void ParseInputConfig(const std::string game_id = "") {
             return;
         }
         BindingConnection connection(InputID(), nullptr);
+        output_string = SchemeOutput(output_string, binding);
         auto button_it = string_to_cbutton_map.find(output_string);
         auto hotkey_it = string_to_hotkey_map.find(output_string);
         auto axis_it = string_to_axis_map.find(output_string);

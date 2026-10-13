@@ -551,6 +551,18 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     if (std::filesystem::exists(mods_folder) && !std::filesystem::is_empty(mods_folder)) {
         LOG_INFO(Loader, "Files found in game mods folder");
     }
+#ifdef _WIN32
+    {
+        // A launch straight into a battle or past the title menu never loads the profile, so the
+        // game runs with its default button scheme; the key bindings need to know (SchemeOutput).
+        std::ifstream options(mods_folder / "CommandLineArgs.txt", std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(options)),
+                               std::istreambuf_iterator<char>());
+        if (text.contains("+boss=") || text.contains("+nointro")) {
+            _putenv_s("SOTC_NO_PROFILE", "1");
+        }
+    }
+#endif
 
 #ifdef _WIN32
     // Enable red-zone patching if the setting is enabled

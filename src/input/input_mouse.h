@@ -24,6 +24,9 @@ extern std::atomic_bool mouse_look_blocked;
 /// Set while the aim button (R1) is held: the mouse then also moves the left stick, which is
 /// what the game aims the bow with.
 extern std::atomic_bool aim_held;
+/// The game's aim button (raise the sword, draw the bow) is Circle instead of R1: the story run
+/// with the Legacy button scheme chosen in the game's settings.
+bool AimOnCircle();
 void SetMouseToJoystick(int joystick);
 void SetMouseParams(float mouse_deadzone_offset, float mouse_speed, float mouse_speed_offset);
 void SetMouseInvert(bool x, bool y);
