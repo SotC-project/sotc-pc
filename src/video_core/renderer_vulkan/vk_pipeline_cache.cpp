@@ -5,6 +5,7 @@
 #include <ranges>
 
 #include "core/sotc/hitch.h"
+#include "common/thread.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -330,6 +331,23 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
+    // Once the saved pipelines have been prepared for this program file and driver, loading
+    // them takes a few seconds in which the game does nothing but wait. The game spends longer
+    // than that starting up before it draws anything, so they are loaded beside its start; the
+    // first use of the cache waits for whatever is left. SOTC_PRELOAD_WAIT=1 loads them first,
+    // as before.
+    const std::string_view forced = std::getenv("SOTC_SHADER_PREP") ?: "";
+    warm_aside = EmulatorSettings.IsPipelineCacheEnabled() &&
+                 (PreparedBefore() || std::getenv("SOTC_PRELOAD_ASIDE") != nullptr) &&
+                 (forced.empty() || forced == "prepare") &&
+                 std::getenv("SOTC_PRELOAD_WAIT") == nullptr;
+    if (warm_aside) {
+        warm_thread = std::thread{[this] {
+            Common::SetCurrentThreadName("shadPS4:PipelinePreload");
+            WarmUp();
+        }};
+        return;
+    }
     WarmUp();
 
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
@@ -338,9 +356,28 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     pipeline_cache = std::move(cache);
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    if (warm_thread.joinable()) {
+        warm_thread.join();
+    }
+}
+
+void PipelineCache::FinishWarmUp() {
+    if (!warm_thread.joinable()) [[likely]] {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    warm_thread.join();
+    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
+               vk::to_string(cache_result));
+    pipeline_cache = std::move(cache);
+    LOG_INFO(Render, "First use of the pipeline cache waited {:.1f} s for the saved pipelines",
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+}
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
+    FinishWarmUp();
     draw_indirect_params = params;
     // For the hitch report: building a pipeline the game uses for the first time, shader
     // translation included, stalls the frame it happens in.
@@ -452,6 +489,7 @@ bool PipelineCache::BuildInBackground() const {
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
+    FinishWarmUp();
     // For the hitch report: building a pipeline the game uses for the first time, shader
     // translation included, stalls the frame it happens in.
     const auto build_start = std::chrono::steady_clock::now();

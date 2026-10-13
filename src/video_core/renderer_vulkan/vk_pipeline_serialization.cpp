@@ -432,6 +432,20 @@ namespace {
 /// window cannot draw yet at that point.
 } // namespace
 
+std::string PipelineCache::PrepareSignature() const {
+    return fmt::format("{} gpu {:x}:{:x} driver {:x}", Sotc::PrepScreen::ProgramSignature(),
+                       instance.GetVendorID(), instance.GetDeviceID(),
+                       instance.GetDriverVersion());
+}
+
+bool PipelineCache::PreparedBefore() const {
+    const auto marker =
+        Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_shaders_prepared.txt";
+    std::string marked;
+    std::getline(std::ifstream{marker}, marked);
+    return marked == PrepareSignature();
+}
+
 void PipelineCache::WarmUp() {
     if (!EmulatorSettings.IsPipelineCacheEnabled()) {
         return;
@@ -480,18 +494,15 @@ void PipelineCache::WarmUp() {
 
     // Preparing is offered at every start until it has been done once for this program file
     // and graphics driver; from then on it runs unasked, and takes seconds.
-    const std::string signature =
-        fmt::format("{} gpu {:x}:{:x} driver {:x}", Sotc::PrepScreen::ProgramSignature(),
-                    instance.GetVendorID(), instance.GetDeviceID(), instance.GetDriverVersion());
+    const std::string signature = PrepareSignature();
     const auto marker =
         Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "sotc_shaders_prepared.txt";
-    std::string marked;
-    std::getline(std::ifstream{marker}, marked);
-    const bool prepared_before = marked == signature;
+    const bool prepared_before = PreparedBefore();
 
-    // The screen fills the game window; with nothing saved there is nothing to show.
+    // The screen fills the game window; with nothing saved there is nothing to show, and
+    // beside the start of the game it is the game's window that shows.
     std::optional<Sotc::PrepScreen::Screen> screen;
-    if (expected_pipelines != 0) {
+    if (expected_pipelines != 0 && !warm_aside) {
         screen.emplace();
     }
     // SOTC_SHADER_PREP=prepare, skip or ask settles it for test runs.
@@ -513,7 +524,7 @@ void PipelineCache::WarmUp() {
     const auto show = [&](u32 done) {
         if (screen) {
             screen->Progress(done, expected_pipelines, !prepared_before);
-        } else {
+        } else if (!warm_aside) {
             SDL_PumpEvents();
         }
     };
@@ -605,6 +616,7 @@ void PipelineCache::WarmUp() {
 }
 
 void PipelineCache::Sync() {
+    FinishWarmUp();
     Storage::DataBase::Instance().Close();
 }
 

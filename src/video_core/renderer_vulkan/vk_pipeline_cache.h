@@ -5,6 +5,7 @@
 
 #include <future>
 #include <optional>
+#include <thread>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -79,6 +80,9 @@ public:
 
     void WarmUp();
     void Sync();
+    /// Waits for the saved pipelines when they load beside the start of the game (see the
+    /// constructor). Called before anything else uses the cache.
+    void FinishWarmUp();
 
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
@@ -139,6 +143,13 @@ private:
     Shader::Gcn::FetchShaderData* fetch_shader{};
     /// Set while the saved pipelines load: graphics pipelines are then built by its threads.
     struct PreloadPool* preload_pool{};
+    /// The saved pipelines loading beside the start of the game.
+    std::thread warm_thread;
+    bool warm_aside{};
+    /// True when the saved pipelines were prepared before for this program file, graphics card
+    /// and driver, so that loading them takes seconds.
+    bool PreparedBefore() const;
+    std::string PrepareSignature() const;
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
