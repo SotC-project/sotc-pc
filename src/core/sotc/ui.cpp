@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "common/types.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/ui.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -65,7 +66,7 @@ float PadLabel(ImDrawList* draw, float right_x, float y, float height, const cha
     const ImVec2 size = TextSize(text_size, name);
     draw->AddText(Serif(), text_size,
                   {min.x + (width - size.x) * 0.5f, y + (height - size.y) * 0.5f}, TextBright,
-                  name);
+                  Lang::Tr(name).c_str());
     return width;
 }
 
@@ -167,16 +168,20 @@ bool IsInk() {
     return ink_mode;
 }
 
+// Every text of the overlay screens passes through these two, so this is where it is put into
+// the game's language (see lang.h). A text that is already translated, a name or a number has
+// no entry in the table and stays as it is.
 ImVec2 TextSize(float size, const std::string& text) {
-    return Serif()->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
+    return Serif()->CalcTextSizeA(size, FLT_MAX, 0.0f, Lang::Tr(text).c_str());
 }
 
 void Text(ImDrawList* draw, float size, ImVec2 pos, ImU32 color, const std::string& text) {
+    const std::string& shown = Lang::Tr(text);
     if (!ink_mode) {
         draw->AddText(Serif(), size, {pos.x + 1.5f, pos.y + 1.5f}, IM_COL32(0, 0, 0, 190),
-                      text.c_str());
+                      shown.c_str());
     }
-    draw->AddText(Serif(), size, pos, Inked(color), text.c_str());
+    draw->AddText(Serif(), size, pos, Inked(color), shown.c_str());
 }
 
 void TextCentered(ImDrawList* draw, float size, float center_x, float y, ImU32 color,

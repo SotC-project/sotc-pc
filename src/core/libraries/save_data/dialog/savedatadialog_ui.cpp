@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <magic_enum/magic_enum.hpp>
 
+#include "core/sotc/lang.h"
 #include "common/elf_info.h"
 #include "common/singleton.h"
 #include "common/string_util.h"
@@ -146,7 +147,7 @@ SaveDialogState::SaveDialogState(const OrbisSaveDataDialogParam& param) {
 
     if (type == DialogType::SAVE && item->newItem != nullptr) {
         RefCountedTexture icon;
-        std::string title{"New Save"};
+        std::string title{Sotc::Lang::Tr("New Save")};
 
         const auto new_item = item->newItem;
         if (new_item->iconBuf && new_item->iconSize) {
@@ -281,6 +282,8 @@ SaveDialogState::SystemState::SystemState(const SaveDialogState& state,
     }
 
 #undef M
+    // In the game's language (see core/sotc/lang.h).
+    this->msg = Sotc::Lang::Tr(this->msg);
 }
 
 SaveDialogState::ErrorCodeState::ErrorCodeState(const OrbisSaveDataDialogParam& param) {
@@ -298,6 +301,7 @@ SaveDialogState::ErrorCodeState::ErrorCodeState(const OrbisSaveDataDialogParam& 
         this->error_msg = fmt::format("An error has occurred. ({:X})", err.errorCode);
         break;
     }
+    this->error_msg = Sotc::Lang::Tr(this->error_msg);
 }
 SaveDialogState::ProgressBarState::ProgressBarState(const SaveDialogState& state,
                                                     const OrbisSaveDataDialogParam& param) {
@@ -317,18 +321,18 @@ SaveDialogState::ProgressBarState::ProgressBarState(const SaveDialogState& state
         case ProgressSystemMessageType::PROGRESS:
             switch (state.type) {
             case DialogType::SAVE:
-                this->msg = "Saving...";
+                this->msg = Sotc::Lang::Tr("Saving...");
                 break;
             case DialogType::LOAD:
-                this->msg = "Loading...";
+                this->msg = Sotc::Lang::Tr("Loading...");
                 break;
             case DialogType::DELETE:
-                this->msg = "Deleting...";
+                this->msg = Sotc::Lang::Tr("Deleting...");
                 break;
             }
             break;
         case ProgressSystemMessageType::RESTORE:
-            this->msg = "Restoring saved data...";
+            this->msg = Sotc::Lang::Tr("Restoring saved data...");
             break;
         }
     }
@@ -467,13 +471,13 @@ void SaveDialogUi::Draw() {
         SetFontScale(1.7f);
         switch (state->type) {
         case DialogType::SAVE:
-            TextUnformatted("Save");
+            TextUnformatted(Sotc::Lang::Tr("Save").c_str());
             break;
         case DialogType::LOAD:
-            TextUnformatted("Load");
+            TextUnformatted(Sotc::Lang::Tr("Load").c_str());
             break;
         case DialogType::DELETE:
-            TextUnformatted("Delete");
+            TextUnformatted(Sotc::Lang::Tr("Delete").c_str());
             break;
         }
         SetFontScale(1.0f);
@@ -590,7 +594,7 @@ void SaveDialogUi::DrawItem(int _id, const SaveDialogState::Item& item, bool cli
         pos_y -= ctx.FontSize * text_spacing * 0.3f;
         const auto bright = (int)std::abs(std::sin(ctx.Time) * 0.15f * 255.0f);
         PushStyleColor(ImGuiCol_Text, IM_COL32(bright + 216, bright, bright, 0xFF));
-        RenderText(pos + ImVec2{pos_x, pos_y}, "Corrupted", nullptr, false);
+        RenderText(pos + ImVec2{pos_x, pos_y}, Sotc::Lang::Tr("Corrupted").c_str(), nullptr, false);
         PopStyleColor();
         pos_y += ctx.FontSize * text_spacing * 0.8f;
     }
@@ -708,7 +712,7 @@ void SaveDialogUi::DrawList() {
 
     Separator();
     if (state->enable_back.value_or(true)) {
-        constexpr auto back = "Back";
+        const char* const back = Sotc::Lang::Tr("Back").c_str();
         const float pad = 7.0f * g_ui_scale;
         const auto txt_size = CalcTextSize(back);
         const auto button_size = ImVec2{
@@ -776,11 +780,11 @@ void SaveDialogUi::DrawUser() {
 
         BeginGroup();
         if (btn_type == ButtonType::YESNO) {
-            if (Button("Yes", BUTTON_SIZE)) {
+            if (Button(Sotc::Lang::Tr("Yes").c_str(), BUTTON_SIZE)) {
                 Finish(ButtonId::YES);
             }
             SameLine();
-            if (Button("No", BUTTON_SIZE)) {
+            if (Button(Sotc::Lang::Tr("No").c_str(), BUTTON_SIZE)) {
                 if (ElfInfo::Instance().FirmwareVer() < ElfInfo::FW_450) {
                     Finish(ButtonId::INVALID, Result::USER_CANCELED);
                 } else {
@@ -804,7 +808,7 @@ void SaveDialogUi::DrawUser() {
             }
             if (btn_type == ButtonType::OKCANCEL) {
                 SameLine();
-                if (Button("Cancel", BUTTON_SIZE)) {
+                if (Button(Sotc::Lang::Tr("Cancel").c_str(), BUTTON_SIZE)) {
                     Finish(ButtonId::INVALID, Result::USER_CANCELED);
                 }
                 if (IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
@@ -845,7 +849,7 @@ void SaveDialogUi::DrawSystemMessage() {
         ws.y - FOOTER_HEIGHT + 5.0f,
     });
     BeginGroup();
-    if (Button(sys_state.show_no ? "Yes" : "OK", BUTTON_SIZE)) {
+    if (Button(sys_state.show_no ? Sotc::Lang::Tr("Yes").c_str() : "OK", BUTTON_SIZE)) {
         if (sys_state.return_cancel && ElfInfo::Instance().FirmwareVer() < ElfInfo::FW_450) {
             Finish(ButtonId::INVALID, Result::USER_CANCELED);
         } else {
@@ -854,7 +858,7 @@ void SaveDialogUi::DrawSystemMessage() {
     }
     SameLine();
     if (sys_state.show_no) {
-        if (Button("No", BUTTON_SIZE)) {
+        if (Button(Sotc::Lang::Tr("No").c_str(), BUTTON_SIZE)) {
             if (ElfInfo::Instance().FirmwareVer() < ElfInfo::FW_450) {
                 Finish(ButtonId::INVALID, Result::USER_CANCELED);
             } else {
@@ -862,7 +866,7 @@ void SaveDialogUi::DrawSystemMessage() {
             }
         }
     } else if (sys_state.show_cancel) {
-        if (Button("Cancel", BUTTON_SIZE)) {
+        if (Button(Sotc::Lang::Tr("Cancel").c_str(), BUTTON_SIZE)) {
             Finish(ButtonId::INVALID, Result::USER_CANCELED);
         }
     }

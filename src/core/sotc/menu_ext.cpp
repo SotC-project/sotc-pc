@@ -27,6 +27,7 @@
 #include "core/libraries/pad/pad.h"
 #include "core/memory.h"
 #include "core/sotc/achievements.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
@@ -852,16 +853,17 @@ void Draw() {
         const float bottom = LastY(kind) - (i + 1) * RowStep;
         const float middle = bottom + ArrowHeight * 0.5f;
         const ImVec2 text_at = to_pixels(root.arrow_x + 0.036f, middle);
-        const ImVec2 extent = Ui::TextSize(size, root.lines[i]);
+        const char* const line = Lang::Tr(root.lines[i]).c_str();
+        const ImVec2 extent = Ui::TextSize(size, line);
         // Plain, as the game's own lines are: no shadow.
         draw->AddText(Ui::Serif(), size, {text_at.x, text_at.y - extent.y * 0.5f}, Ink,
-                      root.lines[i]);
+                      line);
         if (Screens::FullSizeMenus()) {
             // The full-size menus are set in a heavier cut of the face: drawn once more a
             // touch to the right, the added lines match them.
             draw->AddText(Ui::Serif(), size,
                           {text_at.x + 0.6f * Ui::Scale(), text_at.y - extent.y * 0.5f}, Ink,
-                          root.lines[i]);
+                          line);
         }
         if (on_extra && extra_index == i) {
             const ImVec2 a = to_pixels(root.arrow_x + 0.005f, middle + 0.026f);

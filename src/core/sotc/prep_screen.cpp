@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "core/sotc/lang.h"
 #include "core/sotc/prep_screen.h"
 
 #ifdef _WIN32
@@ -37,6 +38,16 @@ std::string ProgramSignature() {
 #ifdef _WIN32
 
 namespace {
+
+/// A text of this screen in the game's language (see lang.h), as the wide string GDI draws.
+std::wstring W(const char* english) {
+    const std::string& text = Lang::Tr(english);
+    std::wstring wide(text.size(), L'\0');
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                           wide.data(), static_cast<int>(wide.size()));
+    wide.resize(std::max(length, 0));
+    return wide;
+}
 
 constexpr wchar_t ClassName[] = L"SotcPrepScreen";
 
@@ -454,20 +465,20 @@ Choice Screen::Ask() {
             dirty = false;
             s.Fill(0, 0, s.width, s.height, Black);
             int y = static_cast<int>(s.height * 0.30f);
-            s.Centered(L"Prepare the shaders before playing?", y, s.Px(68), Ink);
+            s.Centered(W("Prepare the shaders before playing?"), y, s.Px(68), Ink);
             y += s.Px(120);
-            s.Centered(L"Recommended. It takes up to a minute, once, and the game then runs smoothly.", y,
+            s.Centered(W("Recommended. It takes up to a minute, once, and the game then runs smoothly."), y,
                        s.Px(34), DimInk);
             y += s.Px(52);
-            s.Centered(L"If skipped, the game starts at once and pauses briefly whenever something "
-                       L"new comes on screen.",
+            s.Centered(W("If skipped, the game starts at once and pauses briefly whenever something "
+                         "new comes on screen."),
                        y, s.Px(34), DimInk);
             y += s.Px(52);
-            s.Centered(L"You will be asked again at the next start.", y, s.Px(34), DimInk);
+            s.Centered(W("You will be asked again at the next start."), y, s.Px(34), DimInk);
             y += s.Px(130);
             // The two answers as plain lines, the chosen one bright with the marker beside it,
             // as in the game's own menus.
-            const std::wstring labels[2] = {L"Prepare", L"Skip"};
+            const std::wstring labels[2] = {W("Prepare"), W("Skip")};
             const int line_size = s.Px(44);
             for (int i = 0; i < 2; i++) {
                 const int w = s.TextWidth(labels[i], line_size);
@@ -500,7 +511,7 @@ Choice Screen::Ask() {
             const int hint_size = s.Px(26);
             const int right = s.width - s.Px(64), bottom = s.height - s.Px(64);
             s.Option(right - cap_w, bottom - s.Px(46), button, key, L"", true, true);
-            const std::wstring hint = L"ACCEPT";
+            const std::wstring hint = W("ACCEPT");
             s.Text(hint, right - cap_w - s.Px(18) - s.TextWidth(hint, hint_size),
                    bottom - s.Px(46) + (s.Px(46) - hint_size) / 2 - s.Px(2), hint_size, DimInk);
             s.Show();
@@ -521,7 +532,7 @@ void Screen::Progress(u32 done, u32 total, bool first_time) {
     done = std::min(done, total);
     s.Fill(0, 0, s.width, s.height, Black);
     int y = static_cast<int>(s.height * 0.38f);
-    s.Centered(L"Preparing shaders", y, s.Px(68), Ink);
+    s.Centered(W("Preparing shaders"), y, s.Px(68), Ink);
     y += s.Px(130);
     // A slot carved in stone, moss filling it.
     const int w = static_cast<int>(s.width * 0.42f), h = s.Px(14), x = (s.width - w) / 2;
@@ -533,8 +544,8 @@ void Screen::Progress(u32 done, u32 total, bool first_time) {
     s.Centered(std::to_wstring(done * 100 / total) + L"%", y, s.Px(36), DimInk);
     if (first_time) {
         y += s.Px(110);
-        s.Centered(L"Needed once after an update of the game or of the graphics driver. Later "
-                   L"starts take a few seconds.",
+        s.Centered(W("Needed once after an update of the game or of the graphics driver. Later "
+                     "starts take a few seconds."),
                    y, s.Px(30), DimInk);
     }
     s.Show();

@@ -38,6 +38,7 @@
 #include "core/devtools/layer.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/ui.h"
 
@@ -632,8 +633,9 @@ std::vector<Row> BuildRows() {
         rows.push_back({"Yes", "", "", true, false, [](int) { QuitGame(); }});
     } else if (page == Page::FreePlay) {
         const std::string target = fmt::format(
-            "Target time {}{}", Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
-            Challenge::LimitIsEstimate(colossus + 1) ? " (approximate)" : "");
+            "{} {}{}", Lang::Tr("Target time"),
+            Minutes(Challenge::TimeLimit(colossus + 1, difficulty == 2)),
+            Challenge::LimitIsEstimate(colossus + 1) ? " " + Lang::Tr("(approximate)") : "");
         const char* helper_note = "Not available in Time Attack";
         const auto step = [](int direction) { return direction == 0 ? 1 : direction; };
         rows.push_back({"Colossus",
@@ -643,7 +645,9 @@ std::vector<Row> BuildRows() {
         rows.push_back({"Difficulty", Difficulties[difficulty], "Choose the difficulty", true,
                         true, [step](int d) { difficulty = (difficulty + step(d) + 3) % 3; }});
         rows.push_back({"Time Attack", OnOff(challenge),
-                        "Timed battle on fixed terms, ranked from D to S+ on time and damage taken. " + target,
+                        Lang::Tr("Timed battle on fixed terms, ranked from D to S+ on time and "
+                                 "damage taken.") +
+                            " " + target,
                         true, true, [](int) { challenge = !challenge; }});
         // A time attack is fought on fixed terms: the start the game gives every colossus
         // battle, and none of the helpers. Only the difficulty is the player's choice.

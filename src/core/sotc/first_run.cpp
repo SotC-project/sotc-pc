@@ -16,6 +16,7 @@
 #include "common/types.h"
 #include "core/debug_state.h"
 #include "core/sotc/first_run.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/ui.h"
 
 #ifdef _WIN32
@@ -222,7 +223,7 @@ void DrawOpeningMessages() {
     // Eased, so the text breathes in and out instead of ramping.
     alpha = alpha * alpha * (3.0f - 2.0f * alpha);
     const float size = 64.0f * Ui::Scale();
-    const std::string text = Lines[index];
+    const std::string text = Lang::Tr(Lines[index]);
     const ImVec2 extent = Ui::TextSize(size, text);
     draw->AddText(Ui::Serif(), size,
                   {(display.x - extent.x) * 0.5f, (display.y - extent.y) * 0.5f},

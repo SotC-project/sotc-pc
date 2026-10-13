@@ -20,6 +20,7 @@
 
 #include "common/logging/log.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
@@ -361,10 +362,37 @@ void Figures(ImDrawList* draw, float size, float x, float y, float anchor, ImU32
 /// A small spaced-out caption, as the game sets its labels.
 void Caption(ImDrawList* draw, float size, float x, float y, float anchor, ImU32 color,
              std::string_view text) {
+    // In the game's language first; then capitals, a space between the letters. The text is
+    // UTF-8: a letter may be several bytes, which stay together, and the capitals of the
+    // accented Latin, Cyrillic and Greek letters are found by their places in the code charts.
+    const std::string& shown = Lang::Tr(text);
     std::string spaced;
-    for (const char c : text) {
-        spaced += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (size_t i = 0; i < shown.size();) {
+        const unsigned char lead = static_cast<unsigned char>(shown[i]);
+        const size_t length = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+        if (length == 1) {
+            spaced += static_cast<char>(std::toupper(lead));
+        } else if (length == 2 && i + 1 < shown.size()) {
+            u32 cp = ((lead & 0x1f) << 6) | (static_cast<unsigned char>(shown[i + 1]) & 0x3f);
+            if ((cp >= 0xe0 && cp <= 0xfe && cp != 0xf7) || (cp >= 0x430 && cp <= 0x44f) ||
+                (cp >= 0x3b1 && cp <= 0x3c9 && cp != 0x3c2)) {
+                cp -= 0x20;
+            } else if (cp == 0x3c2) {
+                cp = 0x3a3;
+            } else if (cp >= 0x450 && cp <= 0x45f) {
+                cp -= 0x50;
+            } else if ((cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17e)) {
+                cp -= (cp & 1) ? 0 : 1;
+            } else if (cp >= 0x100 && cp <= 0x177 && cp != 0x131 && cp != 0x138) {
+                cp -= cp & 1;
+            }
+            spaced += static_cast<char>(0xc0 | (cp >> 6));
+            spaced += static_cast<char>(0x80 | (cp & 0x3f));
+        } else {
+            spaced.append(shown, i, length);
+        }
         spaced += ' ';
+        i += length;
     }
     if (!spaced.empty()) {
         spaced.pop_back();
@@ -458,7 +486,7 @@ void Draw() {
         draw->AddLine({inner_left, y}, {inner_right, y}, RuleColor, 1.0f * scale);
         y += 8.0f * scale;
         Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
-                fmt::format("Target {}", FormatMark(state.limit)));
+                fmt::format("{} {}", Lang::Tr("Target"), FormatMark(state.limit)));
         y += 18.0f * scale;
         Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
                 "Starts when you move");
@@ -516,8 +544,8 @@ void Draw() {
     Ui::TextCentered(draw, 66.0f * scale, center, y, Ui::TextBright, name);
     y += 92.0f * scale;
     Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal,
-            fmt::format("{}  -  {}", difficulty,
-                        died ? "Wander has fallen" : "the colossus has fallen"));
+            fmt::format("{}  -  {}", Lang::Tr(difficulty),
+                        Lang::Tr(died ? "Wander has fallen" : "the colossus has fallen")));
     y += 54.0f * scale;
     rule(y, 300.0f * scale, RuleColor);
     y += 34.0f * scale;

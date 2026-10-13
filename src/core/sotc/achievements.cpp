@@ -27,6 +27,7 @@
 #include "core/emulator_settings.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/np/trophy_ui.h"
+#include "core/sotc/lang.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
@@ -413,12 +414,15 @@ void Draw() {
                  done ? Ui::TextBright : Ui::TextNormal, entry.name);
         Ui::Text(draw, 26.0f * scale, {text_x, y + 58.0f * scale},
                  done ? Ui::TextNormal : Ui::TextDim, entry.description);
-        std::string status = GradeName(entry.grade);
+        std::string status = Lang::Tr(GradeName(entry.grade));
         if (done) {
             const std::time_t when = static_cast<std::time_t>(unlock_time[i]);
             char date[32]{};
             if (const std::tm* local = std::localtime(&when)) {
-                std::strftime(date, sizeof(date), "%d %B %Y", local);
+                // English writes the month out; the other languages get the date in figures,
+                // which reads the same in all of them.
+                std::strftime(date, sizeof(date), Lang::Code() == "en" ? "%d %B %Y" : "%d.%m.%Y",
+                              local);
             }
             status += fmt::format("   -   {}", date);
         }

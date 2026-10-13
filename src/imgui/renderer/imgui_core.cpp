@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <string>
+#include "core/sotc/lang.h"
 #include "core/sotc/ui.h"
 #include "common/path_util.h"
 #include "core/debug_state.h"
@@ -116,6 +117,24 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
             serif_cfg.OversampleH = 2;
             serif_cfg.OversampleV = 2;
             Sotc::Ui::SetSerif(io.Fonts->AddFontFromFileTTF(font_path.c_str(), 96.0f, &serif_cfg));
+            // Letters that face does not have (Polish, Czech and Turkish accents, Cyrillic,
+            // Greek, and the scripts of the Asian languages) come from the faces after it:
+            // those for the script of the game's language first, then common ones.
+            const Sotc::Lang::Script script = Sotc::Lang::ScriptInUse();
+            for (const char* fallback :
+                 {script.fonts[0], script.fonts[1], script.fonts[2], "times.ttf", "georgia.ttf",
+                  "segoeui.ttf", "arial.ttf"}) {
+                const std::string path =
+                    fallback ? std::string("C:\\Windows\\Fonts\\") + fallback : std::string{};
+                if (!fallback || path == font_path || !std::filesystem::exists(path)) {
+                    continue;
+                }
+                ImFontConfig merge_cfg{};
+                merge_cfg.OversampleH = 2;
+                merge_cfg.OversampleV = 2;
+                merge_cfg.MergeMode = true;
+                io.Fonts->AddFontFromFileTTF(path.c_str(), 96.0f, &merge_cfg);
+            }
             break;
         }
     }
