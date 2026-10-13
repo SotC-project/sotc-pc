@@ -1,0 +1,277 @@
+# Swedish. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Fritt spel
+Achievements	Prestationer
+Quit	Avsluta
+Settings	Inställningar
+Quit to desktop?	Avsluta till skrivbordet?
+Yes	Ja
+No	Nej
+Back	Tillbaka
+Loading	Laddar
+HOLD TO SKIP	HÅLL FÖR ATT HOPPA ÖVER
+The game stopped unexpectedly and was started again.	Spelet stoppades oväntat och startades om.
+# --- Prompts ---
+CHANGE	ÄNDRA
+BACK	TILLBAKA
+CONFIRM	BEKRÄFTA
+SCROLL	BLÄDDRA
+MENU	MENY
+ACCEPT	GODKÄNN
+D-pad left / right	Styrkors vänster / höger
+D-pad up / down	Styrkors upp / ned
+# --- Settings ---
+Graphics	Grafik
+Graphics, display, button icons and sound	Grafik, bildskärm, knappikoner och ljud
+Key Bindings	Tangentbindningar
+Choose the keys and mouse buttons	Välj tangenter och musknappar
+Game Settings	Spelinställningar
+The game's own display, audio, camera and controls	Spelets egna bild-, ljud-, kamera- och kontrollval
+Return to the menu	Tillbaka till menyn
+Apply and Restart	Tillämpa och starta om
+Saves the settings; the game restarts to use them	Sparar inställningarna; spelet startas om för att använda dem
+Leave without saving	Lämna utan att spara
+Settings.ps1 was not found next to the game	Settings.ps1 hittades inte bredvid spelet
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) kunde inte startas
+The settings could not be saved	Inställningarna kunde inte sparas
+Preset	Förinställning
+Sets the detail options below together	Ställer in detaljvalen nedan tillsammans
+Frame Rate Limit	Bildfrekvensgräns
+Highest frame rate the game will run at	Högsta bildfrekvens spelet körs i
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Tar bort bildrivning; låser bildfrekvensen till skärmens
+Fullscreen	Helskärm
+Fill the screen instead of a window	Fyll skärmen i stället för ett fönster
+Window Size	Fönsterstorlek
+Size of the game window	Spelfönstrets storlek
+FSR Upscaling	FSR-uppskalning
+Sharper picture when the window is larger than 1080p. Switches at once	Skarpare bild när fönstret är större än 1080p. Slår om direkt
+Shadows	Skuggor
+Sun and spot shadows	Sol- och punktskuggor
+Motion Blur	Rörelseoskärpa
+Blur on fast movement	Oskärpa vid snabb rörelse
+Bloom	Bloom
+Glow around bright light	Sken runt starkt ljus
+Depth of Field	Skärpedjup
+Soft focus in the distance and in cutscenes	Mjukt fokus på avstånd och i filmsekvenser
+Vignette	Vinjettering
+Darkened picture corners	Mörkare bildhörn
+Fur	Päls
+Fur on the colossi	Päls på kolosserna
+Fog	Dimma
+Distance fog	Avståndsdimma
+Mist Particles	Dimpartiklar
+Drifting mist. Renders far too bright in this build; best left off	Drivande dis. Blir alldeles för ljust i denna version; bäst att lämna av
+Texture Filtering	Texturfiltrering
+Sharpness of surfaces seen at an angle	Skärpa på ytor sedda i vinkel
+Draw Distance	Siktavstånd
+How far small objects are drawn. Full costs frame rate	Hur långt små objekt ritas. Full kostar bildfrekvens
+Texture Detail	Texturdetalj
+Sharpness of textures	Texturernas skärpa
+Sharpening	Skärpning
+Sharpening of the final picture	Skärpning av slutbilden
+Button Icons	Knappikoner
+Auto follows the device you are using	Auto följer enheten du använder
+Achievement Sound	Prestationsljud
+Loudness of the achievement sound, percent	Prestationsljudets volym, procent
+Startup Logos	Startlogotyper
+The company logos when the game starts, half a minute. Saved at once	Företagslogotyperna vid spelstart, en halv minut. Sparas direkt
+# --- Setting values ---
+On	På
+Off	Av
+Custom	Anpassad
+Low	Låg
+Medium	Medel
+High	Hög
+Ultra	Ultra
+Uncapped	Obegränsad
+Reduced	Reducerad
+Full	Full
+Normal	Normal
+Strong	Stark
+Auto	Auto
+Keyboard	Tangentbord
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Gå framåt
+Move Back	Gå bakåt
+Move Left	Gå åt vänster
+Move Right	Gå åt höger
+Jump	Hoppa
+Attack	Attackera
+Grab / Use / Pray	Greppa / Använd / Be
+Crouch / Roll	Huka / Rulla
+Raise Sword / Aim	Höj svärd / Sikta
+Mount / Spur Agro	Sitt upp / Spåra Agro
+Walk / Run	Gå / Spring
+View Colossus	Se koloss
+Camera Focus	Kamerafokus
+Change Sword	Byt svärd
+Change Ranged Weapon	Byt distansvapen
+Unequip	Ta av
+Photo Mode	Fotoläge
+World Map	Världskarta
+Pause	Paus
+Zoom (R3)	Zoom (R3)
+Press a key or mouse button	Tryck på en tangent eller musknapp
+Esc cancels	Esc avbryter
+Select, then press the new key or button	Välj och tryck sedan på ny tangent eller knapp
+Changes are saved as you make them	Ändringar sparas direkt
+Left Mouse	Vänster musknapp
+Right Mouse	Höger musknapp
+Middle Mouse	Mittenknapp
+Wheel Up	Hjul upp
+Wheel Down	Hjul ned
+# --- Free play ---
+Colossus	Koloss
+Choose the colossus to fight	Välj kolossen att strida mot
+Difficulty	Svårighetsgrad
+Choose the difficulty	Välj svårighetsgrad
+Easy	Lätt
+Hard	Svår
+Time Attack	Tidsattack
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Tidsstrid på fasta villkor, rankad från D till S+ efter tid och tagen skada.
+Target time	Måltid
+(approximate)	(ungefärlig)
+All Weapons and Items	Alla vapen och föremål
+Start with every weapon and item	Börja med alla vapen och föremål
+Invincibility	Osårbarhet
+Wander takes no damage	Wander tar ingen skada
+Unlimited Grip	Obegränsat grepp
+The grip gauge never empties	Greppmätaren töms aldrig
+Maximum Damage	Maximal skada
+Every sword strike deals full damage	Varje svärdshugg ger full skada
+Begin Battle	Starta striden
+The game restarts and loads the battle	Spelet startas om och laddar striden
+Return to the previous menu	Tillbaka till föregående meny
+# --- Time attack ---
+Target	Mål
+Starts when you move	Startar när du rör dig
+Lost	Förlorat
+Wander has fallen	Wander har fallit
+the colossus has fallen	kolossen har fallit
+Rank	Rank
+Time	Tid
+Typical time	Typisk tid
+Health lost	Förlorad hälsa
+# --- Achievements ---
+Platinum	Platina
+Gold	Guld
+Silver	Silver
+Bronze	Brons
+The Horned Boy	Den hornade pojken
+Acquire all trophies	Skaffa alla troféer
+Speed King	Hastighetens kung
+Obtain all Time Attack items together as one set	Skaffa alla tidsattackföremål tillsammans som en uppsättning
+Intrepid Mortal	Orädd dödlig
+Max out Wander's health and stamina bars	Maxa Wanders hälso- och uthållighetsmätare
+Speed Demon	Fartdjävul
+Complete Hard Mode under 5:41:28	Klara svårt läge under 5:41:28
+Grounded Scaler	Jordnära klättrare
+Defeat Colossus 8 before it can turn back over	Besegra koloss 8 innan den hinner vända sig igen
+Resist the Wrist	Stå emot handleden
+Defeat Colossus 3 without breaking his wrist guard	Besegra koloss 3 utan att bryta hans handledsskydd
+Reach the Gate	Nå porten
+Cross the bridge to the entrance of the Forbidden Lands	Korsa bron till ingången till de förbjudna länderna
+Last Man Standing	Sista man kvar
+Complete a single playthrough without dying once	Klara en genomspelning utan att dö en enda gång
+Bearer of the Curse	Förbannelsens bärare
+Complete the game on any difficulty	Klara spelet på valfri svårighetsgrad
+Dormin's Rage	Dormins vrede
+Use Dormin's breath attack	Använd Dormins andedräktsattack
+Seeking Salvation	Sökandet efter frälsning
+Pray at all shrines	Be vid alla helgedomar
+Trick Rider	Konstryttare
+Perform all stunts with Agro	Utför alla konster med Agro
+Fruit of the Garden	Trädgårdens frukt
+Taste the poisoned fruit	Smaka på den förgiftade frukten
+Sword of Her Majesty	Hennes majestäts svärd
+Defeat any colossus with the Queen's Sword	Besegra valfri koloss med drottningens svärd
+Paint the Target	Måla målet
+Use the sword to focus on a vital point	Använd svärdet för att fokusera på en sårbar punkt
+Fruit of the Land	Landets frukt
+Eat a piece of fruit	Ät en frukt
+Skilled Warrior	Skicklig krigare
+Defeat a colossus with a downward jump stab	Besegra en koloss med ett nedåtriktat hoppstick
+The Past that Defines Thee	Det förflutna som definierar dig
+Defeat any colossus while in Reminiscence Mode	Besegra valfri koloss i minnesläge
+Five-Lined Skink	Femstrimmig skink
+Collect a silver lizard tail	Samla en silverfärgad ödlesvans
+Animals of the Land	Landets djur
+Interact with a dove, hawk, fish and turtle	Interagera med en duva, hök, fisk och sköldpadda
+Boon of the Nomad	Nomadens gåva
+Find the barrel in the hidden cave	Hitta tunnan i den dolda grottan
+Trick Arrow Skills	Konstpilsfärdigheter
+Shoot a lizard with a special arrow	Skjut en ödla med en speciell pil
+Valley of the Wanderer	Vandrarens dal
+Defeat the 1st colossus	Besegra den 1:a kolossen
+The Mammoth	Mammuten
+Defeat the 2nd colossus	Besegra den 2:a kolossen
+Wake the Knight	Väck riddaren
+Defeat the 3rd colossus	Besegra den 3:e kolossen
+Land of the Gravestones	Gravstenarnas land
+Defeat the 4th colossus	Besegra den 4:e kolossen
+Riding the Wind	Rida på vinden
+Defeat the 5th colossus	Besegra den 5:e kolossen
+Tomb of the Giant	Jättens grav
+Defeat the 6th colossus	Besegra den 6:e kolossen
+Waves of Lightning	Blixtvågor
+Defeat the 7th colossus	Besegra den 7:e kolossen
+Scaler of the Colosseum	Kolosseums bestigare
+Defeat the 8th colossus	Besegra den 8:e kolossen
+Lurker of the Cave	Grottans lurare
+Defeat the 9th colossus	Besegra den 9:e kolossen
+Mystery in the Sand	Mysteriet i sanden
+Defeat the 10th colossus	Besegra den 10:e kolossen
+Guardian and the Pit	Väktaren och gropen
+Defeat the 11th colossus	Besegra den 11:e kolossen
+Thunder of the Lake	Sjöns dunder
+Defeat the 12th colossus	Besegra den 12:e kolossen
+Signs amidst the Storm	Tecken i stormen
+Defeat the 13th colossus	Besegra den 13:e kolossen
+Shield of the Colossus	Kolossens sköld
+Defeat the 14th colossus	Besegra den 14:e kolossen
+Valley of the Fallen	De fallnas dal
+Defeat the 15th colossus	Besegra den 15:e kolossen
+Last of the Colossus	Den sista kolossen
+Defeat the 16th colossus	Besegra den 16:e kolossen
+# --- First start ---
+We waited, yet no one answered.	Vi väntade, men ingen svarade.
+Sometimes, we have to do things ourselves.	Ibland måste vi göra saker själva.
+Prepare the shaders before playing?	Förbereda shaders innan du spelar?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Rekommenderas. Tar upp till en minut, en gång, sedan går spelet smidigt.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Om du hoppar över startar spelet direkt och hackar till när något nytt visas.
+You will be asked again at the next start.	Du tillfrågas igen vid nästa start.
+Prepare	Förbered
+Skip	Hoppa över
+Preparing shaders	Förbereder shaders
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Behövs en gång efter en uppdatering av spelet eller grafikdrivrutinen. Senare starter tar några sekunder.
+# --- Saving and loading ---
+Save	Spara
+Load	Ladda
+Delete	Ta bort
+New Save	Ny sparfil
+Cancel	Avbryt
+Corrupted	Skadad
+There is no saved data	Det finns ingen sparad data
+Do you want to save?	Vill du spara?
+Do you want to load this saved data?	Vill du ladda denna sparade data?
+Do you want to delete this saved data?	Vill du ta bort denna sparade data?
+Do you want to overwrite the existing saved data?	Vill du skriva över befintlig sparad data?
+Saving...	Sparar...
+Loading...	Laddar...
+Deleting...	Tar bort...
+Restoring saved data...	Återställer sparad data...
+The saved data is corrupted.	Den sparade datan är skadad.
+Saved successfully.	Sparades.
+Loading complete.	Laddningen klar.
+Deletion complete.	Borttagningen klar.
+The saved data is corrupted and will be deleted.	Den sparade datan är skadad och kommer att tas bort.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Den sparade datan är skadad. Den tas bort och en ny skapas.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Den sparade datan är skadad. Datan som säkerhetskopierats av systemet återställs.
+Cannot create more saved data	Kan inte skapa mer sparad data
+There is not saved data.	Det finns ingen sparad data.
+The data is corrupted.	Datan är skadad.

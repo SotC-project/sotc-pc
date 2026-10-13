@@ -1,0 +1,277 @@
+# Finnish. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Vapaa peli
+Achievements	Saavutukset
+Quit	Lopeta
+Settings	Asetukset
+Quit to desktop?	Poistutaanko työpöydälle?
+Yes	Kyllä
+No	Ei
+Back	Takaisin
+Loading	Ladataan
+HOLD TO SKIP	OHITA PITÄMÄLLÄ
+The game stopped unexpectedly and was started again.	Peli pysähtyi odottamatta ja käynnistettiin uudelleen.
+# --- Prompts ---
+CHANGE	VAIHDA
+BACK	TAKAISIN
+CONFIRM	VAHVISTA
+SCROLL	SELAA
+MENU	VALIKKO
+ACCEPT	HYVÄKSY
+D-pad left / right	Ohjain vasen / oikea
+D-pad up / down	Ohjain ylös / alas
+# --- Settings ---
+Graphics	Grafiikka
+Graphics, display, button icons and sound	Grafiikka, näyttö, painikekuvakkeet ja ääni
+Key Bindings	Näppäinmääritykset
+Choose the keys and mouse buttons	Valitse näppäimet ja hiiren painikkeet
+Game Settings	Peliasetukset
+The game's own display, audio, camera and controls	Pelin oma näyttö, ääni, kamera ja ohjaus
+Return to the menu	Palaa valikkoon
+Apply and Restart	Käytä ja käynnistä uudelleen
+Saves the settings; the game restarts to use them	Tallentaa asetukset; peli käynnistyy uudelleen
+Leave without saving	Poistu tallentamatta
+Settings.ps1 was not found next to the game	Settings.ps1 ei löytynyt pelin vierestä
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) ei käynnistynyt
+The settings could not be saved	Asetuksia ei voitu tallentaa
+Preset	Esiasetus
+Sets the detail options below together	Asettaa alla olevat tarkkuusvalinnat yhdessä
+Frame Rate Limit	Kuvataajuuden raja
+Highest frame rate the game will run at	Suurin kuvataajuus, jolla peli toimii
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Poistaa repeilyn; sitoo kuvataajuuden näyttöön
+Fullscreen	Koko näyttö
+Fill the screen instead of a window	Täyttää näytön ikkunan sijaan
+Window Size	Ikkunan koko
+Size of the game window	Pelin ikkunan koko
+FSR Upscaling	FSR-skaalaus
+Sharper picture when the window is larger than 1080p. Switches at once	Terävämpi kuva, kun ikkuna on yli 1080p. Vaihtuu heti
+Shadows	Varjot
+Sun and spot shadows	Auringon ja kohdevalojen varjot
+Motion Blur	Liikesumennus
+Blur on fast movement	Sumennus nopeassa liikkeessä
+Bloom	Hehku
+Glow around bright light	Hohde kirkkaan valon ympärillä
+Depth of Field	Syväterävyys
+Soft focus in the distance and in cutscenes	Pehmeä tarkennus kaukana ja välianimaatioissa
+Vignette	Vinjetointi
+Darkened picture corners	Tummennetut kuvan kulmat
+Fur	Turkki
+Fur on the colossi	Hiukset ja turkki jättiläisillä
+Fog	Sumu
+Distance fog	Kaukosumu
+Mist Particles	Usvahiukkaset
+Drifting mist. Renders far too bright in this build; best left off	Leijuva usva. Näkyy tässä versiossa liian kirkkaana; paras jättää pois
+Texture Filtering	Tekstuurisuodatus
+Sharpness of surfaces seen at an angle	Vinosti nähtyjen pintojen terävyys
+Draw Distance	Piirtoetäisyys
+How far small objects are drawn. Full costs frame rate	Kuinka kauas pienet kohteet piirretään. Täysi laskee kuvataajuutta
+Texture Detail	Tekstuurien tarkkuus
+Sharpness of textures	Tekstuurien terävyys
+Sharpening	Terävöinti
+Sharpening of the final picture	Lopullisen kuvan terävöinti
+Button Icons	Painikekuvakkeet
+Auto follows the device you are using	Auto seuraa käyttämääsi laitetta
+Achievement Sound	Saavutusääni
+Loudness of the achievement sound, percent	Saavutusäänen voimakkuus, prosenttia
+Startup Logos	Aloituslogot
+The company logos when the game starts, half a minute. Saved at once	Yhtiölogot pelin alussa, puoli minuuttia. Tallentuu heti
+# --- Setting values ---
+On	Päällä
+Off	Pois
+Custom	Mukautettu
+Low	Matala
+Medium	Keski
+High	Korkea
+Ultra	Ultra
+Uncapped	Rajoittamaton
+Reduced	Vähennetty
+Full	Täysi
+Normal	Normaali
+Strong	Voimakas
+Auto	Auto
+Keyboard	Näppäimistö
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Liiku eteen
+Move Back	Liiku taakse
+Move Left	Liiku vasemmalle
+Move Right	Liiku oikealle
+Jump	Hyppää
+Attack	Hyökkää
+Grab / Use / Pray	Tartu / Käytä / Rukoile
+Crouch / Roll	Kyyristy / Kierrä
+Raise Sword / Aim	Nosta miekka / Tähtää
+Mount / Spur Agro	Nouse selkään / Kannusta Agroa
+Walk / Run	Käy / Juokse
+View Colossus	Katso jättiläistä
+Camera Focus	Kameran tarkennus
+Change Sword	Vaihda miekkaa
+Change Ranged Weapon	Vaihda ampuma-asetta
+Unequip	Riisu varuste
+Photo Mode	Valokuvatila
+World Map	Maailmankartta
+Pause	Tauko
+Zoom (R3)	Zoomaus (R3)
+Press a key or mouse button	Paina näppäintä tai hiiren painiketta
+Esc cancels	Esc peruu
+Select, then press the new key or button	Valitse, paina sitten uutta näppäintä tai painiketta
+Changes are saved as you make them	Muutokset tallentuvat heti
+Left Mouse	Hiiri vasen
+Right Mouse	Hiiri oikea
+Middle Mouse	Hiiri keski
+Wheel Up	Rulla ylös
+Wheel Down	Rulla alas
+# --- Free play ---
+Colossus	Jättiläinen
+Choose the colossus to fight	Valitse jättiläinen taisteltavaksi
+Difficulty	Vaikeustaso
+Choose the difficulty	Valitse vaikeustaso
+Easy	Helppo
+Hard	Vaikea
+Time Attack	Aikahaaste
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Ajastettu taistelu kiinteillä ehdoilla, arvosana D:stä S+:aan ajan ja saadun vahingon mukaan.
+Target time	Tavoiteaika
+(approximate)	(arvio)
+All Weapons and Items	Kaikki aseet ja esineet
+Start with every weapon and item	Aloita kaikilla aseilla ja esineillä
+Invincibility	Kuolemattomuus
+Wander takes no damage	Wander ei ota vahinkoa
+Unlimited Grip	Rajaton ote
+The grip gauge never empties	Otemittari ei tyhjene koskaan
+Maximum Damage	Enimmäisvahinko
+Every sword strike deals full damage	Jokainen miekaniskun tekee täyden vahingon
+Begin Battle	Aloita taistelu
+The game restarts and loads the battle	Peli käynnistyy uudelleen ja lataa taistelun
+Return to the previous menu	Palaa edelliseen valikkoon
+# --- Time attack ---
+Target	Tavoite
+Starts when you move	Alkaa, kun liikut
+Lost	Hävisit
+Wander has fallen	Wander on kaatunut
+the colossus has fallen	jättiläinen on kaatunut
+Rank	Arvosana
+Time	Aika
+Typical time	Tyypillinen aika
+Health lost	Menetetty terveys
+# --- Achievements ---
+Platinum	Platina
+Gold	Kulta
+Silver	Hopea
+Bronze	Pronssi
+The Horned Boy	Sarvipäinen poika
+Acquire all trophies	Hanki kaikki pokaalit
+Speed King	Nopeuden kuningas
+Obtain all Time Attack items together as one set	Hanki kaikki Aikahaasteen esineet yhtenä sarjana
+Intrepid Mortal	Peloton kuolevainen
+Max out Wander's health and stamina bars	Täytä Wanderin terveys- ja kestävyysmittarit täyteen
+Speed Demon	Nopeuspiru
+Complete Hard Mode under 5:41:28	Läpäise vaikea tila alle 5:41:28
+Grounded Scaler	Maanpinnan kiipeilijä
+Defeat Colossus 8 before it can turn back over	Voita jättiläinen 8 ennen kuin se kääntyy takaisin
+Resist the Wrist	Vastusta ranne
+Defeat Colossus 3 without breaking his wrist guard	Voita jättiläinen 3 rikkomatta hänen rannesuojaansa
+Reach the Gate	Saavuta portti
+Cross the bridge to the entrance of the Forbidden Lands	Ylitä silta Kielletyn maan sisäänkäynnille
+Last Man Standing	Viimeinen jäljellä
+Complete a single playthrough without dying once	Läpäise yksi pelikerta kuolematta kertaakaan
+Bearer of the Curse	Kirouksen kantaja
+Complete the game on any difficulty	Läpäise peli millä tahansa vaikeustasolla
+Dormin's Rage	Dorminin raivo
+Use Dormin's breath attack	Käytä Dorminin hengityshyökkäystä
+Seeking Salvation	Pelastusta etsimässä
+Pray at all shrines	Rukoile kaikilla pyhäköillä
+Trick Rider	Temppuratsastaja
+Perform all stunts with Agro	Tee kaikki temput Agron kanssa
+Fruit of the Garden	Puutarhan hedelmä
+Taste the poisoned fruit	Maista myrkytettyä hedelmää
+Sword of Her Majesty	Hänen Majesteettinsa miekka
+Defeat any colossus with the Queen's Sword	Voita mikä tahansa jättiläinen Kuningattaren miekalla
+Paint the Target	Maalaa kohde
+Use the sword to focus on a vital point	Tarkenna miekalla elintärkeään kohtaan
+Fruit of the Land	Maan hedelmä
+Eat a piece of fruit	Syö hedelmä
+Skilled Warrior	Taitava soturi
+Defeat a colossus with a downward jump stab	Voita jättiläinen alaspäin hypyn pistolla
+The Past that Defines Thee	Menneisyys, joka määrittää sinut
+Defeat any colossus while in Reminiscence Mode	Voita mikä tahansa jättiläinen Muistelutilassa
+Five-Lined Skink	Viisiviivainen skinkki
+Collect a silver lizard tail	Kerää hopeisen liskon häntä
+Animals of the Land	Maan eläimet
+Interact with a dove, hawk, fish and turtle	Kohtaa kyyhky, haukka, kala ja kilpikonna
+Boon of the Nomad	Kulkurin siunaus
+Find the barrel in the hidden cave	Löydä tynnyri piilotetusta luolasta
+Trick Arrow Skills	Taitonuolet
+Shoot a lizard with a special arrow	Ammu lisko erikoisnuolella
+Valley of the Wanderer	Vaeltajan laakso
+Defeat the 1st colossus	Voita 1. jättiläinen
+The Mammoth	Mammutti
+Defeat the 2nd colossus	Voita 2. jättiläinen
+Wake the Knight	Herätä ritari
+Defeat the 3rd colossus	Voita 3. jättiläinen
+Land of the Gravestones	Hautakivien maa
+Defeat the 4th colossus	Voita 4. jättiläinen
+Riding the Wind	Tuulen ratsastus
+Defeat the 5th colossus	Voita 5. jättiläinen
+Tomb of the Giant	Jättiläisen hauta
+Defeat the 6th colossus	Voita 6. jättiläinen
+Waves of Lightning	Salamoiden aallot
+Defeat the 7th colossus	Voita 7. jättiläinen
+Scaler of the Colosseum	Kolosseumin kiipeilijä
+Defeat the 8th colossus	Voita 8. jättiläinen
+Lurker of the Cave	Luolan väijyjä
+Defeat the 9th colossus	Voita 9. jättiläinen
+Mystery in the Sand	Hiekan arvoitus
+Defeat the 10th colossus	Voita 10. jättiläinen
+Guardian and the Pit	Vartija ja kuoppa
+Defeat the 11th colossus	Voita 11. jättiläinen
+Thunder of the Lake	Järven ukkonen
+Defeat the 12th colossus	Voita 12. jättiläinen
+Signs amidst the Storm	Merkkejä myrskyn keskellä
+Defeat the 13th colossus	Voita 13. jättiläinen
+Shield of the Colossus	Jättiläisen kilpi
+Defeat the 14th colossus	Voita 14. jättiläinen
+Valley of the Fallen	Kaatuneiden laakso
+Defeat the 15th colossus	Voita 15. jättiläinen
+Last of the Colossus	Viimeinen jättiläisistä
+Defeat the 16th colossus	Voita 16. jättiläinen
+# --- First start ---
+We waited, yet no one answered.	Odotimme, mutta kukaan ei vastannut.
+Sometimes, we have to do things ourselves.	Joskus meidän on tehtävä asiat itse.
+Prepare the shaders before playing?	Valmistellaanko varjostimet ennen pelaamista?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Suositeltu. Kestää enintään minuutin, kerran, ja peli sujuu sen jälkeen sulavasti.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Jos ohitat, peli alkaa heti ja pätkii hetken aina, kun ruudulle tulee jotain uutta.
+You will be asked again at the next start.	Sinulta kysytään uudelleen seuraavalla käynnistyksellä.
+Prepare	Valmistele
+Skip	Ohita
+Preparing shaders	Valmistellaan varjostimia
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Tarvitaan kerran pelin tai grafiikkaohjaimen päivityksen jälkeen. Myöhemmät käynnistykset kestävät muutaman sekunnin.
+# --- Saving and loading ---
+Save	Tallenna
+Load	Lataa
+Delete	Poista
+New Save	Uusi tallennus
+Cancel	Peruuta
+Corrupted	Vioittunut
+There is no saved data	Tallennettuja tietoja ei ole
+Do you want to save?	Haluatko tallentaa?
+Do you want to load this saved data?	Haluatko ladata nämä tallennetut tiedot?
+Do you want to delete this saved data?	Haluatko poistaa nämä tallennetut tiedot?
+Do you want to overwrite the existing saved data?	Haluatko korvata olemassa olevat tallennetut tiedot?
+Saving...	Tallennetaan...
+Loading...	Ladataan...
+Deleting...	Poistetaan...
+Restoring saved data...	Palautetaan tallennettuja tietoja...
+The saved data is corrupted.	Tallennetut tiedot ovat vioittuneet.
+Saved successfully.	Tallennus onnistui.
+Loading complete.	Lataus valmis.
+Deletion complete.	Poisto valmis.
+The saved data is corrupted and will be deleted.	Tallennetut tiedot ovat vioittuneet ja poistetaan.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Tallennetut tiedot ovat vioittuneet. Ne poistetaan ja luodaan uudet.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Tallennetut tiedot ovat vioittuneet. Järjestelmän varmuuskopioima data palautetaan.
+Cannot create more saved data	Lisää tallennuksia ei voi luoda
+There is not saved data.	Tallennettuja tietoja ei ole.
+The data is corrupted.	Tiedot ovat vioittuneet.

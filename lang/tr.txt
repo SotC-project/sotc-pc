@@ -1,0 +1,277 @@
+# Turkish. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Serbest Oyun
+Achievements	Başarımlar
+Quit	Çık
+Settings	Ayarlar
+Quit to desktop?	Masaüstüne çıkılsın mı?
+Yes	Evet
+No	Hayır
+Back	Geri
+Loading	Yükleniyor
+HOLD TO SKIP	ATLAMAK İÇİN BASILI TUT
+The game stopped unexpectedly and was started again.	Oyun beklenmedik şekilde durdu ve yeniden başlatıldı.
+# --- Prompts ---
+CHANGE	DEĞİŞTİR
+BACK	GERİ
+CONFIRM	ONAYLA
+SCROLL	KAYDIR
+MENU	MENÜ
+ACCEPT	KABUL ET
+D-pad left / right	Yön tuşu sol / sağ
+D-pad up / down	Yön tuşu yukarı / aşağı
+# --- Settings ---
+Graphics	Grafikler
+Graphics, display, button icons and sound	Grafikler, ekran, tuş simgeleri ve ses
+Key Bindings	Tuş Atamaları
+Choose the keys and mouse buttons	Tuşları ve fare düğmelerini seç
+Game Settings	Oyun Ayarları
+The game's own display, audio, camera and controls	Oyunun kendi ekran, ses, kamera ve kontrolleri
+Return to the menu	Menüye dön
+Apply and Restart	Uygula ve Yeniden Başlat
+Saves the settings; the game restarts to use them	Ayarları kaydeder; oyun yeniden başlar
+Leave without saving	Kaydetmeden çık
+Settings.ps1 was not found next to the game	Settings.ps1 oyunun yanında bulunamadı
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) başlatılamadı
+The settings could not be saved	Ayarlar kaydedilemedi
+Preset	Ön Ayar
+Sets the detail options below together	Aşağıdaki ayrıntı seçeneklerini birlikte ayarlar
+Frame Rate Limit	Kare Hızı Sınırı
+Highest frame rate the game will run at	Oyunun çalışacağı en yüksek kare hızı
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Yırtılmayı giderir; kare hızını ekranınkine sabitler
+Fullscreen	Tam Ekran
+Fill the screen instead of a window	Pencere yerine ekranı doldur
+Window Size	Pencere Boyutu
+Size of the game window	Oyun penceresinin boyutu
+FSR Upscaling	FSR Yükseltme
+Sharper picture when the window is larger than 1080p. Switches at once	Pencere 1080p'den büyükken daha net görüntü. Anında uygulanır
+Shadows	Gölgeler
+Sun and spot shadows	Güneş ve spot gölgeleri
+Motion Blur	Hareket Bulanıklığı
+Blur on fast movement	Hızlı harekette bulanıklık
+Bloom	Bloom
+Glow around bright light	Parlak ışık çevresinde parıltı
+Depth of Field	Alan Derinliği
+Soft focus in the distance and in cutscenes	Uzakta ve ara sahnelerde yumuşak odak
+Vignette	Vinyet
+Darkened picture corners	Kararmış görüntü köşeleri
+Fur	Tüy
+Fur on the colossi	Colossus'lar üzerindeki tüyler
+Fog	Sis
+Distance fog	Uzak mesafe sisi
+Mist Particles	Pus Parçacıkları
+Drifting mist. Renders far too bright in this build; best left off	Süzülen pus. Bu sürümde çok parlak çiziliyor; kapalı bırakmak en iyisi
+Texture Filtering	Doku Filtreleme
+Sharpness of surfaces seen at an angle	Açılı görülen yüzeylerin netliği
+Draw Distance	Çizim Mesafesi
+How far small objects are drawn. Full costs frame rate	Küçük nesnelerin çizildiği mesafe. Tam seçenek kare hızını düşürür
+Texture Detail	Doku Ayrıntısı
+Sharpness of textures	Dokuların netliği
+Sharpening	Keskinleştirme
+Sharpening of the final picture	Son görüntünün keskinleştirilmesi
+Button Icons	Tuş Simgeleri
+Auto follows the device you are using	Otomatik, kullandığın cihazı izler
+Achievement Sound	Başarım Sesi
+Loudness of the achievement sound, percent	Başarım sesinin yüksekliği, yüzde
+Startup Logos	Açılış Logoları
+The company logos when the game starts, half a minute. Saved at once	Oyun açılırken şirket logoları, yarım dakika. Anında kaydedilir
+# --- Setting values ---
+On	Açık
+Off	Kapalı
+Custom	Özel
+Low	Düşük
+Medium	Orta
+High	Yüksek
+Ultra	Ultra
+Uncapped	Sınırsız
+Reduced	Azaltılmış
+Full	Tam
+Normal	Normal
+Strong	Güçlü
+Auto	Otomatik
+Keyboard	Klavye
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	İleri Git
+Move Back	Geri Git
+Move Left	Sola Git
+Move Right	Sağa Git
+Jump	Zıpla
+Attack	Saldır
+Grab / Use / Pray	Tut / Kullan / Dua Et
+Crouch / Roll	Çömel / Yuvarlan
+Raise Sword / Aim	Kılıcı Kaldır / Nişan Al
+Mount / Spur Agro	Bin / Agro'yu Mahmuzla
+Walk / Run	Yürü / Koş
+View Colossus	Colossus'u Gör
+Camera Focus	Kamera Odağı
+Change Sword	Kılıç Değiştir
+Change Ranged Weapon	Menzilli Silah Değiştir
+Unequip	Kuşanmayı Bırak
+Photo Mode	Fotoğraf Modu
+World Map	Dünya Haritası
+Pause	Duraklat
+Zoom (R3)	Yakınlaştır (R3)
+Press a key or mouse button	Bir tuşa veya fare düğmesine bas
+Esc cancels	Esc iptal eder
+Select, then press the new key or button	Seç, sonra yeni tuşa veya düğmeye bas
+Changes are saved as you make them	Değişiklikler yapıldıkça kaydedilir
+Left Mouse	Sol Fare
+Right Mouse	Sağ Fare
+Middle Mouse	Orta Fare
+Wheel Up	Tekerlek Yukarı
+Wheel Down	Tekerlek Aşağı
+# --- Free play ---
+Colossus	Colossus
+Choose the colossus to fight	Dövüşülecek colossus'u seç
+Difficulty	Zorluk
+Choose the difficulty	Zorluğu seç
+Easy	Kolay
+Hard	Zor
+Time Attack	Zamana Karşı
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Sabit koşullarda süreli savaş; süre ve alınan hasara göre D'den S+'ya sıralanır.
+Target time	Hedef süre
+(approximate)	(yaklaşık)
+All Weapons and Items	Tüm Silahlar ve Eşyalar
+Start with every weapon and item	Her silah ve eşyayla başla
+Invincibility	Ölümsüzlük
+Wander takes no damage	Wander hasar almaz
+Unlimited Grip	Sınırsız Kavrama
+The grip gauge never empties	Kavrama göstergesi hiç boşalmaz
+Maximum Damage	Azami Hasar
+Every sword strike deals full damage	Her kılıç darbesi tam hasar verir
+Begin Battle	Savaşı Başlat
+The game restarts and loads the battle	Oyun yeniden başlar ve savaşı yükler
+Return to the previous menu	Önceki menüye dön
+# --- Time attack ---
+Target	Hedef
+Starts when you move	Hareket edince başlar
+Lost	Kaybedildi
+Wander has fallen	Wander düştü
+the colossus has fallen	colossus düştü
+Rank	Derece
+Time	Süre
+Typical time	Tipik süre
+Health lost	Kaybedilen can
+# --- Achievements ---
+Platinum	Platin
+Gold	Altın
+Silver	Gümüş
+Bronze	Bronz
+The Horned Boy	Boynuzlu Çocuk
+Acquire all trophies	Tüm kupaları kazan
+Speed King	Hız Kralı
+Obtain all Time Attack items together as one set	Tüm Zamana Karşı öğelerini tek set olarak edin
+Intrepid Mortal	Gözü Pek Ölümlü
+Max out Wander's health and stamina bars	Wander'ın can ve dayanıklılık çubuklarını doldur
+Speed Demon	Hız Şeytanı
+Complete Hard Mode under 5:41:28	Zor Modu 5:41:28'in altında bitir
+Grounded Scaler	Yerdeki Tırmanıcı
+Defeat Colossus 8 before it can turn back over	8. colossus'u tekrar dönmeden önce yen
+Resist the Wrist	Bileğe Diren
+Defeat Colossus 3 without breaking his wrist guard	3. colossus'u bilek koruyucusunu kırmadan yen
+Reach the Gate	Kapıya Ulaş
+Cross the bridge to the entrance of the Forbidden Lands	Köprüyü geçip Yasak Topraklar'ın girişine var
+Last Man Standing	Son Ayakta Kalan
+Complete a single playthrough without dying once	Bir oynayışı bir kez bile ölmeden bitir
+Bearer of the Curse	Lanetin Taşıyıcısı
+Complete the game on any difficulty	Oyunu herhangi bir zorlukta bitir
+Dormin's Rage	Dormin'in Gazabı
+Use Dormin's breath attack	Dormin'in nefes saldırısını kullan
+Seeking Salvation	Kurtuluş Arayışı
+Pray at all shrines	Tüm mabetlerde dua et
+Trick Rider	Hüner Binicisi
+Perform all stunts with Agro	Agro ile tüm numaraları yap
+Fruit of the Garden	Bahçenin Meyvesi
+Taste the poisoned fruit	Zehirli meyvenin tadına bak
+Sword of Her Majesty	Majestelerinin Kılıcı
+Defeat any colossus with the Queen's Sword	Herhangi bir colossus'u Kraliçe'nin Kılıcı ile yen
+Paint the Target	Hedefi Boya
+Use the sword to focus on a vital point	Kılıçla bir hayati noktaya odaklan
+Fruit of the Land	Toprağın Meyvesi
+Eat a piece of fruit	Bir parça meyve ye
+Skilled Warrior	Usta Savaşçı
+Defeat a colossus with a downward jump stab	Bir colossus'u aşağı zıplayıp saplayarak yen
+The Past that Defines Thee	Seni Tanımlayan Geçmiş
+Defeat any colossus while in Reminiscence Mode	Herhangi bir colossus'u Anımsama Modu'nda yen
+Five-Lined Skink	Beş Çizgili Kertenkele
+Collect a silver lizard tail	Gümüş bir kertenkele kuyruğu topla
+Animals of the Land	Toprağın Hayvanları
+Interact with a dove, hawk, fish and turtle	Bir güvercin, şahin, balık ve kaplumbağa ile etkileşime geç
+Boon of the Nomad	Göçebenin Nimeti
+Find the barrel in the hidden cave	Gizli mağaradaki fıçıyı bul
+Trick Arrow Skills	Hileli Ok Ustalığı
+Shoot a lizard with a special arrow	Bir kertenkeleyi özel okla vur
+Valley of the Wanderer	Gezginin Vadisi
+Defeat the 1st colossus	1. colossus'u yen
+The Mammoth	Mamut
+Defeat the 2nd colossus	2. colossus'u yen
+Wake the Knight	Şövalyeyi Uyandır
+Defeat the 3rd colossus	3. colossus'u yen
+Land of the Gravestones	Mezar Taşları Diyarı
+Defeat the 4th colossus	4. colossus'u yen
+Riding the Wind	Rüzgarı Sür
+Defeat the 5th colossus	5. colossus'u yen
+Tomb of the Giant	Devin Mezarı
+Defeat the 6th colossus	6. colossus'u yen
+Waves of Lightning	Şimşek Dalgaları
+Defeat the 7th colossus	7. colossus'u yen
+Scaler of the Colosseum	Kolezyum Tırmanıcısı
+Defeat the 8th colossus	8. colossus'u yen
+Lurker of the Cave	Mağaranın Pusucusu
+Defeat the 9th colossus	9. colossus'u yen
+Mystery in the Sand	Kumdaki Gizem
+Defeat the 10th colossus	10. colossus'u yen
+Guardian and the Pit	Muhafız ve Çukur
+Defeat the 11th colossus	11. colossus'u yen
+Thunder of the Lake	Gölün Gök Gürültüsü
+Defeat the 12th colossus	12. colossus'u yen
+Signs amidst the Storm	Fırtınadaki İşaretler
+Defeat the 13th colossus	13. colossus'u yen
+Shield of the Colossus	Colossus'un Kalkanı
+Defeat the 14th colossus	14. colossus'u yen
+Valley of the Fallen	Düşenlerin Vadisi
+Defeat the 15th colossus	15. colossus'u yen
+Last of the Colossus	Colossus'ların Sonuncusu
+Defeat the 16th colossus	16. colossus'u yen
+# --- First start ---
+We waited, yet no one answered.	Bekledik, ama kimse cevap vermedi.
+Sometimes, we have to do things ourselves.	Bazen işleri kendimiz yapmak zorundayız.
+Prepare the shaders before playing?	Oynamadan önce gölgelendiriciler hazırlansın mı?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Önerilir. Bir kez, en çok bir dakika sürer; sonra oyun akıcı çalışır.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Atlanırsa oyun hemen başlar ve ekrana yeni bir şey geldikçe kısa süre takılır.
+You will be asked again at the next start.	Bir sonraki açılışta yine sorulacak.
+Prepare	Hazırla
+Skip	Atla
+Preparing shaders	Gölgelendiriciler hazırlanıyor
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Oyun veya grafik sürücüsü güncellendikten sonra bir kez gerekir. Sonraki açılışlar birkaç saniye sürer.
+# --- Saving and loading ---
+Save	Kaydet
+Load	Yükle
+Delete	Sil
+New Save	Yeni Kayıt
+Cancel	İptal
+Corrupted	Bozuk
+There is no saved data	Kayıtlı veri yok
+Do you want to save?	Kaydetmek istiyor musun?
+Do you want to load this saved data?	Bu kayıtlı veriyi yüklemek istiyor musun?
+Do you want to delete this saved data?	Bu kayıtlı veriyi silmek istiyor musun?
+Do you want to overwrite the existing saved data?	Mevcut kayıtlı verinin üzerine yazmak istiyor musun?
+Saving...	Kaydediliyor...
+Loading...	Yükleniyor...
+Deleting...	Siliniyor...
+Restoring saved data...	Kayıtlı veri geri yükleniyor...
+The saved data is corrupted.	Kayıtlı veri bozuk.
+Saved successfully.	Başarıyla kaydedildi.
+Loading complete.	Yükleme tamamlandı.
+Deletion complete.	Silme tamamlandı.
+The saved data is corrupted and will be deleted.	Kayıtlı veri bozuk ve silinecek.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Kayıtlı veri bozuk. Bu kayıtlı veri silinecek ve yenisi oluşturulacak.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Kayıtlı veri bozuk. Sistemin yedeklediği veri geri yüklenecek.
+Cannot create more saved data	Daha fazla kayıtlı veri oluşturulamaz
+There is not saved data.	Kayıtlı veri yok.
+The data is corrupted.	Veri bozuk.

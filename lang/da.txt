@@ -1,0 +1,277 @@
+# Danish. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Fri leg
+Achievements	Præstationer
+Quit	Afslut
+Settings	Indstillinger
+Quit to desktop?	Afslut til skrivebordet?
+Yes	Ja
+No	Nej
+Back	Tilbage
+Loading	Indlæser
+HOLD TO SKIP	HOLD FOR AT SPRINGE OVER
+The game stopped unexpectedly and was started again.	Spillet stoppede uventet og blev startet igen.
+# --- Prompts ---
+CHANGE	SKIFT
+BACK	TILBAGE
+CONFIRM	BEKRÆFT
+SCROLL	RUL
+MENU	MENU
+ACCEPT	ACCEPTER
+D-pad left / right	D-pad venstre / højre
+D-pad up / down	D-pad op / ned
+# --- Settings ---
+Graphics	Grafik
+Graphics, display, button icons and sound	Grafik, skærm, knapikoner og lyd
+Key Bindings	Tastetildelinger
+Choose the keys and mouse buttons	Vælg taster og museknapper
+Game Settings	Spilindstillinger
+The game's own display, audio, camera and controls	Spillets visning, lyd, kamera og styring
+Return to the menu	Tilbage til menuen
+Apply and Restart	Anvend og genstart
+Saves the settings; the game restarts to use them	Gemmer indstillingerne; spillet genstarter for at bruge dem
+Leave without saving	Forlad uden at gemme
+Settings.ps1 was not found next to the game	Settings.ps1 blev ikke fundet ved siden af spillet
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) kunne ikke startes
+The settings could not be saved	Indstillingerne kunne ikke gemmes
+Preset	Forudindstilling
+Sets the detail options below together	Indstiller detaljevalgene nedenfor samlet
+Frame Rate Limit	Billedhastighedsgrænse
+Highest frame rate the game will run at	Højeste billedhastighed spillet kører med
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Fjerner billedrift; holder billedhastigheden til skærmens
+Fullscreen	Fuld skærm
+Fill the screen instead of a window	Fyld skærmen i stedet for et vindue
+Window Size	Vinduesstørrelse
+Size of the game window	Størrelsen på spilvinduet
+FSR Upscaling	FSR-opskalering
+Sharper picture when the window is larger than 1080p. Switches at once	Skarpere billede, når vinduet er større end 1080p. Skifter med det samme
+Shadows	Skygger
+Sun and spot shadows	Sol- og spotskygger
+Motion Blur	Bevægelsessløring
+Blur on fast movement	Sløring ved hurtig bevægelse
+Bloom	Bloom
+Glow around bright light	Glød omkring skarpt lys
+Depth of Field	Dybdeskarphed
+Soft focus in the distance and in cutscenes	Blød fokus i det fjerne og i filmsekvenser
+Vignette	Vignettering
+Darkened picture corners	Mørkere billedhjørner
+Fur	Pels
+Fur on the colossi	Pels på kolosserne
+Fog	Tåge
+Distance fog	Afstandståge
+Mist Particles	Disspartikler
+Drifting mist. Renders far too bright in this build; best left off	Drivende dis. Vises alt for lyst i denne version; bedst slået fra
+Texture Filtering	Teksturfiltrering
+Sharpness of surfaces seen at an angle	Skarphed på flader set fra en vinkel
+Draw Distance	Tegneafstand
+How far small objects are drawn. Full costs frame rate	Hvor langt små objekter tegnes. Fuld koster billedhastighed
+Texture Detail	Teksturdetaljer
+Sharpness of textures	Teksturernes skarphed
+Sharpening	Skærpning
+Sharpening of the final picture	Skærpning af det endelige billede
+Button Icons	Knapikoner
+Auto follows the device you are using	Auto følger den enhed, du bruger
+Achievement Sound	Præstationslyd
+Loudness of the achievement sound, percent	Lydstyrke på præstationslyden, procent
+Startup Logos	Startlogoer
+The company logos when the game starts, half a minute. Saved at once	Firmalogoerne ved spilstart, et halvt minut. Gemmes med det samme
+# --- Setting values ---
+On	Til
+Off	Fra
+Custom	Brugerdefineret
+Low	Lav
+Medium	Mellem
+High	Høj
+Ultra	Ultra
+Uncapped	Ubegrænset
+Reduced	Reduceret
+Full	Fuld
+Normal	Normal
+Strong	Kraftig
+Auto	Auto
+Keyboard	Tastatur
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Gå frem
+Move Back	Gå tilbage
+Move Left	Gå til venstre
+Move Right	Gå til højre
+Jump	Hop
+Attack	Angrib
+Grab / Use / Pray	Grib / Brug / Bed
+Crouch / Roll	Dukke sig / Rul
+Raise Sword / Aim	Løft sværd / Sigt
+Mount / Spur Agro	Stig op / Spor Agro
+Walk / Run	Gå / Løb
+View Colossus	Se koloss
+Camera Focus	Kamerafokus
+Change Sword	Skift sværd
+Change Ranged Weapon	Skift skydevåben
+Unequip	Aflæg
+Photo Mode	Fototilstand
+World Map	Verdenskort
+Pause	Pause
+Zoom (R3)	Zoom (R3)
+Press a key or mouse button	Tryk på en tast eller museknap
+Esc cancels	Esc annullerer
+Select, then press the new key or button	Vælg, og tryk så på den nye tast eller knap
+Changes are saved as you make them	Ændringer gemmes, mens du laver dem
+Left Mouse	Venstre mus
+Right Mouse	Højre mus
+Middle Mouse	Midterste mus
+Wheel Up	Hjul op
+Wheel Down	Hjul ned
+# --- Free play ---
+Colossus	Koloss
+Choose the colossus to fight	Vælg kolossen, du vil bekæmpe
+Difficulty	Sværhedsgrad
+Choose the difficulty	Vælg sværhedsgrad
+Easy	Let
+Hard	Svær
+Time Attack	Tidsangreb
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Tidsbestemt kamp på faste vilkår, rangeret fra D til S+ efter tid og skade.
+Target time	Måltid
+(approximate)	(omtrentlig)
+All Weapons and Items	Alle våben og genstande
+Start with every weapon and item	Start med alle våben og genstande
+Invincibility	Usårlighed
+Wander takes no damage	Wander tager ingen skade
+Unlimited Grip	Ubegrænset greb
+The grip gauge never empties	Grebsmåleren løber aldrig tør
+Maximum Damage	Maksimal skade
+Every sword strike deals full damage	Hvert sværdslag gør fuld skade
+Begin Battle	Start kamp
+The game restarts and loads the battle	Spillet genstarter og indlæser kampen
+Return to the previous menu	Tilbage til forrige menu
+# --- Time attack ---
+Target	Mål
+Starts when you move	Starter, når du bevæger dig
+Lost	Tabt
+Wander has fallen	Wander er faldet
+the colossus has fallen	kolossen er faldet
+Rank	Rang
+Time	Tid
+Typical time	Typisk tid
+Health lost	Tabt helbred
+# --- Achievements ---
+Platinum	Platin
+Gold	Guld
+Silver	Sølv
+Bronze	Bronze
+The Horned Boy	Drengen med hornene
+Acquire all trophies	Optjen alle trofæer
+Speed King	Hastighedskonge
+Obtain all Time Attack items together as one set	Få alle Tidsangreb-genstande samlet som ét sæt
+Intrepid Mortal	Uforfærdet dødelig
+Max out Wander's health and stamina bars	Fyld Wanders helbreds- og udholdenhedsmålere helt op
+Speed Demon	Fartdjævel
+Complete Hard Mode under 5:41:28	Gennemfør Svær tilstand på under 5:41:28
+Grounded Scaler	Jordbunden klatrer
+Defeat Colossus 8 before it can turn back over	Besejr Koloss 8, før den kan vende sig om igen
+Resist the Wrist	Skån håndleddet
+Defeat Colossus 3 without breaking his wrist guard	Besejr Koloss 3 uden at ødelægge hans håndledsbeskytter
+Reach the Gate	Nå porten
+Cross the bridge to the entrance of the Forbidden Lands	Kryds broen til indgangen til de Forbudte Lande
+Last Man Standing	Den sidste på benene
+Complete a single playthrough without dying once	Gennemfør et enkelt spil uden at dø en eneste gang
+Bearer of the Curse	Forbandelsens bærer
+Complete the game on any difficulty	Gennemfør spillet på en vilkårlig sværhedsgrad
+Dormin's Rage	Dormins vrede
+Use Dormin's breath attack	Brug Dormins åndedrætsangreb
+Seeking Salvation	Søgen efter frelse
+Pray at all shrines	Bed ved alle helligdomme
+Trick Rider	Kunstrytter
+Perform all stunts with Agro	Udfør alle stunts med Agro
+Fruit of the Garden	Havens frugt
+Taste the poisoned fruit	Smag den forgiftede frugt
+Sword of Her Majesty	Hendes Majestæts sværd
+Defeat any colossus with the Queen's Sword	Besejr en vilkårlig koloss med Dronningens Sværd
+Paint the Target	Mal målet
+Use the sword to focus on a vital point	Brug sværdet til at fokusere på et sårbart punkt
+Fruit of the Land	Landets frugt
+Eat a piece of fruit	Spis et stykke frugt
+Skilled Warrior	Dygtig kriger
+Defeat a colossus with a downward jump stab	Besejr en koloss med et nedadgående springstik
+The Past that Defines Thee	Fortiden, der definerer dig
+Defeat any colossus while in Reminiscence Mode	Besejr en vilkårlig koloss i Mindetilstand
+Five-Lined Skink	Femstribet skink
+Collect a silver lizard tail	Saml en sølvfarvet firbenshale
+Animals of the Land	Landets dyr
+Interact with a dove, hawk, fish and turtle	Mød en due, en høg, en fisk og en skildpadde
+Boon of the Nomad	Nomadens gave
+Find the barrel in the hidden cave	Find tønden i den skjulte hule
+Trick Arrow Skills	Kunstpilfærdigheder
+Shoot a lizard with a special arrow	Skyd et firben med en særlig pil
+Valley of the Wanderer	Vandrerens dal
+Defeat the 1st colossus	Besejr 1. koloss
+The Mammoth	Mammutten
+Defeat the 2nd colossus	Besejr 2. koloss
+Wake the Knight	Væk ridderen
+Defeat the 3rd colossus	Besejr 3. koloss
+Land of the Gravestones	Gravstenenes land
+Defeat the 4th colossus	Besejr 4. koloss
+Riding the Wind	Ridende på vinden
+Defeat the 5th colossus	Besejr 5. koloss
+Tomb of the Giant	Kæmpens grav
+Defeat the 6th colossus	Besejr 6. koloss
+Waves of Lightning	Lynbølger
+Defeat the 7th colossus	Besejr 7. koloss
+Scaler of the Colosseum	Colosseums klatrer
+Defeat the 8th colossus	Besejr 8. koloss
+Lurker of the Cave	Hulens luskeri
+Defeat the 9th colossus	Besejr 9. koloss
+Mystery in the Sand	Mysteriet i sandet
+Defeat the 10th colossus	Besejr 10. koloss
+Guardian and the Pit	Vogteren og afgrunden
+Defeat the 11th colossus	Besejr 11. koloss
+Thunder of the Lake	Søens torden
+Defeat the 12th colossus	Besejr 12. koloss
+Signs amidst the Storm	Tegn midt i stormen
+Defeat the 13th colossus	Besejr 13. koloss
+Shield of the Colossus	Kolossens skjold
+Defeat the 14th colossus	Besejr 14. koloss
+Valley of the Fallen	De Faldnes dal
+Defeat the 15th colossus	Besejr 15. koloss
+Last of the Colossus	Den sidste koloss
+Defeat the 16th colossus	Besejr 16. koloss
+# --- First start ---
+We waited, yet no one answered.	Vi ventede, men ingen svarede.
+Sometimes, we have to do things ourselves.	Nogle gange må vi selv gøre tingene.
+Prepare the shaders before playing?	Forbered shaders før spillet?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Anbefales. Det tager op til et minut, én gang, og spillet kører så flydende.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Springes det over, starter spillet straks og hakker kort, hver gang noget nyt kommer på skærmen.
+You will be asked again at the next start.	Du bliver spurgt igen ved næste start.
+Prepare	Forbered
+Skip	Spring over
+Preparing shaders	Forbereder shaders
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Nødvendigt én gang efter en opdatering af spillet eller grafikdriveren. Senere starter tager få sekunder.
+# --- Saving and loading ---
+Save	Gem
+Load	Indlæs
+Delete	Slet
+New Save	Ny gemning
+Cancel	Annuller
+Corrupted	Beskadiget
+There is no saved data	Der er ingen gemte data
+Do you want to save?	Vil du gemme?
+Do you want to load this saved data?	Vil du indlæse disse gemte data?
+Do you want to delete this saved data?	Vil du slette disse gemte data?
+Do you want to overwrite the existing saved data?	Vil du overskrive de eksisterende gemte data?
+Saving...	Gemmer...
+Loading...	Indlæser...
+Deleting...	Sletter...
+Restoring saved data...	Gendanner gemte data...
+The saved data is corrupted.	De gemte data er beskadiget.
+Saved successfully.	Gemt.
+Loading complete.	Indlæsning fuldført.
+Deletion complete.	Sletning fuldført.
+The saved data is corrupted and will be deleted.	De gemte data er beskadiget og bliver slettet.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	De gemte data er beskadiget. Disse data slettes, og nye oprettes.
+The saved data is corrupted. The data that was backed up by the system will be restored.	De gemte data er beskadiget. Systemets sikkerhedskopi gendannes.
+Cannot create more saved data	Kan ikke oprette flere gemte data
+There is not saved data.	Der er ingen gemte data.
+The data is corrupted.	Dataene er beskadiget.

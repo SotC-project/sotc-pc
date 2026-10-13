@@ -1,0 +1,277 @@
+# German. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Freies Spiel
+Achievements	Erfolge
+Quit	Beenden
+Settings	Einstellungen
+Quit to desktop?	Zum Desktop beenden?
+Yes	Ja
+No	Nein
+Back	Zurück
+Loading	Lädt
+HOLD TO SKIP	GEDRÜCKT HALTEN ZUM ÜBERSPRINGEN
+The game stopped unexpectedly and was started again.	Das Spiel wurde unerwartet beendet und neu gestartet.
+# --- Prompts ---
+CHANGE	ÄNDERN
+BACK	ZURÜCK
+CONFIRM	BESTÄTIGEN
+SCROLL	SCROLLEN
+MENU	MENÜ
+ACCEPT	ANNEHMEN
+D-pad left / right	Steuerkreuz links / rechts
+D-pad up / down	Steuerkreuz oben / unten
+# --- Settings ---
+Graphics	Grafik
+Graphics, display, button icons and sound	Grafik, Anzeige, Tastensymbole und Ton
+Key Bindings	Tastenbelegung
+Choose the keys and mouse buttons	Tasten und Maustasten wählen
+Game Settings	Spieleinstellungen
+The game's own display, audio, camera and controls	Anzeige, Audio, Kamera und Steuerung des Spiels
+Return to the menu	Zurück zum Menü
+Apply and Restart	Anwenden und Neustarten
+Saves the settings; the game restarts to use them	Speichert die Einstellungen; das Spiel startet neu
+Leave without saving	Ohne Speichern verlassen
+Settings.ps1 was not found next to the game	Settings.ps1 wurde neben dem Spiel nicht gefunden
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) konnte nicht gestartet werden
+The settings could not be saved	Die Einstellungen konnten nicht gespeichert werden
+Preset	Voreinstellung
+Sets the detail options below together	Legt die Detailoptionen unten gemeinsam fest
+Frame Rate Limit	Bildratenlimit
+Highest frame rate the game will run at	Höchste Bildrate des Spiels
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Verhindert Tearing; bindet die Bildrate an die des Displays
+Fullscreen	Vollbild
+Fill the screen instead of a window	Bildschirm statt Fenster ausfüllen
+Window Size	Fenstergröße
+Size of the game window	Größe des Spielfensters
+FSR Upscaling	FSR-Hochskalierung
+Sharper picture when the window is larger than 1080p. Switches at once	Schärferes Bild, wenn das Fenster größer als 1080p ist. Wirkt sofort
+Shadows	Schatten
+Sun and spot shadows	Sonnen- und Spotschatten
+Motion Blur	Bewegungsunschärfe
+Blur on fast movement	Unschärfe bei schneller Bewegung
+Bloom	Bloom
+Glow around bright light	Leuchten um helles Licht
+Depth of Field	Tiefenschärfe
+Soft focus in the distance and in cutscenes	Weicher Fokus in der Ferne und in Zwischensequenzen
+Vignette	Vignette
+Darkened picture corners	Abgedunkelte Bildecken
+Fur	Fell
+Fur on the colossi	Fell der Koloss
+Fog	Nebel
+Distance fog	Distanznebel
+Mist Particles	Dunstpartikel
+Drifting mist. Renders far too bright in this build; best left off	Ziehender Dunst. Wird in dieser Version viel zu hell dargestellt; besser aus
+Texture Filtering	Texturfilterung
+Sharpness of surfaces seen at an angle	Schärfe schräg gesehener Flächen
+Draw Distance	Sichtweite
+How far small objects are drawn. Full costs frame rate	Wie weit kleine Objekte gezeichnet werden. Voll kostet Bildrate
+Texture Detail	Texturdetails
+Sharpness of textures	Schärfe der Texturen
+Sharpening	Schärfen
+Sharpening of the final picture	Schärfung des fertigen Bildes
+Button Icons	Tastensymbole
+Auto follows the device you are using	Auto folgt dem verwendeten Gerät
+Achievement Sound	Erfolgston
+Loudness of the achievement sound, percent	Lautstärke des Erfolgstons in Prozent
+Startup Logos	Startlogos
+The company logos when the game starts, half a minute. Saved at once	Die Firmenlogos beim Spielstart, eine halbe Minute. Wird sofort gespeichert
+# --- Setting values ---
+On	An
+Off	Aus
+Custom	Benutzerdefiniert
+Low	Niedrig
+Medium	Mittel
+High	Hoch
+Ultra	Ultra
+Uncapped	Unbegrenzt
+Reduced	Reduziert
+Full	Voll
+Normal	Normal
+Strong	Stark
+Auto	Auto
+Keyboard	Tastatur
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Vorwärts
+Move Back	Rückwärts
+Move Left	Nach links
+Move Right	Nach rechts
+Jump	Springen
+Attack	Angreifen
+Grab / Use / Pray	Greifen / Benutzen / Beten
+Crouch / Roll	Ducken / Rollen
+Raise Sword / Aim	Schwert heben / Zielen
+Mount / Spur Agro	Aufsteigen / Agro antreiben
+Walk / Run	Gehen / Rennen
+View Colossus	Koloss ansehen
+Camera Focus	Kamerafokus
+Change Sword	Schwert wechseln
+Change Ranged Weapon	Fernwaffe wechseln
+Unequip	Ablegen
+Photo Mode	Fotomodus
+World Map	Weltkarte
+Pause	Pause
+Zoom (R3)	Zoom (R3)
+Press a key or mouse button	Taste oder Maustaste drücken
+Esc cancels	Esc bricht ab
+Select, then press the new key or button	Auswählen, dann die neue Taste drücken
+Changes are saved as you make them	Änderungen werden sofort gespeichert
+Left Mouse	Linke Maustaste
+Right Mouse	Rechte Maustaste
+Middle Mouse	Mittlere Maustaste
+Wheel Up	Rad hoch
+Wheel Down	Rad runter
+# --- Free play ---
+Colossus	Koloss
+Choose the colossus to fight	Gegnerischen Koloss wählen
+Difficulty	Schwierigkeit
+Choose the difficulty	Schwierigkeit wählen
+Easy	Leicht
+Hard	Schwer
+Time Attack	Zeitangriff
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Zeitkampf unter festen Bedingungen, Wertung von D bis S+ nach Zeit und erlittenem Schaden.
+Target time	Zielzeit
+(approximate)	(ungefähr)
+All Weapons and Items	Alle Waffen und Items
+Start with every weapon and item	Mit allen Waffen und Items starten
+Invincibility	Unbesiegbarkeit
+Wander takes no damage	Wander nimmt keinen Schaden
+Unlimited Grip	Unbegrenzter Griff
+The grip gauge never empties	Die Griffleiste leert sich nie
+Maximum Damage	Maximaler Schaden
+Every sword strike deals full damage	Jeder Schwerthieb verursacht vollen Schaden
+Begin Battle	Kampf beginnen
+The game restarts and loads the battle	Das Spiel startet neu und lädt den Kampf
+Return to the previous menu	Zurück zum vorherigen Menü
+# --- Time attack ---
+Target	Ziel
+Starts when you move	Startet bei Bewegung
+Lost	Verloren
+Wander has fallen	Wander ist gefallen
+the colossus has fallen	der Koloss ist gefallen
+Rank	Rang
+Time	Zeit
+Typical time	Übliche Zeit
+Health lost	Verlorene Gesundheit
+# --- Achievements ---
+Platinum	Platin
+Gold	Gold
+Silver	Silber
+Bronze	Bronze
+The Horned Boy	Der gehörnte Junge
+Acquire all trophies	Alle Trophäen erhalten
+Speed King	Geschwindigkeitskönig
+Obtain all Time Attack items together as one set	Alle Zeitangriff-Items als ein Set erhalten
+Intrepid Mortal	Furchtloser Sterblicher
+Max out Wander's health and stamina bars	Wanders Gesundheits- und Ausdauerleiste voll ausbauen
+Speed Demon	Geschwindigkeitsdämon
+Complete Hard Mode under 5:41:28	Schwer-Modus in unter 5:41:28 abschließen
+Grounded Scaler	Bodenständiger Kletterer
+Defeat Colossus 8 before it can turn back over	Besiege Koloss 8, bevor er sich wieder umdrehen kann
+Resist the Wrist	Dem Handgelenk widerstehen
+Defeat Colossus 3 without breaking his wrist guard	Besiege Koloss 3, ohne seinen Handschutz zu zerbrechen
+Reach the Gate	Das Tor erreichen
+Cross the bridge to the entrance of the Forbidden Lands	Überquere die Brücke zum Eingang der Verbotenen Lande
+Last Man Standing	Letzter Überlebender
+Complete a single playthrough without dying once	Schließe einen Durchgang ab, ohne ein einziges Mal zu sterben
+Bearer of the Curse	Träger des Fluchs
+Complete the game on any difficulty	Schließe das Spiel auf beliebigem Schwierigkeitsgrad ab
+Dormin's Rage	Dormins Zorn
+Use Dormin's breath attack	Setze Dormins Atemangriff ein
+Seeking Salvation	Auf der Suche nach Erlösung
+Pray at all shrines	Bete an allen Schreinen
+Trick Rider	Kunstreiter
+Perform all stunts with Agro	Führe alle Kunststücke mit Agro aus
+Fruit of the Garden	Frucht des Gartens
+Taste the poisoned fruit	Koste die vergiftete Frucht
+Sword of Her Majesty	Schwert Ihrer Majestät
+Defeat any colossus with the Queen's Sword	Besiege einen beliebigen Koloss mit dem Schwert der Königin
+Paint the Target	Das Ziel markieren
+Use the sword to focus on a vital point	Fokussiere mit dem Schwert einen Schwachpunkt
+Fruit of the Land	Frucht des Landes
+Eat a piece of fruit	Iss ein Stück Obst
+Skilled Warrior	Geschickter Krieger
+Defeat a colossus with a downward jump stab	Besiege einen Koloss mit einem Sprungstich nach unten
+The Past that Defines Thee	Die Vergangenheit, die dich prägt
+Defeat any colossus while in Reminiscence Mode	Besiege einen beliebigen Koloss im Erinnerungsmodus
+Five-Lined Skink	Fünfstreifenskink
+Collect a silver lizard tail	Sammle einen silbernen Eidechsenschwanz
+Animals of the Land	Tiere des Landes
+Interact with a dove, hawk, fish and turtle	Interagiere mit Taube, Falke, Fisch und Schildkröte
+Boon of the Nomad	Gabe des Nomaden
+Find the barrel in the hidden cave	Finde das Fass in der versteckten Höhle
+Trick Arrow Skills	Pfeil-Kunststücke
+Shoot a lizard with a special arrow	Schieße mit einem Spezialpfeil auf eine Eidechse
+Valley of the Wanderer	Tal des Wanderers
+Defeat the 1st colossus	Besiege den 1. Koloss
+The Mammoth	Das Mammut
+Defeat the 2nd colossus	Besiege den 2. Koloss
+Wake the Knight	Den Ritter wecken
+Defeat the 3rd colossus	Besiege den 3. Koloss
+Land of the Gravestones	Land der Grabsteine
+Defeat the 4th colossus	Besiege den 4. Koloss
+Riding the Wind	Auf dem Wind reiten
+Defeat the 5th colossus	Besiege den 5. Koloss
+Tomb of the Giant	Grab des Riesen
+Defeat the 6th colossus	Besiege den 6. Koloss
+Waves of Lightning	Wellen aus Blitzen
+Defeat the 7th colossus	Besiege den 7. Koloss
+Scaler of the Colosseum	Bezwinger des Kolosseums
+Defeat the 8th colossus	Besiege den 8. Koloss
+Lurker of the Cave	Lauerer der Höhle
+Defeat the 9th colossus	Besiege den 9. Koloss
+Mystery in the Sand	Rätsel im Sand
+Defeat the 10th colossus	Besiege den 10. Koloss
+Guardian and the Pit	Wächter und die Grube
+Defeat the 11th colossus	Besiege den 11. Koloss
+Thunder of the Lake	Donner des Sees
+Defeat the 12th colossus	Besiege den 12. Koloss
+Signs amidst the Storm	Zeichen im Sturm
+Defeat the 13th colossus	Besiege den 13. Koloss
+Shield of the Colossus	Schild des Kolosses
+Defeat the 14th colossus	Besiege den 14. Koloss
+Valley of the Fallen	Tal der Gefallenen
+Defeat the 15th colossus	Besiege den 15. Koloss
+Last of the Colossus	Der Letzte der Kolosse
+Defeat the 16th colossus	Besiege den 16. Koloss
+# --- First start ---
+We waited, yet no one answered.	Wir warteten, doch niemand antwortete.
+Sometimes, we have to do things ourselves.	Manchmal müssen wir die Dinge selbst erledigen.
+Prepare the shaders before playing?	Shader vor dem Spielen vorbereiten?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Empfohlen. Dauert einmalig bis zu eine Minute, danach läuft das Spiel flüssig.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Bei Überspringen startet das Spiel sofort und stockt kurz, wenn etwas Neues im Bild erscheint.
+You will be asked again at the next start.	Beim nächsten Start wirst du erneut gefragt.
+Prepare	Vorbereiten
+Skip	Überspringen
+Preparing shaders	Shader werden vorbereitet
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Einmalig nach einem Update von Spiel oder Grafiktreiber nötig. Spätere Starts dauern wenige Sekunden.
+# --- Saving and loading ---
+Save	Speichern
+Load	Laden
+Delete	Löschen
+New Save	Neuer Spielstand
+Cancel	Abbrechen
+Corrupted	Beschädigt
+There is no saved data	Keine Speicherdaten vorhanden
+Do you want to save?	Möchtest du speichern?
+Do you want to load this saved data?	Möchtest du diese Speicherdaten laden?
+Do you want to delete this saved data?	Möchtest du diese Speicherdaten löschen?
+Do you want to overwrite the existing saved data?	Möchtest du die vorhandenen Speicherdaten überschreiben?
+Saving...	Speichern...
+Loading...	Laden...
+Deleting...	Löschen...
+Restoring saved data...	Speicherdaten werden wiederhergestellt...
+The saved data is corrupted.	Die Speicherdaten sind beschädigt.
+Saved successfully.	Erfolgreich gespeichert.
+Loading complete.	Laden abgeschlossen.
+Deletion complete.	Löschen abgeschlossen.
+The saved data is corrupted and will be deleted.	Die Speicherdaten sind beschädigt und werden gelöscht.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Die Speicherdaten sind beschädigt. Sie werden gelöscht und neu angelegt.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Die Speicherdaten sind beschädigt. Die vom System gesicherten Daten werden wiederhergestellt.
+Cannot create more saved data	Keine weiteren Speicherdaten möglich
+There is not saved data.	Keine Speicherdaten vorhanden.
+The data is corrupted.	Die Daten sind beschädigt.

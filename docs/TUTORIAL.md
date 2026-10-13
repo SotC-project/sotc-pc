@@ -110,6 +110,21 @@ The game runs at the same speed at any frame rate.
 
 The company logos at the start are left out. **Startup Logos** under Graphics brings them back.
 
+## Language
+
+The game's own language is set under Game Settings > Language (Text and Subtitles). What this
+project adds (the extra menu lines, the Settings pages, Free Play, Time Attack, Achievements, the
+save list, the hints) follows the Text language after a restart of the game.
+
+Tables exist for Danish, Dutch, Finnish, French, German, Italian, Norwegian, Polish, Portuguese,
+Russian, Spanish, Swedish and Turkish. They are machine translations that no native reader has
+checked yet; corrections are welcome. Each is a plain text file in `lang` (English text, a tab,
+the translation; `keys.txt` is the English list), so you can correct a line and restart.
+
+Not translated: Arabic (the added texts stay English there, because the text drawing used
+cannot join Arabic letters or write right to left), the names of keys (Enter, Left Shift, Right
+mouse) and the achievement names, which are our own translations and not the official ones.
+
 ## Saving
 
 13. The game saves by itself as you play. **Manual Save** in the pause menu opens a list of

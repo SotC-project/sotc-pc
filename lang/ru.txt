@@ -1,0 +1,277 @@
+# Russian. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Свободная игра
+Achievements	Достижения
+Quit	Выход
+Settings	Настройки
+Quit to desktop?	Выйти на рабочий стол?
+Yes	Да
+No	Нет
+Back	Назад
+Loading	Загрузка
+HOLD TO SKIP	УДЕРЖИВАЙТЕ ДЛЯ ПРОПУСКА
+The game stopped unexpectedly and was started again.	Игра неожиданно закрылась и была запущена снова.
+# --- Prompts ---
+CHANGE	СМЕНИТЬ
+BACK	НАЗАД
+CONFIRM	ПОДТВЕРДИТЬ
+SCROLL	ПРОКРУТКА
+MENU	МЕНЮ
+ACCEPT	ПРИНЯТЬ
+D-pad left / right	Крестовина влево / вправо
+D-pad up / down	Крестовина вверх / вниз
+# --- Settings ---
+Graphics	Графика
+Graphics, display, button icons and sound	Графика, экран, значки кнопок и звук
+Key Bindings	Назначение клавиш
+Choose the keys and mouse buttons	Выбор клавиш и кнопок мыши
+Game Settings	Настройки игры
+The game's own display, audio, camera and controls	Экран, звук, камера и управление игры
+Return to the menu	Вернуться в меню
+Apply and Restart	Применить и перезапустить
+Saves the settings; the game restarts to use them	Сохраняет настройки; игра перезапустится
+Leave without saving	Выйти без сохранения
+Settings.ps1 was not found next to the game	Settings.ps1 не найден рядом с игрой
+PowerShell 7 (pwsh) could not be started	Не удалось запустить PowerShell 7 (pwsh)
+The settings could not be saved	Не удалось сохранить настройки
+Preset	Пресет
+Sets the detail options below together	Задаёт сразу все параметры детализации ниже
+Frame Rate Limit	Ограничение частоты кадров
+Highest frame rate the game will run at	Максимальная частота кадров игры
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Убирает разрывы; частота кадров равна частоте экрана
+Fullscreen	Полный экран
+Fill the screen instead of a window	Во весь экран вместо окна
+Window Size	Размер окна
+Size of the game window	Размер окна игры
+FSR Upscaling	Масштабирование FSR
+Sharper picture when the window is larger than 1080p. Switches at once	Чётче картинка, если окно больше 1080p. Применяется сразу
+Shadows	Тени
+Sun and spot shadows	Тени от солнца и источников света
+Motion Blur	Размытие движения
+Blur on fast movement	Размытие при быстром движении
+Bloom	Свечение
+Glow around bright light	Ореол вокруг яркого света
+Depth of Field	Глубина резкости
+Soft focus in the distance and in cutscenes	Мягкий фокус вдали и в роликах
+Vignette	Виньетирование
+Darkened picture corners	Затемнённые углы кадра
+Fur	Шерсть
+Fur on the colossi	Шерсть на колоссах
+Fog	Туман
+Distance fog	Туман вдали
+Mist Particles	Частицы дымки
+Drifting mist. Renders far too bright in this build; best left off	Плывущая дымка. В этой версии слишком яркая; лучше выключить
+Texture Filtering	Фильтрация текстур
+Sharpness of surfaces seen at an angle	Чёткость поверхностей под углом
+Draw Distance	Дальность прорисовки
+How far small objects are drawn. Full costs frame rate	Дальность прорисовки мелких объектов. Полная снижает FPS
+Texture Detail	Детализация текстур
+Sharpness of textures	Чёткость текстур
+Sharpening	Резкость
+Sharpening of the final picture	Резкость итогового изображения
+Button Icons	Значки кнопок
+Auto follows the device you are using	Авто подстраивается под используемое устройство
+Achievement Sound	Звук достижений
+Loudness of the achievement sound, percent	Громкость звука достижений, проценты
+Startup Logos	Логотипы при запуске
+The company logos when the game starts, half a minute. Saved at once	Логотипы компаний при запуске игры, полминуты. Сохраняется сразу
+# --- Setting values ---
+On	Вкл
+Off	Выкл
+Custom	Свои
+Low	Низкое
+Medium	Среднее
+High	Высокое
+Ultra	Ультра
+Uncapped	Без ограничения
+Reduced	Сниженная
+Full	Полная
+Normal	Обычная
+Strong	Сильная
+Auto	Авто
+Keyboard	Клавиатура
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Вперёд
+Move Back	Назад
+Move Left	Влево
+Move Right	Вправо
+Jump	Прыжок
+Attack	Атака
+Grab / Use / Pray	Хвататься / Действие / Молиться
+Crouch / Roll	Пригнуться / Кувырок
+Raise Sword / Aim	Поднять меч / Целиться
+Mount / Spur Agro	Сесть верхом / Пришпорить Agro
+Walk / Run	Шаг / Бег
+View Colossus	Осмотреть колосса
+Camera Focus	Фокус камеры
+Change Sword	Сменить меч
+Change Ranged Weapon	Сменить дальнее оружие
+Unequip	Убрать оружие
+Photo Mode	Режим фото
+World Map	Карта мира
+Pause	Пауза
+Zoom (R3)	Приближение (R3)
+Press a key or mouse button	Нажмите клавишу или кнопку мыши
+Esc cancels	Esc отменяет
+Select, then press the new key or button	Выберите, затем нажмите новую клавишу или кнопку
+Changes are saved as you make them	Изменения сохраняются сразу
+Left Mouse	Левая кнопка мыши
+Right Mouse	Правая кнопка мыши
+Middle Mouse	Средняя кнопка мыши
+Wheel Up	Колесо вверх
+Wheel Down	Колесо вниз
+# --- Free play ---
+Colossus	Колосс
+Choose the colossus to fight	Выберите колосса для боя
+Difficulty	Сложность
+Choose the difficulty	Выберите сложность
+Easy	Лёгкая
+Hard	Трудная
+Time Attack	Бой на время
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Бой на время на фиксированных условиях, ранг от D до S+ по времени и полученному урону.
+Target time	Целевое время
+(approximate)	(примерно)
+All Weapons and Items	Всё оружие и предметы
+Start with every weapon and item	Начать со всем оружием и предметами
+Invincibility	Неуязвимость
+Wander takes no damage	Wander не получает урона
+Unlimited Grip	Бесконечная хватка
+The grip gauge never empties	Шкала хватки не истощается
+Maximum Damage	Максимальный урон
+Every sword strike deals full damage	Каждый удар мечом наносит полный урон
+Begin Battle	Начать бой
+The game restarts and loads the battle	Игра перезапустится и загрузит бой
+Return to the previous menu	Вернуться в предыдущее меню
+# --- Time attack ---
+Target	Цель
+Starts when you move	Начинается с движения
+Lost	Поражение
+Wander has fallen	Wander погиб
+the colossus has fallen	колосс повержен
+Rank	Ранг
+Time	Время
+Typical time	Обычное время
+Health lost	Потеряно здоровья
+# --- Achievements ---
+Platinum	Платиновый
+Gold	Золотой
+Silver	Серебряный
+Bronze	Бронзовый
+The Horned Boy	Рогатый мальчик
+Acquire all trophies	Получите все трофеи
+Speed King	Король скорости
+Obtain all Time Attack items together as one set	Получите все награды боя на время одним комплектом
+Intrepid Mortal	Бесстрашный смертный
+Max out Wander's health and stamina bars	Заполните до максимума шкалы здоровья и выносливости Wander
+Speed Demon	Демон скорости
+Complete Hard Mode under 5:41:28	Пройдите трудный режим быстрее 5:41:28
+Grounded Scaler	Покоритель с земли
+Defeat Colossus 8 before it can turn back over	Победите колосса 8, пока он не перевернулся обратно
+Resist the Wrist	Сломай запястье
+Defeat Colossus 3 without breaking his wrist guard	Победите колосса 3, не сломав его наручь
+Reach the Gate	Дойти до врат
+Cross the bridge to the entrance of the Forbidden Lands	Пересеките мост ко входу в Запретные земли
+Last Man Standing	Последний выживший
+Complete a single playthrough without dying once	Пройдите игру один раз, ни разу не погибнув
+Bearer of the Curse	Носитель проклятия
+Complete the game on any difficulty	Пройдите игру на любой сложности
+Dormin's Rage	Гнев Dormin
+Use Dormin's breath attack	Используйте атаку дыханием Dormin
+Seeking Salvation	В поисках спасения
+Pray at all shrines	Помолитесь во всех святилищах
+Trick Rider	Трюкач
+Perform all stunts with Agro	Выполните все трюки с Agro
+Fruit of the Garden	Плод сада
+Taste the poisoned fruit	Отведайте отравленный плод
+Sword of Her Majesty	Меч Её Величества
+Defeat any colossus with the Queen's Sword	Победите любого колосса мечом королевы
+Paint the Target	Отметь цель
+Use the sword to focus on a vital point	Наведите меч на уязвимое место
+Fruit of the Land	Плод земли
+Eat a piece of fruit	Съешьте плод
+Skilled Warrior	Умелый воин
+Defeat a colossus with a downward jump stab	Победите колосса ударом сверху вниз в прыжке
+The Past that Defines Thee	Прошлое, что определяет тебя
+Defeat any colossus while in Reminiscence Mode	Победите любого колосса в режиме воспоминаний
+Five-Lined Skink	Пятиполосый сцинк
+Collect a silver lizard tail	Соберите серебряный хвост ящерицы
+Animals of the Land	Животные земли
+Interact with a dove, hawk, fish and turtle	Взаимодействуйте с голубем, ястребом, рыбой и черепахой
+Boon of the Nomad	Дар кочевника
+Find the barrel in the hidden cave	Найдите бочонок в скрытой пещере
+Trick Arrow Skills	Мастер особых стрел
+Shoot a lizard with a special arrow	Подстрелите ящерицу особой стрелой
+Valley of the Wanderer	Долина странника
+Defeat the 1st colossus	Победите 1-го колосса
+The Mammoth	Мамонт
+Defeat the 2nd colossus	Победите 2-го колосса
+Wake the Knight	Пробуди рыцаря
+Defeat the 3rd colossus	Победите 3-го колосса
+Land of the Gravestones	Земля надгробий
+Defeat the 4th colossus	Победите 4-го колосса
+Riding the Wind	Верхом на ветре
+Defeat the 5th colossus	Победите 5-го колосса
+Tomb of the Giant	Гробница великана
+Defeat the 6th colossus	Победите 6-го колосса
+Waves of Lightning	Волны молний
+Defeat the 7th colossus	Победите 7-го колосса
+Scaler of the Colosseum	Покоритель Колизея
+Defeat the 8th colossus	Победите 8-го колосса
+Lurker of the Cave	Обитатель пещеры
+Defeat the 9th colossus	Победите 9-го колосса
+Mystery in the Sand	Тайна в песках
+Defeat the 10th colossus	Победите 10-го колосса
+Guardian and the Pit	Страж и яма
+Defeat the 11th colossus	Победите 11-го колосса
+Thunder of the Lake	Гром над озером
+Defeat the 12th colossus	Победите 12-го колосса
+Signs amidst the Storm	Знаки среди бури
+Defeat the 13th colossus	Победите 13-го колосса
+Shield of the Colossus	Щит колосса
+Defeat the 14th colossus	Победите 14-го колосса
+Valley of the Fallen	Долина павших
+Defeat the 15th colossus	Победите 15-го колосса
+Last of the Colossus	Последний из колоссов
+Defeat the 16th colossus	Победите 16-го колосса
+# --- First start ---
+We waited, yet no one answered.	Мы ждали, но никто не ответил.
+Sometimes, we have to do things ourselves.	Иногда приходится делать всё самим.
+Prepare the shaders before playing?	Подготовить шейдеры перед игрой?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Рекомендуется. Займёт до минуты, один раз, затем игра идёт плавно.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Если пропустить, игра запустится сразу, но будет ненадолго замирать, когда на экране появляется что-то новое.
+You will be asked again at the next start.	Вопрос повторится при следующем запуске.
+Prepare	Подготовить
+Skip	Пропустить
+Preparing shaders	Подготовка шейдеров
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Нужно один раз после обновления игры или видеодрайвера. Следующие запуски займут несколько секунд.
+# --- Saving and loading ---
+Save	Сохранить
+Load	Загрузить
+Delete	Удалить
+New Save	Новое сохранение
+Cancel	Отмена
+Corrupted	Повреждено
+There is no saved data	Нет сохранённых данных
+Do you want to save?	Сохранить?
+Do you want to load this saved data?	Загрузить это сохранение?
+Do you want to delete this saved data?	Удалить это сохранение?
+Do you want to overwrite the existing saved data?	Перезаписать существующее сохранение?
+Saving...	Сохранение...
+Loading...	Загрузка...
+Deleting...	Удаление...
+Restoring saved data...	Восстановление данных...
+The saved data is corrupted.	Сохранение повреждено.
+Saved successfully.	Сохранено.
+Loading complete.	Загрузка завершена.
+Deletion complete.	Удаление завершено.
+The saved data is corrupted and will be deleted.	Сохранение повреждено и будет удалено.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Сохранение повреждено. Оно будет удалено, и будет создано новое.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Сохранение повреждено. Будет восстановлена резервная копия системы.
+Cannot create more saved data	Нельзя создать больше сохранений
+There is not saved data.	Нет сохранённых данных.
+The data is corrupted.	Данные повреждены.
