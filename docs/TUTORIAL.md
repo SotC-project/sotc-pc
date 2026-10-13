@@ -77,7 +77,18 @@ are the default keys. Change any of them under Settings > Key Bindings.
 | Zoom | F | R3 |
 | Pause | Esc | Options / Start |
 
-With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot.
+With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot. While you
+aim, the mouse moves the aim.
+
+The mouse does not turn the camera in menus or during scenes.
+
+The game has button schemes of its own (Game Settings > Controls). If you choose its Legacy
+scheme, the keys keep their actions: Space still jumps and Q still raises the sword. Crouching
+and rolling are then on the grab button, as in that scheme, so C and E do the same. The scheme
+is read when the game starts; restart after changing it. A Free Play battle uses the same layout
+on a controller as the story.
+
+The game runs at the same speed at any frame rate.
 
 ## Settings
 
@@ -115,8 +126,8 @@ With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot
 
 ## Achievements
 
-19. **Achievements** on the title menu or in the pause menu lists all 38 with your progress.
-    They unlock as the game awards its trophies, with a small notice on screen.
+19. **Achievements** on the title menu lists all 38 with your progress. They unlock as the game
+    awards its trophies, with a small notice on screen. Nothing unlocks in Free Play.
 
 ## If something goes wrong
 
