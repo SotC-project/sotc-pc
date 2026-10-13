@@ -156,7 +156,11 @@ void StartBattle() {
     // A graded run is played without help.
     if (!challenge) {
         if (all_items) {
-            args += " +shadow_startWithAllItems=true";
+            // The game's one option for all items gives nothing; its item sets do.
+            for (const char* set : {"WhistleArrow", "ExplosionArrow", "Harpoon", "SwordOfDormin",
+                                    "SwordOfLife", "AncientBow", "Parachute"}) {
+                args += fmt::format(" +shadow_startWith{}Set=true", set);
+            }
         }
         if (no_damage) {
             args += " +shadow_noDamage=true";
