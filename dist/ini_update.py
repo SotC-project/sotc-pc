@@ -13,7 +13,7 @@ for line in lines:
     if line.startswith('# Q or middle mouse'):
         line = '# Q: raise the sword to the light / aim the bow (left mouse draws and fires it).'
     if key == 'mouse_movement_params':
-        line = 'mouse_movement_params = 0.5, 2.5, 0.125'
+        line = 'mouse_movement_params = 0.25, 1.0, 0.0'
     if key in ('walk_toggle', 'mouse_invert'):
         continue
     if line.startswith('# Left Shift switches between'):
