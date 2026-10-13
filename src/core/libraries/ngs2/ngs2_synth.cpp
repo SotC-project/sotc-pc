@@ -26,6 +26,7 @@
 #include "common/logging/log.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/ngs2/ngs2_error.h"
+#include "core/libraries/ngs2/ngs2_hevag_table.h"
 #include "core/libraries/ngs2/ngs2_mastering.h"
 #include "core/libraries/ngs2/ngs2_sampler.h"
 #include "core/libraries/ngs2/ngs2_submixer.h"
@@ -238,16 +239,11 @@ void ResetSampler(Voice& v) {
     }
 }
 
-// PS-ADPCM (VAG): 16-byte frames of 28 samples, mono per stream.
+// PS-ADPCM in its HE-VAG form: 16-byte frames of 28 samples, mono per stream. The predictor
+// index has seven bits (the high three in the flag byte) and each predictor four taps; its first
+// five entries are the plain VAG ones.
 void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
-    static constexpr float Coef[5][2] = {
-        {0.0f, 0.0f},
-        {60.0f / 64, 0.0f},
-        {115.0f / 64, -52.0f / 64},
-        {98.0f / 64, -55.0f / 64},
-        {122.0f / 64, -60.0f / 64},
-    };
-    float h1 = 0, h2 = 0;
+    float h1 = 0, h2 = 0, h3 = 0, h4 = 0;
     {
         static int reported = 0;
         u32 high_pred = 0, high_flag = 0, frames = 0, flags_seen = 0;
@@ -267,11 +263,21 @@ void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
     for (u32 off = 0; off + 16 <= b.info.dataSize; off += 16) {
         const u8* f = b.data + b.info.dataOffset + off;
         const u32 shift = f[0] & 0xf;
-        const u32 pred = std::min<u32>(f[0] >> 4, 4);
+        u32 pred = (f[0] >> 4) | (f[1] & 0xf0);
+        if (pred > 127) {
+            pred = 0;
+        }
+        const float* coef = HevagCoefs[pred];
+        // A frame with flag 7 holds no sound.
+        const bool silent = (f[1] & 0xf) == 7;
         for (u32 i = 0; i < 28; ++i) {
             s32 nib = (f[2 + i / 2] >> ((i & 1) * 4)) & 0xf;
             nib = (nib << 28) >> 28;
-            const float s = float((nib << 12) >> shift) + h1 * Coef[pred][0] + h2 * Coef[pred][1];
+            const float s = silent ? 0.0f
+                                   : float((nib << 12) >> shift) + h1 * coef[0] + h2 * coef[1] +
+                                         h3 * coef[2] + h4 * coef[3];
+            h4 = h3;
+            h3 = h2;
             h2 = h1;
             h1 = s;
             out.push_back(std::clamp(s, -32768.0f, 32767.0f) / 32768.0f);
