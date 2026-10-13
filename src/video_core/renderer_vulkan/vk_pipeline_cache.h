@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <future>
+#include <optional>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -140,6 +142,16 @@ private:
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
+
+    /// A graphics pipeline the game used for the first time, being built on another thread. Its
+    /// draws are left out until it is ready, so the frame does not wait for the driver.
+    struct PendingPipeline {
+        std::future<std::unique_ptr<GraphicsPipeline>> built;
+        GraphicsPipeline::SerializationSupport sdata;
+        size_t hash;
+    };
+    tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<PendingPipeline>> pending_pipelines;
+    bool BuildInBackground() const;
 
     // Only if Config::collectShadersForDebug()
     tsl::robin_map<vk::ShaderModule,

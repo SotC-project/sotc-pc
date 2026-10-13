@@ -355,6 +355,51 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         return nullptr;
     }
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
+    if (!is_new && !it->second) {
+        // Being built on another thread.
+        const auto pending = pending_pipelines.find(graphics_key);
+        ASSERT(pending != pending_pipelines.end());
+        auto& job = *pending->second;
+        if (job.built.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return nullptr;
+        }
+        it.value() = job.built.get();
+        RegisterPipelineData(graphics_key, job.hash, job.sdata);
+        ++num_new_pipelines;
+        pending_pipelines.erase(graphics_key);
+        return it->second.get();
+    }
+    if (is_new && BuildInBackground()) {
+        const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
+        LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x} in the background",
+                 pipeline_hash);
+        // What a saved pipeline is built from, made here because it reads the game's state.
+        auto job = std::make_unique<PendingPipeline>();
+        job->hash = pipeline_hash;
+        GraphicsPipeline{instance,      scheduler, desc_heap,    profile, graphics_key,
+                         *pipeline_cache, infos,   runtime_infos, fetch_shader, modules,
+                         job->sdata,    false,     true};
+        job->built = std::async(
+            std::launch::async,
+            [this, key = graphics_key, job_infos = infos, job_runtime_infos = runtime_infos,
+             job_modules = modules,
+             job_fetch = fetch_shader ? std::optional{*fetch_shader} : std::nullopt,
+             job_sdata = job->sdata]() mutable {
+                return std::make_unique<GraphicsPipeline>(
+                    instance, scheduler, desc_heap, profile, key, *pipeline_cache, job_infos,
+                    job_runtime_infos, job_fetch ? &*job_fetch : nullptr, job_modules, job_sdata,
+                    true);
+            });
+        pending_pipelines.emplace(graphics_key, std::move(job));
+        if (EmulatorSettings.IsShaderCollect()) {
+            for (auto stage = 0; stage < MaxShaderStages; ++stage) {
+                if (infos[stage]) {
+                    module_related_pipelines[modules[stage]].emplace_back(graphics_key);
+                }
+            }
+        }
+        return nullptr;
+    }
     if (is_new) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
@@ -378,6 +423,18 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         }
     }
     return it->second.get();
+}
+
+bool PipelineCache::BuildInBackground() const {
+    // SOTC_PIPELINE_WAIT=1: every pipeline is built in the frame that first uses it.
+    static const bool wait = std::getenv("SOTC_PIPELINE_WAIT") != nullptr;
+    if (wait || EmulatorSettings.IsShaderCollect()) {
+        return false;
+    }
+    // A pass over the whole picture must not be left out: the picture would go black for the
+    // time of the build. Those are drawn as a rectangle or a few vertices.
+    const auto& regs = liverpool->regs;
+    return regs.primitive_type != AmdGpu::PrimitiveType::RectList && regs.num_indices > 6;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
