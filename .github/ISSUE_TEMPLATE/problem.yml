@@ -1,0 +1,58 @@
+name: Problem report
+description: The game stops, restarts, stutters, looks or sounds wrong, or does not start
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach game files, saves, dumps, keys or firmware, and do not ask where to get the game.
+        The log can hold your Windows user name inside file paths; replace it if you want.
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: Step by step, and where in the game (title menu, which colossus, which area).
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: often
+    attributes:
+      label: How often
+      options:
+        - Every time
+        - Sometimes
+        - Once
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and driver version
+    validations:
+      required: true
+  - type: input
+    id: pc
+    attributes:
+      label: Processor, memory, Windows version
+    validations:
+      required: true
+  - type: input
+    id: commits
+    attributes:
+      label: Commits
+      description: "`git rev-parse --short HEAD` in the sotc-pc folder and in its runtime folder."
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "Attach dist\\user\\log\\shad_log.txt from the run that went wrong (drag the file here)."
+    validations:
+      required: true

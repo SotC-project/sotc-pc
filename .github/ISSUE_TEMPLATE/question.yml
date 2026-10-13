@@ -1,0 +1,13 @@
+name: Question
+description: Something the tutorial does not answer
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: Questions about where to get the game, or its files, are not answered.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
