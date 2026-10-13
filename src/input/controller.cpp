@@ -96,8 +96,12 @@ int GameController::ReadStates(State* states, int states_num) {
 }
 
 void GameController::Button(OrbisPadButtonDataOffset button, bool is_pressed) {
-    static const auto aim_button = Input::AimOnCircle() ? OrbisPadButtonDataOffset::Circle
-                                                        : OrbisPadButtonDataOffset::R1;
+    static const auto aim_button = [] {
+        const std::string name = Input::AimButton();
+        return name == "circle" ? OrbisPadButtonDataOffset::Circle
+               : name == "r2"   ? OrbisPadButtonDataOffset::R2
+                                : OrbisPadButtonDataOffset::R1;
+    }();
     if (button == aim_button) {
         Input::aim_held = is_pressed;
     }

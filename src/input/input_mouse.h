@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <string>
 #include <atomic>
 
 #include "SDL3/SDL.h"
@@ -26,7 +27,11 @@ extern std::atomic_bool mouse_look_blocked;
 extern std::atomic_bool aim_held;
 /// The game's aim button (raise the sword, draw the bow) is Circle instead of R1: the story run
 /// with the Legacy button scheme chosen in the game's settings.
-bool AimOnCircle();
+/// The game's button scheme the keys follow in this run ("Legacy", "LegacyRemap",
+/// "ModernRemap"); empty where the game is in its default scheme.
+std::string StoryScheme();
+/// The pad button that aims the bow in this run, by its name in the bindings file.
+std::string AimButton();
 void SetMouseToJoystick(int joystick);
 void SetMouseParams(float mouse_deadzone_offset, float mouse_speed, float mouse_speed_offset);
 void SetMouseInvert(bool x, bool y);

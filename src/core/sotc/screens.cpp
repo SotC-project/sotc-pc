@@ -9,6 +9,7 @@
 #include <cstring>
 #include <string>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 
@@ -60,6 +61,7 @@ std::atomic<u32> binds_last{0};
 
 std::mutex used_mutex;
 std::set<u64> used;
+std::map<u64, std::pair<u32, u32>> used_sizes;
 
 bool Recent(const std::atomic<u64>& seen_ms) {
     const u64 seen = seen_ms.load(std::memory_order_relaxed);
@@ -108,6 +110,7 @@ void TextureUsed(u64 content_hash, u32 width, u32 height) {
     if (recording) {
         std::scoped_lock lock{used_mutex};
         used.insert(content_hash);
+        used_sizes[content_hash] = {width, height};
     }
 }
 
@@ -259,9 +262,11 @@ bool KnowsTitleMenu() {
 
 void DumpUsed(const std::string& label) {
     std::set<u64> hashes;
+    std::map<u64, std::pair<u32, u32>> sizes;
     {
         std::scoped_lock lock{used_mutex};
         hashes.swap(used);
+        sizes = used_sizes;
     }
     if (label == "clear") {
         return;
@@ -269,7 +274,7 @@ void DumpUsed(const std::string& label) {
     std::ofstream out{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
                       fmt::format("texuse_{}.txt", label)};
     for (const u64 hash : hashes) {
-        out << fmt::format("{:016x}\n", hash);
+        out << fmt::format("{:016x} {}x{}\n", hash, sizes[hash].first, sizes[hash].second);
     }
 }
 

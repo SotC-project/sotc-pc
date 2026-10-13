@@ -392,16 +392,38 @@ std::string ProfileButtonScheme() {
     return {};
 }
 
-/// The keyboard layout is written for the game's default scheme. In the Legacy scheme the same
-/// actions are on other buttons; a key keeps its action by pressing the button that has it there.
-const std::map<std::string, std::string> DefaultToLegacy = {
-    {"cross", "triangle"}, // jump
-    {"triangle", "cross"}, // call and spur the horse
-    {"r2", "r1"},          // grab
-    {"r1", "circle"},      // raise the sword, aim
-    {"l2", "l1"},          // view the colossus
-    {"l1", "l2"},          // camera focus
-    {"r3", "r2"},          // zoom
+/// The keyboard layout is written for the game's default scheme (Modern on its Controls
+/// screen). In its other schemes the same actions are on other buttons; a key keeps its action
+/// by pressing the button that has it there. The schemes, by the names the profile has for them
+/// (Classic, Classic Remapped and Modern Remapped on the Controls screen):
+struct ButtonScheme {
+    std::map<std::string, std::string> moved; // button in the default scheme -> button here
+    // Crouching and rolling have no button of their own in the classic schemes: they are on
+    // the grab button. Empty where the roll button is as in the default scheme.
+    std::string roll;
+};
+const std::map<std::string, ButtonScheme> ButtonSchemes = {
+    {"Legacy",
+     {{{"cross", "triangle"}, // jump
+       {"triangle", "cross"}, // call and spur the horse
+       {"r2", "r1"},          // grab
+       {"r1", "circle"},      // raise the sword, aim
+       {"l2", "l1"},          // view the colossus
+       {"l1", "l2"},          // camera focus
+       {"r3", "r2"}},         // zoom
+      "r1"}},
+    {"LegacyRemap",
+     {{{"r1", "circle"}, // raise the sword, aim
+       {"r3", "r1"}},    // zoom
+      "r2"}},
+    {"ModernRemap",
+     {{{"cross", "triangle"}, // jump
+       {"triangle", "cross"}, // call and spur the horse
+       {"r2", "r1"},          // grab
+       {"r1", "r2"},          // aim
+       {"l2", "l1"},          // view the colossus
+       {"l1", "l2"}},         // camera focus
+      ""}},
 };
 
 /// True when this run starts without the profile (Free Play, or launch options that skip the
@@ -420,6 +442,16 @@ const std::string& ChosenScheme() {
     return scheme;
 }
 
+/// The scheme the keys are moved to: the chosen one in the story, none where the game is in
+/// its default scheme.
+const ButtonScheme* KeyScheme() {
+    static const ButtonScheme* scheme = [] () -> const ButtonScheme* {
+        const auto it = ButtonSchemes.find(ChosenScheme());
+        return it == ButtonSchemes.end() || std::getenv("SOTC_SCHEME_OFF") ? nullptr : &it->second;
+    }();
+    return scheme;
+}
+
 /// The button a binding's output stands for under the scheme in effect.
 /// - A battle from Free Play starts without the profile, so the game is in its default scheme
 ///   there whatever the player chose: keys need no change, and a controller's buttons are turned
@@ -427,7 +459,8 @@ const std::string& ChosenScheme() {
 /// - In the story the game is in the chosen scheme: the controller is right as it is, and the
 ///   keys are moved to that scheme's buttons.
 std::string SchemeOutput(const std::string& output, const InputBinding& binding) {
-    if (ChosenScheme() != "Legacy" || std::getenv("SOTC_SCHEME_OFF")) {
+    const ButtonScheme* scheme = KeyScheme();
+    if (!scheme) {
         return output;
     }
     static const bool free_play = DefaultSchemeRun();
@@ -447,15 +480,14 @@ std::string SchemeOutput(const std::string& output, const InputBinding& binding)
                 return output;
             }
         }
-        // Crouching and rolling have no button of their own there: they are on the grab button.
-        if (output == "circle") {
-            return "r1";
+        if (output == "circle" && !scheme->roll.empty()) {
+            return scheme->roll;
         }
-        const auto it = DefaultToLegacy.find(output);
-        return it == DefaultToLegacy.end() ? output : it->second;
+        const auto it = scheme->moved.find(output);
+        return it == scheme->moved.end() ? output : it->second;
     }
-    for (const auto& [in_default, in_legacy] : DefaultToLegacy) {
-        if (in_legacy == output) {
+    for (const auto& [in_default, in_scheme] : scheme->moved) {
+        if (in_scheme == output) {
             return in_default;
         }
     }
@@ -464,10 +496,20 @@ std::string SchemeOutput(const std::string& output, const InputBinding& binding)
 
 } // namespace
 
-bool AimOnCircle() {
-    static const bool legacy_game =
-        ChosenScheme() == "Legacy" && !DefaultSchemeRun() && !std::getenv("SOTC_SCHEME_OFF");
-    return legacy_game;
+std::string StoryScheme() {
+    return KeyScheme() && !DefaultSchemeRun() ? ChosenScheme() : std::string{};
+}
+
+std::string AimButton() {
+    static const std::string button = [] {
+        const ButtonScheme* scheme = KeyScheme();
+        if (!scheme || DefaultSchemeRun()) {
+            return std::string{"r1"};
+        }
+        const auto it = scheme->moved.find("r1");
+        return it == scheme->moved.end() ? std::string{"r1"} : it->second;
+    }();
+    return button;
 }
 
 void ParseInputConfig(const std::string game_id = "") {

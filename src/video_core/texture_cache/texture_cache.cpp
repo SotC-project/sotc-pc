@@ -25,6 +25,7 @@
 #include "core/memory.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
+#include "input/input_mouse.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -1064,7 +1065,16 @@ void TextureCache::ApplyTexturePack(Image& image) {
             }
         };
         load(dir, sets[size_t(PromptSet::Keyboard)]);
-        load(dir / "keyboard", sets[size_t(PromptSet::Keyboard)]);
+        // In the story under another of the game's button schemes the keys press other
+        // buttons (see Input's SchemeOutput), so each button's picture names another key: each
+        // scheme has a folder of pictures of its own.
+        std::string folder = "keyboard";
+        if (std::string scheme = Input::StoryScheme(); !scheme.empty()) {
+            std::ranges::transform(scheme, scheme.begin(),
+                                   [](unsigned char c) { return std::tolower(c); });
+            folder += "_" + scheme;
+        }
+        load(dir / folder, sets[size_t(PromptSet::Keyboard)]);
         load(dir / "xbox", sets[size_t(PromptSet::Xbox)]);
         LOG_INFO(Render, "Texture pack: {} keyboard and {} Xbox replacement textures",
                  sets[size_t(PromptSet::Keyboard)].size(), sets[size_t(PromptSet::Xbox)].size());
