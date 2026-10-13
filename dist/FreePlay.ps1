@@ -146,7 +146,12 @@ if ($Difficulty -eq 'easy') { $lines += '+shadow_setEasyMode=true' }
 if ($Invincible -eq 'on') { $lines += '+shadow_noDamage=true' }
 if ($UnlimitedGrip -eq 'on') { $lines += '+shadow_unlimitedGrip=true' }
 if ($MaxDamage -eq 'on') { $lines += '+shadow_maxAttackDamage=true' }
-if ($AllItems -eq 'on') { $lines += '+shadow_startWithAllItems=true' }
+# The game's one option for all items gives nothing; its item sets do.
+if ($AllItems -eq 'on') {
+    foreach ($set in 'WhistleArrow', 'ExplosionArrow', 'Harpoon', 'SwordOfDormin', 'SwordOfLife', 'AncientBow', 'Parachute') {
+        $lines += "+shadow_startWith${set}Set=true"
+    }
+}
 
 $backup = "$overlay.freeplay"
 Copy-Item $overlay $backup -Force
