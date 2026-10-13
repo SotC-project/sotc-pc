@@ -62,11 +62,11 @@ are the default keys. Change any of them under Settings > Key Bindings.
 | Move | W A S D | Left stick |
 | Look | Mouse | Right stick |
 | Jump | Space | Cross / A |
-| Attack, fire the bow | Left mouse button | Square / X |
-| Grab, hold on, use, pray | E or right mouse button (hold) | R2 / RT |
+| Attack; with the bow, draw (hold) and shoot (let go) | Left mouse button | Square / X |
+| Grab, hold on, use, pick up, pray | E (hold), or the mouse's back side button | R2 / RT |
 | Crouch, roll | C or Left Ctrl | Circle / B |
-| Raise the sword to the light, aim the bow | Q (hold) | R1 / RB |
-| Mount and spur Agro | Left Shift | Triangle / Y |
+| Aim the bow, raise the sword to the light | Right or middle mouse button (hold) | R1 / RB |
+| Call Agro; spur him on when riding | Q or Left Shift | Triangle / Y |
 | Walk instead of run (on and off) | Left Shift | (tilt the stick less) |
 | View the colossus | R (hold) | L2 / LT |
 | Camera focus | Z | L1 / LB |
@@ -77,13 +77,18 @@ are the default keys. Change any of them under Settings > Key Bindings.
 | Zoom | F | R3 |
 | Pause | Esc | Options / Start |
 
-With the bow: hold Q to aim, hold the left mouse button to draw, let go to shoot. While you
-aim, the mouse moves the aim.
+With the bow: hold the right mouse button to aim, hold the left to draw, let go to shoot. While
+you aim, the mouse moves the aim.
 
-The mouse does not turn the camera in menus or during scenes.
+The mouse does not turn the camera in menus or during scenes. In the game's menus the pointer
+puts the cursor on the line it is over, a left click chooses, a right click goes back. The
+pointer is hidden outside menus.
+
+A scene can be left by holding Enter (or the controller's confirm button); a hint says so when
+a scene begins.
 
 The game has button schemes of its own (Game Settings > Controls). If you choose its Legacy
-scheme, the keys keep their actions: Space still jumps and Q still raises the sword. Crouching
+scheme, the keys keep their actions: Space still jumps and Q still calls Agro. Crouching
 and rolling are then on the grab button, as in that scheme, so C and E do the same. The scheme
 is read when the game starts; restart after changing it. A Free Play battle uses the same layout
 on a controller as the story.
@@ -100,6 +105,8 @@ The game runs at the same speed at any frame rate.
     (30 to 240, or uncapped), VSync, full screen, window size, FSR upscaling and each effect by
     itself. Then choose **Apply and Restart**; the game restarts by itself.
 12. If the camera moves the wrong way for you, change it under Game Settings > Camera.
+
+The company logos at the start are left out. **Startup Logos** under Graphics brings them back.
 
 ## Saving
 
@@ -121,8 +128,8 @@ The game runs at the same speed at any frame rate.
 17. For a graded fight, turn **Time Attack** on first. The helpers are then off. A small clock
     appears top left and starts when you first move. When the colossus falls, or you do, a
     result page shows your time, the target time, the health you lost and a rank from D to S+.
-18. During a free play battle, **F2** (or both sticks pressed together) opens a menu with
-    **Return to Main Menu**.
+18. During a free play battle the pause menu (Esc) is the game's own: **Settings** as in the
+    story, and **Main Menu** to leave the battle (the game restarts for it).
 
 ## Achievements
 
