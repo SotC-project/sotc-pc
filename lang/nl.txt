@@ -6,6 +6,7 @@ Free Play	Vrij spelen
 Achievements	Prestaties
 Quit	Afsluiten
 Settings	Instellingen
+Main Menu	Hoofdmenu
 Quit to desktop?	Afsluiten naar bureaublad?
 Yes	Ja
 No	Nee

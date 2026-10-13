@@ -6,6 +6,7 @@ Free Play	Tryb swobodny
 Achievements	Osiągnięcia
 Quit	Wyjdź
 Settings	Ustawienia
+Main Menu	Do menu
 Quit to desktop?	Wyjść na pulpit?
 Yes	Tak
 No	Nie

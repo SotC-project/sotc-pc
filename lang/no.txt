@@ -6,6 +6,7 @@ Free Play	Fritt spill
 Achievements	Prestasjoner
 Quit	Avslutt
 Settings	Innstillinger
+Main Menu	Hovedmeny
 Quit to desktop?	Avslutte til skrivebordet?
 Yes	Ja
 No	Nei

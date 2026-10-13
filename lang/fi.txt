@@ -6,6 +6,7 @@ Free Play	Vapaa peli
 Achievements	Saavutukset
 Quit	Lopeta
 Settings	Asetukset
+Main Menu	Alkuvalikko
 Quit to desktop?	Poistutaanko työpöydälle?
 Yes	Kyllä
 No	Ei

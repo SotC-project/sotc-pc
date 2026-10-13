@@ -9,6 +9,8 @@ Achievements
 Quit
 Settings
 Quit to desktop?
+# The pause menu line that leaves for the title menu. No longer than the game's own wording.
+Main Menu
 Yes
 No
 Back

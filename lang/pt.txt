@@ -6,6 +6,7 @@ Free Play	Jogo Livre
 Achievements	Conquistas
 Quit	Sair
 Settings	Definições
+Main Menu	Menu inicial
 Quit to desktop?	Sair para o ambiente de trabalho?
 Yes	Sim
 No	Não

@@ -6,6 +6,7 @@ Free Play	Juego libre
 Achievements	Logros
 Quit	Salir
 Settings	Ajustes
+Main Menu	Menú principal
 Quit to desktop?	¿Salir al escritorio?
 Yes	Sí
 No	No
