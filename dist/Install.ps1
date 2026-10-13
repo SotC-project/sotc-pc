@@ -36,6 +36,10 @@ Write-Host "Program: $exe"
 # The key pictures in the game's hints are redrawn by this script when bindings change.
 Copy-Item (Join-Path $PSScriptRoot '..\glyphs.py') (Join-Path $PSScriptRoot 'glyphs.py') -Force
 
+# The texts this build adds to the game, in the game's languages (see lang\keys.txt).
+New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot 'lang') | Out-Null
+Copy-Item (Join-Path $PSScriptRoot '..\lang\*.txt') (Join-Path $PSScriptRoot 'lang') -Force
+
 # First line: the game. Second line: the folder holding "user" (saves, settings, caches).
 $launch = Join-Path $PSScriptRoot 'launch.ini'
 Set-Content $launch @(($eboot -replace '\\', '/'), ($PSScriptRoot -replace '\\', '/')) -Encoding ascii

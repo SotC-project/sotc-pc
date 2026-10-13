@@ -1,0 +1,277 @@
+# French. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Partie libre
+Achievements	Succès
+Quit	Quitter
+Settings	Paramètres
+Quit to desktop?	Quitter vers le bureau ?
+Yes	Oui
+No	Non
+Back	Retour
+Loading	Chargement
+HOLD TO SKIP	MAINTENIR POUR PASSER
+The game stopped unexpectedly and was started again.	Le jeu s'est arrêté de façon inattendue et a été relancé.
+# --- Prompts ---
+CHANGE	CHANGER
+BACK	RETOUR
+CONFIRM	CONFIRMER
+SCROLL	DÉFILER
+MENU	MENU
+ACCEPT	ACCEPTER
+D-pad left / right	Croix gauche / droite
+D-pad up / down	Croix haut / bas
+# --- Settings ---
+Graphics	Graphismes
+Graphics, display, button icons and sound	Graphismes, affichage, icônes de boutons et son
+Key Bindings	Commandes
+Choose the keys and mouse buttons	Choisir les touches et boutons de souris
+Game Settings	Paramètres du jeu
+The game's own display, audio, camera and controls	Affichage, audio, caméra et commandes du jeu
+Return to the menu	Retour au menu
+Apply and Restart	Appliquer et redémarrer
+Saves the settings; the game restarts to use them	Enregistre les paramètres ; le jeu redémarre pour les appliquer
+Leave without saving	Quitter sans enregistrer
+Settings.ps1 was not found next to the game	Settings.ps1 est introuvable à côté du jeu
+PowerShell 7 (pwsh) could not be started	Impossible de lancer PowerShell 7 (pwsh)
+The settings could not be saved	Impossible d'enregistrer les paramètres
+Preset	Préréglage
+Sets the detail options below together	Règle ensemble les options de détail ci-dessous
+Frame Rate Limit	Limite d'images par seconde
+Highest frame rate the game will run at	Fréquence d'images maximale du jeu
+VSync	Synchro verticale
+Removes tearing; holds the frame rate to the display's	Supprime le déchirement ; limite la fréquence à celle de l'écran
+Fullscreen	Plein écran
+Fill the screen instead of a window	Occupe tout l'écran au lieu d'une fenêtre
+Window Size	Taille de la fenêtre
+Size of the game window	Taille de la fenêtre de jeu
+FSR Upscaling	Upscaling FSR
+Sharper picture when the window is larger than 1080p. Switches at once	Image plus nette si la fenêtre dépasse 1080p. Effet immédiat
+Shadows	Ombres
+Sun and spot shadows	Ombres du soleil et des sources ponctuelles
+Motion Blur	Flou de mouvement
+Blur on fast movement	Flou lors des mouvements rapides
+Bloom	Bloom
+Glow around bright light	Halo autour des lumières vives
+Depth of Field	Profondeur de champ
+Soft focus in the distance and in cutscenes	Flou au loin et dans les cinématiques
+Vignette	Vignettage
+Darkened picture corners	Coins de l'image assombris
+Fur	Fourrure
+Fur on the colossi	Fourrure des colosses
+Fog	Brouillard
+Distance fog	Brouillard lointain
+Mist Particles	Particules de brume
+Drifting mist. Renders far too bright in this build; best left off	Brume flottante. Trop lumineuse dans cette version ; mieux vaut la désactiver
+Texture Filtering	Filtrage des textures
+Sharpness of surfaces seen at an angle	Netteté des surfaces vues de biais
+Draw Distance	Distance d'affichage
+How far small objects are drawn. Full costs frame rate	Distance d'affichage des petits objets. Complet réduit les performances
+Texture Detail	Détail des textures
+Sharpness of textures	Netteté des textures
+Sharpening	Netteté
+Sharpening of the final picture	Accentuation de l'image finale
+Button Icons	Icônes de boutons
+Auto follows the device you are using	Auto suit le périphérique utilisé
+Achievement Sound	Son des succès
+Loudness of the achievement sound, percent	Volume du son des succès, en pourcentage
+Startup Logos	Logos de démarrage
+The company logos when the game starts, half a minute. Saved at once	Logos des sociétés au lancement, une demi-minute. Enregistré immédiatement
+# --- Setting values ---
+On	Activé
+Off	Désactivé
+Custom	Personnalisé
+Low	Bas
+Medium	Moyen
+High	Élevé
+Ultra	Ultra
+Uncapped	Illimité
+Reduced	Réduit
+Full	Complet
+Normal	Normal
+Strong	Fort
+Auto	Auto
+Keyboard	Clavier
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Avancer
+Move Back	Reculer
+Move Left	Aller à gauche
+Move Right	Aller à droite
+Jump	Sauter
+Attack	Attaquer
+Grab / Use / Pray	Saisir / Utiliser / Prier
+Crouch / Roll	S'accroupir / Rouler
+Raise Sword / Aim	Lever l'épée / Viser
+Mount / Spur Agro	Monter / Éperonner Agro
+Walk / Run	Marcher / Courir
+View Colossus	Voir le colosse
+Camera Focus	Cadrage caméra
+Change Sword	Changer d'épée
+Change Ranged Weapon	Changer d'arme à distance
+Unequip	Déséquiper
+Photo Mode	Mode photo
+World Map	Carte du monde
+Pause	Pause
+Zoom (R3)	Zoom (R3)
+Press a key or mouse button	Appuyez sur une touche ou un bouton de souris
+Esc cancels	Esc annule
+Select, then press the new key or button	Sélectionnez, puis appuyez sur la nouvelle touche ou le nouveau bouton
+Changes are saved as you make them	Les modifications sont enregistrées au fur et à mesure
+Left Mouse	Clic gauche
+Right Mouse	Clic droit
+Middle Mouse	Clic central
+Wheel Up	Molette haut
+Wheel Down	Molette bas
+# --- Free play ---
+Colossus	Colosse
+Choose the colossus to fight	Choisir le colosse à affronter
+Difficulty	Difficulté
+Choose the difficulty	Choisir la difficulté
+Easy	Facile
+Hard	Difficile
+Time Attack	Contre-la-montre
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Combat chronométré aux conditions fixes, classé de D à S+ selon le temps et les dégâts subis.
+Target time	Temps cible
+(approximate)	(approximatif)
+All Weapons and Items	Toutes armes et objets
+Start with every weapon and item	Commencer avec toutes les armes et tous les objets
+Invincibility	Invincibilité
+Wander takes no damage	Wander ne subit aucun dégât
+Unlimited Grip	Prise illimitée
+The grip gauge never empties	La jauge de prise ne se vide jamais
+Maximum Damage	Dégâts maximum
+Every sword strike deals full damage	Chaque coup d'épée inflige des dégâts maximum
+Begin Battle	Commencer le combat
+The game restarts and loads the battle	Le jeu redémarre et charge le combat
+Return to the previous menu	Retour au menu précédent
+# --- Time attack ---
+Target	Cible
+Starts when you move	Démarre au premier mouvement
+Lost	Perdu
+Wander has fallen	Wander est tombé
+the colossus has fallen	le colosse est tombé
+Rank	Rang
+Time	Temps
+Typical time	Temps type
+Health lost	Vie perdue
+# --- Achievements ---
+Platinum	Platine
+Gold	Or
+Silver	Argent
+Bronze	Bronze
+The Horned Boy	Le garçon cornu
+Acquire all trophies	Obtenir tous les trophées
+Speed King	Roi de la vitesse
+Obtain all Time Attack items together as one set	Obtenir tous les objets du Contre-la-montre en un seul ensemble
+Intrepid Mortal	Mortel intrépide
+Max out Wander's health and stamina bars	Porter au maximum les jauges de vie et d'endurance de Wander
+Speed Demon	Démon de vitesse
+Complete Hard Mode under 5:41:28	Terminer le mode Difficile en moins de 5:41:28
+Grounded Scaler	Grimpeur à terre
+Defeat Colossus 8 before it can turn back over	Vaincre le colosse 8 avant qu'il ne puisse se retourner
+Resist the Wrist	Poignet à l'épreuve
+Defeat Colossus 3 without breaking his wrist guard	Vaincre le colosse 3 sans briser son brassard
+Reach the Gate	Atteindre la porte
+Cross the bridge to the entrance of the Forbidden Lands	Traverser le pont jusqu'à l'entrée des Terres interdites
+Last Man Standing	Dernier survivant
+Complete a single playthrough without dying once	Terminer une partie sans mourir une seule fois
+Bearer of the Curse	Porteur de la malédiction
+Complete the game on any difficulty	Terminer le jeu à n'importe quelle difficulté
+Dormin's Rage	Rage de Dormin
+Use Dormin's breath attack	Utiliser le souffle de Dormin
+Seeking Salvation	En quête de salut
+Pray at all shrines	Prier à tous les sanctuaires
+Trick Rider	Cavalier acrobate
+Perform all stunts with Agro	Réaliser toutes les cascades avec Agro
+Fruit of the Garden	Fruit du jardin
+Taste the poisoned fruit	Goûter le fruit empoisonné
+Sword of Her Majesty	Épée de Sa Majesté
+Defeat any colossus with the Queen's Sword	Vaincre un colosse avec l'épée de la reine
+Paint the Target	Marquer la cible
+Use the sword to focus on a vital point	Utiliser l'épée pour viser un point vital
+Fruit of the Land	Fruit de la terre
+Eat a piece of fruit	Manger un fruit
+Skilled Warrior	Guerrier habile
+Defeat a colossus with a downward jump stab	Vaincre un colosse d'un coup d'épée plongeant
+The Past that Defines Thee	Le passé qui te définit
+Defeat any colossus while in Reminiscence Mode	Vaincre un colosse en mode Réminiscence
+Five-Lined Skink	Scinque à cinq lignes
+Collect a silver lizard tail	Récupérer une queue de lézard argentée
+Animals of the Land	Animaux de la terre
+Interact with a dove, hawk, fish and turtle	Interagir avec une colombe, un faucon, un poisson et une tortue
+Boon of the Nomad	Don du nomade
+Find the barrel in the hidden cave	Trouver le tonneau dans la grotte cachée
+Trick Arrow Skills	Tir à l'arc d'exception
+Shoot a lizard with a special arrow	Toucher un lézard avec une flèche spéciale
+Valley of the Wanderer	Vallée du Voyageur
+Defeat the 1st colossus	Vaincre le 1er colosse
+The Mammoth	Le Mammouth
+Defeat the 2nd colossus	Vaincre le 2e colosse
+Wake the Knight	Réveiller le chevalier
+Defeat the 3rd colossus	Vaincre le 3e colosse
+Land of the Gravestones	Terre des pierres tombales
+Defeat the 4th colossus	Vaincre le 4e colosse
+Riding the Wind	Chevaucher le vent
+Defeat the 5th colossus	Vaincre le 5e colosse
+Tomb of the Giant	Tombe du géant
+Defeat the 6th colossus	Vaincre le 6e colosse
+Waves of Lightning	Vagues de foudre
+Defeat the 7th colossus	Vaincre le 7e colosse
+Scaler of the Colosseum	Grimpeur du Colisée
+Defeat the 8th colossus	Vaincre le 8e colosse
+Lurker of the Cave	Rôdeur de la caverne
+Defeat the 9th colossus	Vaincre le 9e colosse
+Mystery in the Sand	Mystère dans le sable
+Defeat the 10th colossus	Vaincre le 10e colosse
+Guardian and the Pit	Le gardien et la fosse
+Defeat the 11th colossus	Vaincre le 11e colosse
+Thunder of the Lake	Tonnerre du lac
+Defeat the 12th colossus	Vaincre le 12e colosse
+Signs amidst the Storm	Signes dans la tempête
+Defeat the 13th colossus	Vaincre le 13e colosse
+Shield of the Colossus	Bouclier du colosse
+Defeat the 14th colossus	Vaincre le 14e colosse
+Valley of the Fallen	Vallée des déchus
+Defeat the 15th colossus	Vaincre le 15e colosse
+Last of the Colossus	Dernier des colosses
+Defeat the 16th colossus	Vaincre le 16e colosse
+# --- First start ---
+We waited, yet no one answered.	Nous avons attendu, mais personne n'a répondu.
+Sometimes, we have to do things ourselves.	Parfois, il faut agir soi-même.
+Prepare the shaders before playing?	Préparer les shaders avant de jouer ?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Recommandé. Cela prend jusqu'à une minute, une seule fois, puis le jeu est fluide.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Si vous passez, le jeu démarre aussitôt et marque de brèves pauses à chaque nouvel élément à l'écran.
+You will be asked again at the next start.	La question sera reposée au prochain lancement.
+Prepare	Préparer
+Skip	Passer
+Preparing shaders	Préparation des shaders
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Nécessaire une fois après une mise à jour du jeu ou du pilote graphique. Les lancements suivants prennent quelques secondes.
+# --- Saving and loading ---
+Save	Sauvegarder
+Load	Charger
+Delete	Supprimer
+New Save	Nouvelle sauvegarde
+Cancel	Annuler
+Corrupted	Corrompu
+There is no saved data	Aucune donnée sauvegardée
+Do you want to save?	Voulez-vous sauvegarder ?
+Do you want to load this saved data?	Voulez-vous charger cette sauvegarde ?
+Do you want to delete this saved data?	Voulez-vous supprimer cette sauvegarde ?
+Do you want to overwrite the existing saved data?	Voulez-vous écraser la sauvegarde existante ?
+Saving...	Sauvegarde en cours...
+Loading...	Chargement en cours...
+Deleting...	Suppression en cours...
+Restoring saved data...	Restauration de la sauvegarde...
+The saved data is corrupted.	Les données sauvegardées sont corrompues.
+Saved successfully.	Sauvegarde réussie.
+Loading complete.	Chargement terminé.
+Deletion complete.	Suppression terminée.
+The saved data is corrupted and will be deleted.	Les données sauvegardées sont corrompues et seront supprimées.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	Les données sauvegardées sont corrompues. Elles seront supprimées et une nouvelle sauvegarde sera créée.
+The saved data is corrupted. The data that was backed up by the system will be restored.	Les données sauvegardées sont corrompues. La copie de secours du système sera restaurée.
+Cannot create more saved data	Impossible de créer d'autres sauvegardes
+There is not saved data.	Aucune donnée sauvegardée.
+The data is corrupted.	Les données sont corrompues.

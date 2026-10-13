@@ -110,9 +110,15 @@ if ($AchievementVolume -ge 0) {
     Set-Content $achievementVolumeFile $AchievementVolume -Encoding ascii
 }
 if ($Prompts) {
-    foreach ($style in 'keyboard', 'xbox') {
-        New-Item -ItemType Directory -Force (Join-Path $texturePack $style) | Out-Null
-        Copy-Item (Join-Path $PSScriptRoot "glyphs\$style\*.bin") (Join-Path $texturePack $style) -Force
+    # The picture sets that come with the program (keyboard, one per button scheme of the game,
+    # and Xbox) are put in place where a set is missing. A set that is there is left alone: it
+    # may have been redrawn for the player's own key bindings (glyphs.py).
+    foreach ($set in Get-ChildItem (Join-Path $PSScriptRoot 'glyphs') -Directory) {
+        $to = Join-Path $texturePack $set.Name
+        if (-not (Test-Path $to)) {
+            New-Item -ItemType Directory -Force $to | Out-Null
+            Copy-Item (Join-Path $set.FullName '*.bin') $to -Force
+        }
     }
     if ($Prompts -eq 'auto') {
         if (Test-Path $forceFile) { Remove-Item $forceFile }

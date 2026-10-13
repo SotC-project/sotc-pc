@@ -1,0 +1,279 @@
+# Every text this build adds to the game, in English, one per line. A language's table
+# (fr.txt, de.txt, ...) has the same lines followed by a tab and the translation.
+# Lines that start with # are notes. \n inside a text is a line break.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play
+Achievements
+Quit
+Settings
+Quit to desktop?
+Yes
+No
+Back
+Loading
+HOLD TO SKIP
+The game stopped unexpectedly and was started again.
+# --- Prompts ---
+CHANGE
+BACK
+CONFIRM
+SCROLL
+MENU
+ACCEPT
+D-pad left / right
+D-pad up / down
+# --- Settings ---
+Graphics
+Graphics, display, button icons and sound
+Key Bindings
+Choose the keys and mouse buttons
+Game Settings
+The game's own display, audio, camera and controls
+Return to the menu
+Apply and Restart
+Saves the settings; the game restarts to use them
+Leave without saving
+Settings.ps1 was not found next to the game
+PowerShell 7 (pwsh) could not be started
+The settings could not be saved
+Preset
+Sets the detail options below together
+Frame Rate Limit
+Highest frame rate the game will run at
+VSync
+Removes tearing; holds the frame rate to the display's
+Fullscreen
+Fill the screen instead of a window
+Window Size
+Size of the game window
+FSR Upscaling
+Sharper picture when the window is larger than 1080p. Switches at once
+Shadows
+Sun and spot shadows
+Motion Blur
+Blur on fast movement
+Bloom
+Glow around bright light
+Depth of Field
+Soft focus in the distance and in cutscenes
+Vignette
+Darkened picture corners
+Fur
+Fur on the colossi
+Fog
+Distance fog
+Mist Particles
+Drifting mist. Renders far too bright in this build; best left off
+Texture Filtering
+Sharpness of surfaces seen at an angle
+Draw Distance
+How far small objects are drawn. Full costs frame rate
+Texture Detail
+Sharpness of textures
+Sharpening
+Sharpening of the final picture
+Button Icons
+Auto follows the device you are using
+Achievement Sound
+Loudness of the achievement sound, percent
+Startup Logos
+The company logos when the game starts, half a minute. Saved at once
+# --- Setting values ---
+On
+Off
+Custom
+Low
+Medium
+High
+Ultra
+Uncapped
+Reduced
+Full
+Normal
+Strong
+Auto
+Keyboard
+Xbox
+Playstation
+# --- Key bindings ---
+Move Forward
+Move Back
+Move Left
+Move Right
+Jump
+Attack
+Grab / Use / Pray
+Crouch / Roll
+Raise Sword / Aim
+Mount / Spur Agro
+Walk / Run
+View Colossus
+Camera Focus
+Change Sword
+Change Ranged Weapon
+Unequip
+Photo Mode
+World Map
+Pause
+Zoom (R3)
+Press a key or mouse button
+Esc cancels
+Select, then press the new key or button
+Changes are saved as you make them
+Left Mouse
+Right Mouse
+Middle Mouse
+Wheel Up
+Wheel Down
+# --- Free play ---
+Colossus
+Choose the colossus to fight
+Difficulty
+Choose the difficulty
+Easy
+Hard
+Time Attack
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.
+Target time
+(approximate)
+All Weapons and Items
+Start with every weapon and item
+Invincibility
+Wander takes no damage
+Unlimited Grip
+The grip gauge never empties
+Maximum Damage
+Every sword strike deals full damage
+Begin Battle
+The game restarts and loads the battle
+Return to the previous menu
+# --- Time attack ---
+Target
+Starts when you move
+Lost
+Wander has fallen
+the colossus has fallen
+Rank
+Time
+Typical time
+Health lost
+# --- Achievements ---
+Platinum
+Gold
+Silver
+Bronze
+The Horned Boy
+Acquire all trophies
+Speed King
+Obtain all Time Attack items together as one set
+Intrepid Mortal
+Max out Wander's health and stamina bars
+Speed Demon
+Complete Hard Mode under 5:41:28
+Grounded Scaler
+Defeat Colossus 8 before it can turn back over
+Resist the Wrist
+Defeat Colossus 3 without breaking his wrist guard
+Reach the Gate
+Cross the bridge to the entrance of the Forbidden Lands
+Last Man Standing
+Complete a single playthrough without dying once
+Bearer of the Curse
+Complete the game on any difficulty
+Dormin's Rage
+Use Dormin's breath attack
+Seeking Salvation
+Pray at all shrines
+Trick Rider
+Perform all stunts with Agro
+Fruit of the Garden
+Taste the poisoned fruit
+Sword of Her Majesty
+Defeat any colossus with the Queen's Sword
+Paint the Target
+Use the sword to focus on a vital point
+Fruit of the Land
+Eat a piece of fruit
+Skilled Warrior
+Defeat a colossus with a downward jump stab
+The Past that Defines Thee
+Defeat any colossus while in Reminiscence Mode
+Five-Lined Skink
+Collect a silver lizard tail
+Animals of the Land
+Interact with a dove, hawk, fish and turtle
+Boon of the Nomad
+Find the barrel in the hidden cave
+Trick Arrow Skills
+Shoot a lizard with a special arrow
+Valley of the Wanderer
+Defeat the 1st colossus
+The Mammoth
+Defeat the 2nd colossus
+Wake the Knight
+Defeat the 3rd colossus
+Land of the Gravestones
+Defeat the 4th colossus
+Riding the Wind
+Defeat the 5th colossus
+Tomb of the Giant
+Defeat the 6th colossus
+Waves of Lightning
+Defeat the 7th colossus
+Scaler of the Colosseum
+Defeat the 8th colossus
+Lurker of the Cave
+Defeat the 9th colossus
+Mystery in the Sand
+Defeat the 10th colossus
+Guardian and the Pit
+Defeat the 11th colossus
+Thunder of the Lake
+Defeat the 12th colossus
+Signs amidst the Storm
+Defeat the 13th colossus
+Shield of the Colossus
+Defeat the 14th colossus
+Valley of the Fallen
+Defeat the 15th colossus
+Last of the Colossus
+Defeat the 16th colossus
+# --- First start ---
+We waited, yet no one answered.
+Sometimes, we have to do things ourselves.
+Prepare the shaders before playing?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.
+You will be asked again at the next start.
+Prepare
+Skip
+Preparing shaders
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.
+# --- Saving and loading ---
+Save
+Load
+Delete
+New Save
+Cancel
+Corrupted
+There is no saved data
+Do you want to save?
+Do you want to load this saved data?
+Do you want to delete this saved data?
+Do you want to overwrite the existing saved data?
+Saving...
+Loading...
+Deleting...
+Restoring saved data...
+The saved data is corrupted.
+Saved successfully.
+Loading complete.
+Deletion complete.
+The saved data is corrupted and will be deleted.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.
+The saved data is corrupted. The data that was backed up by the system will be restored.
+Cannot create more saved data
+There is not saved data.
+The data is corrupted.

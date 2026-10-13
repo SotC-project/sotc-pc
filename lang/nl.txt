@@ -1,0 +1,277 @@
+# Dutch. Machine translation, not yet checked by a native reader.
+# Names of keys (Enter, Space, Left Shift), of the colossi and of the game stay as they are.
+#
+# --- Title and pause menu ---
+Free Play	Vrij spelen
+Achievements	Prestaties
+Quit	Afsluiten
+Settings	Instellingen
+Quit to desktop?	Afsluiten naar bureaublad?
+Yes	Ja
+No	Nee
+Back	Terug
+Loading	Laden
+HOLD TO SKIP	HOUD VAST OM TE OVERSLAAN
+The game stopped unexpectedly and was started again.	Het spel stopte onverwacht en is opnieuw gestart.
+# --- Prompts ---
+CHANGE	WIJZIGEN
+BACK	TERUG
+CONFIRM	BEVESTIGEN
+SCROLL	SCROLLEN
+MENU	MENU
+ACCEPT	ACCEPTEREN
+D-pad left / right	D-pad links / rechts
+D-pad up / down	D-pad omhoog / omlaag
+# --- Settings ---
+Graphics	Beeld
+Graphics, display, button icons and sound	Beeld, weergave, knopiconen en geluid
+Key Bindings	Toetsenindeling
+Choose the keys and mouse buttons	Kies de toetsen en muisknoppen
+Game Settings	Spelinstellingen
+The game's own display, audio, camera and controls	Weergave, geluid, camera en besturing van het spel
+Return to the menu	Terug naar het menu
+Apply and Restart	Toepassen en herstarten
+Saves the settings; the game restarts to use them	Slaat de instellingen op; het spel herstart om ze te gebruiken
+Leave without saving	Verlaten zonder opslaan
+Settings.ps1 was not found next to the game	Settings.ps1 is niet naast het spel gevonden
+PowerShell 7 (pwsh) could not be started	PowerShell 7 (pwsh) kon niet worden gestart
+The settings could not be saved	De instellingen konden niet worden opgeslagen
+Preset	Voorinstelling
+Sets the detail options below together	Stelt de detailopties hieronder samen in
+Frame Rate Limit	Framerate-limiet
+Highest frame rate the game will run at	Hoogste framerate waarmee het spel draait
+VSync	VSync
+Removes tearing; holds the frame rate to the display's	Voorkomt tearing; houdt de framerate gelijk aan die van het scherm
+Fullscreen	Volledig scherm
+Fill the screen instead of a window	Vul het scherm in plaats van een venster
+Window Size	Venstergrootte
+Size of the game window	Grootte van het spelvenster
+FSR Upscaling	FSR-upscaling
+Sharper picture when the window is larger than 1080p. Switches at once	Scherper beeld als het venster groter is dan 1080p. Werkt direct
+Shadows	Schaduwen
+Sun and spot shadows	Zon- en spotschaduwen
+Motion Blur	Bewegingsonscherpte
+Blur on fast movement	Onscherpte bij snelle beweging
+Bloom	Bloom
+Glow around bright light	Gloed rond fel licht
+Depth of Field	Scherptediepte
+Soft focus in the distance and in cutscenes	Zachte focus in de verte en in tussenfilmpjes
+Vignette	Vignet
+Darkened picture corners	Verdonkerde beeldhoeken
+Fur	Vacht
+Fur on the colossi	Vacht van de kolossen
+Fog	Mist
+Distance fog	Mist in de verte
+Mist Particles	Nevdeeltjes
+Drifting mist. Renders far too bright in this build; best left off	Zwevende nevel. Veel te fel in deze versie; laat liever uit
+Texture Filtering	Texturefiltering
+Sharpness of surfaces seen at an angle	Scherpte van schuin geziene oppervlakken
+Draw Distance	Zichtafstand
+How far small objects are drawn. Full costs frame rate	Hoe ver kleine objecten worden getekend. Vol kost framerate
+Texture Detail	Texturedetail
+Sharpness of textures	Scherpte van texturen
+Sharpening	Verscherping
+Sharpening of the final picture	Verscherping van het eindbeeld
+Button Icons	Knopiconen
+Auto follows the device you are using	Auto volgt het apparaat dat je gebruikt
+Achievement Sound	Prestatiegeluid
+Loudness of the achievement sound, percent	Volume van het prestatiegeluid, procent
+Startup Logos	Startlogo's
+The company logos when the game starts, half a minute. Saved at once	De bedrijfslogo's bij het starten, een halve minuut. Direct opgeslagen
+# --- Setting values ---
+On	Aan
+Off	Uit
+Custom	Aangepast
+Low	Laag
+Medium	Gemiddeld
+High	Hoog
+Ultra	Ultra
+Uncapped	Onbegrensd
+Reduced	Verminderd
+Full	Vol
+Normal	Normaal
+Strong	Sterk
+Auto	Auto
+Keyboard	Toetsenbord
+Xbox	Xbox
+Playstation	Playstation
+# --- Key bindings ---
+Move Forward	Vooruit
+Move Back	Achteruit
+Move Left	Naar links
+Move Right	Naar rechts
+Jump	Springen
+Attack	Aanvallen
+Grab / Use / Pray	Grijpen / Gebruiken / Bidden
+Crouch / Roll	Bukken / Rollen
+Raise Sword / Aim	Zwaard heffen / Richten
+Mount / Spur Agro	Opstijgen / Agro aansporen
+Walk / Run	Lopen / Rennen
+View Colossus	Kolos bekijken
+Camera Focus	Camerafocus
+Change Sword	Zwaard wisselen
+Change Ranged Weapon	Afstandswapen wisselen
+Unequip	Uitrusten afdoen
+Photo Mode	Fotomodus
+World Map	Wereldkaart
+Pause	Pauze
+Zoom (R3)	Zoom (R3)
+Press a key or mouse button	Druk op een toets of muisknop
+Esc cancels	Esc annuleert
+Select, then press the new key or button	Selecteer en druk dan op de nieuwe toets of knop
+Changes are saved as you make them	Wijzigingen worden direct opgeslagen
+Left Mouse	Linkermuisknop
+Right Mouse	Rechtermuisknop
+Middle Mouse	Middelste muisknop
+Wheel Up	Wiel omhoog
+Wheel Down	Wiel omlaag
+# --- Free play ---
+Colossus	Kolos
+Choose the colossus to fight	Kies de kolos om te bevechten
+Difficulty	Moeilijkheid
+Choose the difficulty	Kies de moeilijkheidsgraad
+Easy	Makkelijk
+Hard	Moeilijk
+Time Attack	Time Attack
+Timed battle on fixed terms, ranked from D to S+ on time and damage taken.	Tijdgevecht onder vaste voorwaarden, beoordeeld van D tot S+ op tijd en geleden schade.
+Target time	Doeltijd
+(approximate)	(bij benadering)
+All Weapons and Items	Alle wapens en items
+Start with every weapon and item	Begin met alle wapens en items
+Invincibility	Onkwetsbaarheid
+Wander takes no damage	Wander krijgt geen schade
+Unlimited Grip	Onbeperkte greep
+The grip gauge never empties	De grepenmeter raakt nooit leeg
+Maximum Damage	Maximale schade
+Every sword strike deals full damage	Elke zwaardslag doet volle schade
+Begin Battle	Gevecht beginnen
+The game restarts and loads the battle	Het spel herstart en laadt het gevecht
+Return to the previous menu	Terug naar het vorige menu
+# --- Time attack ---
+Target	Doel
+Starts when you move	Start zodra je beweegt
+Lost	Verloren
+Wander has fallen	Wander is gevallen
+the colossus has fallen	de kolos is gevallen
+Rank	Rang
+Time	Tijd
+Typical time	Typische tijd
+Health lost	Verloren gezondheid
+# --- Achievements ---
+Platinum	Platina
+Gold	Goud
+Silver	Zilver
+Bronze	Brons
+The Horned Boy	De jongen met de hoorns
+Acquire all trophies	Verdien alle trofeeën
+Speed King	Snelheidskoning
+Obtain all Time Attack items together as one set	Verkrijg alle Time Attack-items samen als één set
+Intrepid Mortal	Onverschrokken sterveling
+Max out Wander's health and stamina bars	Maximaliseer Wanders gezondheids- en uithoudingsbalken
+Speed Demon	Snelheidsduivel
+Complete Hard Mode under 5:41:28	Voltooi de moeilijke modus in minder dan 5:41:28
+Grounded Scaler	Aardse beklimmer
+Defeat Colossus 8 before it can turn back over	Versla Kolos 8 voordat hij zich kan omdraaien
+Resist the Wrist	Weersta de pols
+Defeat Colossus 3 without breaking his wrist guard	Versla Kolos 3 zonder zijn polsbeschermer te breken
+Reach the Gate	Bereik de poort
+Cross the bridge to the entrance of the Forbidden Lands	Steek de brug over naar de ingang van de Verboden Landen
+Last Man Standing	Laatste man overeind
+Complete a single playthrough without dying once	Speel het spel uit zonder één keer te sterven
+Bearer of the Curse	Drager van de vloek
+Complete the game on any difficulty	Speel het spel uit op een willekeurige moeilijkheid
+Dormin's Rage	Dormins woede
+Use Dormin's breath attack	Gebruik Dormins adem-aanval
+Seeking Salvation	Op zoek naar redding
+Pray at all shrines	Bid bij alle heiligdommen
+Trick Rider	Trucruiter
+Perform all stunts with Agro	Voer alle stunts uit met Agro
+Fruit of the Garden	Vrucht van de tuin
+Taste the poisoned fruit	Proef de vergiftigde vrucht
+Sword of Her Majesty	Zwaard van Hare Majesteit
+Defeat any colossus with the Queen's Sword	Versla een kolos met het Zwaard van de Koningin
+Paint the Target	Markeer het doelwit
+Use the sword to focus on a vital point	Gebruik het zwaard om een zwakke plek te focussen
+Fruit of the Land	Vrucht van het land
+Eat a piece of fruit	Eet een stuk fruit
+Skilled Warrior	Bekwame krijger
+Defeat a colossus with a downward jump stab	Versla een kolos met een neerwaartse sprongsteek
+The Past that Defines Thee	Het verleden dat jou bepaalt
+Defeat any colossus while in Reminiscence Mode	Versla een kolos in de Herinneringsmodus
+Five-Lined Skink	Vijflijnige skink
+Collect a silver lizard tail	Verzamel een zilveren hagedissenstaart
+Animals of the Land	Dieren van het land
+Interact with a dove, hawk, fish and turtle	Kom in aanraking met een duif, havik, vis en schildpad
+Boon of the Nomad	Zegen van de nomade
+Find the barrel in the hidden cave	Vind het vat in de verborgen grot
+Trick Arrow Skills	Trucpijlvaardigheid
+Shoot a lizard with a special arrow	Schiet een hagedis neer met een speciale pijl
+Valley of the Wanderer	Vallei van de zwerver
+Defeat the 1st colossus	Versla de 1e kolos
+The Mammoth	De mammoet
+Defeat the 2nd colossus	Versla de 2e kolos
+Wake the Knight	Wek de ridder
+Defeat the 3rd colossus	Versla de 3e kolos
+Land of the Gravestones	Land van de grafstenen
+Defeat the 4th colossus	Versla de 4e kolos
+Riding the Wind	Rijden op de wind
+Defeat the 5th colossus	Versla de 5e kolos
+Tomb of the Giant	Graf van de reus
+Defeat the 6th colossus	Versla de 6e kolos
+Waves of Lightning	Golven van bliksem
+Defeat the 7th colossus	Versla de 7e kolos
+Scaler of the Colosseum	Beklimmer van het Colosseum
+Defeat the 8th colossus	Versla de 8e kolos
+Lurker of the Cave	Loerder van de grot
+Defeat the 9th colossus	Versla de 9e kolos
+Mystery in the Sand	Mysterie in het zand
+Defeat the 10th colossus	Versla de 10e kolos
+Guardian and the Pit	Bewaker en de put
+Defeat the 11th colossus	Versla de 11e kolos
+Thunder of the Lake	Donder van het meer
+Defeat the 12th colossus	Versla de 12e kolos
+Signs amidst the Storm	Tekens in de storm
+Defeat the 13th colossus	Versla de 13e kolos
+Shield of the Colossus	Schild van de kolos
+Defeat the 14th colossus	Versla de 14e kolos
+Valley of the Fallen	Vallei van de gevallenen
+Defeat the 15th colossus	Versla de 15e kolos
+Last of the Colossus	Laatste van de kolossen
+Defeat the 16th colossus	Versla de 16e kolos
+# --- First start ---
+We waited, yet no one answered.	We wachtten, maar niemand antwoordde.
+Sometimes, we have to do things ourselves.	Soms moeten we dingen zelf doen.
+Prepare the shaders before playing?	Shaders voorbereiden voor het spelen?
+Recommended. It takes up to a minute, once, and the game then runs smoothly.	Aanbevolen. Eenmalig, tot een minuut; daarna loopt het spel soepel.
+If skipped, the game starts at once and pauses briefly whenever something new comes on screen.	Bij overslaan start het spel direct en stokt het kort telkens als er iets nieuws in beeld komt.
+You will be asked again at the next start.	Bij de volgende start word je het opnieuw gevraagd.
+Prepare	Voorbereiden
+Skip	Overslaan
+Preparing shaders	Shaders voorbereiden
+Needed once after an update of the game or of the graphics driver. Later starts take a few seconds.	Eenmalig nodig na een update van het spel of de grafische driver. Latere starts duren enkele seconden.
+# --- Saving and loading ---
+Save	Opslaan
+Load	Laden
+Delete	Verwijderen
+New Save	Nieuwe save
+Cancel	Annuleren
+Corrupted	Beschadigd
+There is no saved data	Er zijn geen opgeslagen gegevens
+Do you want to save?	Wil je opslaan?
+Do you want to load this saved data?	Wil je deze opgeslagen gegevens laden?
+Do you want to delete this saved data?	Wil je deze opgeslagen gegevens verwijderen?
+Do you want to overwrite the existing saved data?	Wil je de bestaande opgeslagen gegevens overschrijven?
+Saving...	Opslaan...
+Loading...	Laden...
+Deleting...	Verwijderen...
+Restoring saved data...	Opgeslagen gegevens herstellen...
+The saved data is corrupted.	De opgeslagen gegevens zijn beschadigd.
+Saved successfully.	Succesvol opgeslagen.
+Loading complete.	Laden voltooid.
+Deletion complete.	Verwijderen voltooid.
+The saved data is corrupted and will be deleted.	De opgeslagen gegevens zijn beschadigd en worden verwijderd.
+The saved data is corrupted. This saved data will be deleted and a new one will be created.	De opgeslagen gegevens zijn beschadigd. Ze worden verwijderd en er wordt een nieuwe save gemaakt.
+The saved data is corrupted. The data that was backed up by the system will be restored.	De opgeslagen gegevens zijn beschadigd. De door het systeem opgeslagen back-up wordt hersteld.
+Cannot create more saved data	Kan geen opgeslagen gegevens meer aanmaken
+There is not saved data.	Er zijn geen opgeslagen gegevens.
+The data is corrupted.	De gegevens zijn beschadigd.
