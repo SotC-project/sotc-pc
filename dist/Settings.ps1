@@ -151,6 +151,9 @@ if (Test-Path $baseArgs) {
     $lines += '+doIndexBufferCulling=false', '+doSunShadowIndexBufferCulling=false'
     # Seconds the title menu waits before the opening film starts by itself.
     $lines += '+attractMovieTime=90'
+    # The game then steps by time passed, not by frame: without it the game runs faster than it
+    # should whenever the frame rate is above 60.
+    $lines += '+TargetFramesPerSeconds=Unlocked'
     $lines += "+r_enableCascadeShadows=$(& $flag $graphics.Shadows)", "+r_enableSpotShadows=$(& $flag $graphics.Shadows)"
     $lines += "+r_motionBlurEnable=$(& $flag $graphics.MotionBlur)"
     $lines += "+r_bloomEnable=$(& $flag $graphics.Bloom)"
