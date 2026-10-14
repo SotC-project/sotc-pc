@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
@@ -52,10 +53,10 @@ namespace Sotc::Menu {
 
 namespace {
 
-enum class Page { Main, FreePlay, Graphics, Controls, Quit };
+enum class Page { FreePlay, Graphics, Controls, Quit };
 
 std::atomic_bool open{false};
-Page page = Page::Main;
+Page page = Page::FreePlay;
 int selected = 0;
 
 // Free play choices.
@@ -608,27 +609,7 @@ std::string KeyLabel(const std::string& key) {
 
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
-    if (page == Page::Main) {
-        // The PC settings, opened from the Settings line of the game's title and pause menus;
-        // free play and the achievements have their own lines in the title menu.
-        rows.push_back({"Graphics", "", "Graphics, display, button icons and sound",
-                        true, false, [](int) {
-                            LoadOptions();
-                            GoTo(Page::Graphics);
-                        }});
-        rows.push_back({"Key Bindings", "", "Choose the keys and mouse buttons", true, false,
-                        [](int) {
-                            bindings_dirty = true;
-                            GoTo(Page::Controls);
-                        }});
-        rows.push_back({"Game Settings", "", "The game's own display, audio, camera and controls",
-                        true, false, [](int) {
-                            open = false;
-                            MenuExt::PassToGameSettings();
-                        }});
-        // The game's menu, with its own way out, is behind.
-        rows.push_back({"Back", "", "Return to the menu", true, false, [](int) { open = false; }});
-    } else if (page == Page::Quit) {
+    if (page == Page::Quit) {
         rows.push_back({"No", "", "", true, false, [](int) { open = false; }});
         rows.push_back({"Yes", "", "", true, false, [](int) { QuitGame(); }});
     } else if (page == Page::FreePlay) {
@@ -717,7 +698,7 @@ std::vector<Row> BuildRows() {
                         }});
         rows.push_back({"Back", "", "Leave without saving", true, false, [](int d) {
                             if (d == 0) {
-                                GoTo(Page::Main);
+                                open = false;
                             }
                         }});
     } else {
@@ -738,7 +719,7 @@ std::vector<Row> BuildRows() {
         }
         rows.push_back({"Back", "", "Changes are saved as you make them", true, false, [](int d) {
                             if (d == 0) {
-                                GoTo(Page::Main);
+                                open = false;
                             }
                         }});
     }
@@ -754,21 +735,16 @@ const char* PageTitle() {
     case Page::Controls:
         return "Key Bindings";
     case Page::Quit:
-        return "Quit to desktop?";
     default:
-        return "Settings";
+        return "Quit to desktop?";
     }
 }
 
 } // namespace
 
 void Toggle() {
-    if (!open) {
-        GoTo(Page::Main);
-        opened_on_page = false;
-    }
     capture_row = -1;
-    open = !open;
+    open = false;
 }
 
 bool IsOpen() {
@@ -843,10 +819,20 @@ bool RecoverFromCrash() {
     return true;
 }
 
-void OpenSettings() {
+void OpenGraphics() {
     capture_row = -1;
-    GoTo(Page::Main);
-    opened_on_page = false;
+    LoadOptions();
+    GoTo(Page::Graphics);
+    opened_on_page = true;
+    wait_for_release = true;
+    open = true;
+}
+
+void OpenKeyBindings() {
+    capture_row = -1;
+    bindings_dirty = true;
+    GoTo(Page::Controls);
+    opened_on_page = true;
     wait_for_release = true;
     open = true;
 }
@@ -1032,20 +1018,40 @@ void Draw() {
     if (!in_place) {
         Ui::Veil(0.72f);
     }
-    const float title_x = display.x * (in_place ? 0.076f : 0.15f);
-    const float label_x = display.x * (in_place ? 0.089f : 0.20f);
+    // The graphics and key binding pages are pages of the game's Settings list, opened over it
+    // like its Display or Audio: set out as those are, on the same darker band across the
+    // screen, labels at the left, values with their arrows in a column at the right.
+    const bool option_page = page == Page::Graphics || page == Page::Controls;
+    if (option_page) {
+        const float top = display.y * 0.175f, bottom = display.y * 0.815f;
+        // The band's edges are torn like the game's: a ragged line, the same every frame.
+        constexpr int Steps = 96;
+        constexpr ImU32 Shade = IM_COL32(0, 0, 0, 27);
+        for (int i = 0; i < Steps; i++) {
+            const float x0 = display.x * i / Steps, x1 = display.x * (i + 1) / Steps;
+            const auto rag = [&](int k, float seed) {
+                return (std::sin(k * 1.7f + seed) * 0.6f + std::sin(k * 0.43f + seed * 2.0f)) *
+                       4.0f * scale;
+            };
+            draw->AddRectFilled({x0, top + rag(i, 0.3f)}, {x1, bottom + rag(i, 1.9f)}, Shade);
+        }
+    }
+    const bool over_title = in_place && !Screens::PauseMenu() && !option_page;
+    const float title_x = display.x * (option_page ? 0.152f : in_place ? 0.076f : 0.15f);
+    const float label_x = display.x * (option_page ? 0.225f : in_place ? 0.089f : 0.20f);
     // On the title the ruin stands in the right half of the picture: the values are kept to
     // the sky, left of it, where their dark arrows show.
-    const bool over_title = in_place && !Screens::PauseMenu();
-    const float value_x = display.x * (over_title ? 0.385f : in_place ? 0.40f : 0.58f);
-    const float arrow_reach = (over_title ? 165.0f : 200.0f) * scale;
-    float y = display.y * (in_place ? 0.318f : 0.17f);
+    const float value_x =
+        display.x * (option_page ? 0.69f : over_title ? 0.385f : in_place ? 0.40f : 0.58f);
+    const float arrow_reach =
+        option_page ? display.x * 0.089f : (over_title ? 165.0f : 200.0f) * scale;
+    float y = display.y * (option_page ? 0.215f : in_place ? 0.318f : 0.17f);
     Ui::Text(draw, (in_place ? 46.0f : 60.0f) * scale, {title_x, y}, Ui::TextBright, PageTitle());
-    y += (in_place ? 68.0f : 100.0f) * scale;
+    y += (option_page ? 62.0f : in_place ? 68.0f : 100.0f) * scale;
     const float row_height = (in_place ? 45.0f : 50.0f) * scale;
     const float text_size = 34.0f * scale;
     // Long pages scroll to keep the selection in view.
-    constexpr int MaxVisible = 11;
+    const int MaxVisible = option_page ? 12 : 11;
     static int first_visible = 0;
     if (count <= MaxVisible) {
         first_visible = 0;
@@ -1093,7 +1099,7 @@ void Draw() {
     }
     if (count > MaxVisible) {
         // Where the list stands, like the game's own scroll marker.
-        const float track_x = display.x * 0.82f;
+        const float track_x = display.x * (option_page ? 0.80f : 0.82f);
         const float track_bottom = y + row_height * MaxVisible;
         draw->AddLine({track_x, y}, {track_x, track_bottom}, Ui::TextNormal, 1.5f);
         draw->AddCircleFilled(
@@ -1102,19 +1108,37 @@ void Draw() {
     }
     // The foot of the title picture is dark stone: the description and the prompts are
     // written pale there, as over a battle.
-    if (in_place && !Screens::PauseMenu()) {
+    if (over_title) {
         Ui::SetInk(false);
     }
     const Row& current = rows[selected];
     if (!current.description.empty()) {
         // On the title the left of the picture's foot is sky; the line is set further right,
         // over the stone.
-        const float centre = in_place && !Screens::PauseMenu() ? 0.60f : 0.5f;
-        Ui::TextCentered(draw, 28.0f * scale, display.x * centre, display.y * 0.86f,
+        const float centre = over_title ? 0.60f : 0.5f;
+        Ui::TextCentered(draw, 28.0f * scale, display.x * centre,
+                         display.y * (option_page ? 0.862f : 0.86f),
                          Ui::TextNormal, current.description);
     }
     const float prompt_x = display.x * 0.95f;
-    float prompt_y = display.y * 0.865f;
+    float prompt_y = display.y * (option_page ? 0.885f : 0.865f);
+    if (option_page) {
+        // The Settings list's own prompts stay on screen under the page: covered with the
+        // haze they stand on, soft at the edges, before this page's are written there.
+        constexpr int Layers = 6;
+        for (int i = 0; i < Layers; i++) {
+            const float grow = (Layers - i) * 5.0f * scale;
+            draw->AddRectFilled({display.x * 0.875f - grow, display.y * 0.885f - grow},
+                                {display.x + grow, display.y * 0.99f + grow},
+                                IM_COL32(201, 201, 200, 255 / Layers + 10), 8.0f * scale);
+            if (Lang::GameCode() == "ar") {
+                // The game's menus in Arabic have their prompts at the left.
+                draw->AddRectFilled({-grow, display.y * 0.885f - grow},
+                                    {display.x * 0.125f + grow, display.y * 0.99f + grow},
+                                    IM_COL32(201, 201, 200, 255 / Layers + 10), 8.0f * scale);
+            }
+        }
+    }
     if (current.adjustable) {
         prompt_y += Ui::Prompt(draw, prompt_x, prompt_y, "CHANGE", Ui::Action::Change);
     }
@@ -1126,12 +1150,8 @@ void Draw() {
     if (activate_row >= 0 && rows[activate_row].enabled && rows[activate_row].act) {
         rows[activate_row].act(activate_direction);
     } else if (back) {
-        if (page == Page::Main || page == Page::Quit ||
-            (page == Page::FreePlay && opened_on_page)) {
-            open = false;
-        } else {
-            GoTo(Page::Main);
-        }
+        // Every page was opened from a line of the game's menus, which is behind it.
+        open = false;
     }
 }
 

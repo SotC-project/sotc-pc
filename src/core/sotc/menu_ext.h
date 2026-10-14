@@ -12,11 +12,11 @@ class GameController;
 
 namespace Sotc::MenuExt {
 
-/// Extra lines under the game's own title menu (Free Play, Achievements) and pause menu
-/// (Achievements). The game's own Settings line opens the port's settings page, which holds the
-/// PC options and leads on to the game's settings. The lists are the game's, so the lines are drawn over the
-/// picture where the next entries would be, and the cursor is taken over when it would step past
-/// the game's last entry. Where the game's cursor is comes from the arrow it draws (see
+/// Extra lines under the game's own title menu (Free Play, Achievements, Quit) and under the
+/// game's own Settings list (Graphics, Key Bindings: the PC options, as pages of that list like
+/// its Display or Audio). The lists are the game's, so the lines are drawn over the picture where
+/// the next entries would be, and the cursor is taken over when it would step past the game's
+/// last entry. Where the game's cursor is comes from the arrow it draws (see
 /// Screens::ArrowAt).
 
 enum class Nav { Up, Down, Confirm, Back };
@@ -40,8 +40,6 @@ void Draw();
 bool HideText();
 /// True while the game's title menu is on screen with its cursor on one of its lines.
 bool AtTitleRoot();
-/// Confirms the game's Settings line for real, once the port's settings page has closed.
-void PassToGameSettings();
 /// True while the cursor is on an extra line: the game's own arrow is then drawn blank.
 bool HideArrow();
 

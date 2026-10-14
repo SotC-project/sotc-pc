@@ -49,7 +49,7 @@ constexpr float RowStep = 1.0f / 12.0f; // one menu line
 constexpr float ArrowHeight = 0.074f;
 constexpr float SameLine = 0.012f; // two cursor heights this close are the same line
 
-enum class Kind { None, Title, Pause };
+enum class Kind { None, Title, Pause, Settings };
 
 struct Root {
     float arrow_x; // left edge of the arrow
@@ -66,16 +66,50 @@ constexpr Root PauseRoot{-0.695f, {nullptr, nullptr, nullptr}, 0};
 constexpr Root TitleRootRtl{-0.3177f, {"Free Play", "Achievements", "Quit"}, 3};
 constexpr Root PauseRootRtl{0.6531f, {nullptr, nullptr, nullptr}, 0};
 
+// The game's Settings list (Game, Display, Audio, ...) gets the PC options as two more pages.
+// It stands in the pause menu's column, from the title and from the pause menu alike; from the
+// title it has seven lines (Language and Copyright as well), from the pause menu five, and it
+// stands a little higher from the title.
+constexpr Root SettingsRoot{-0.6948f, {"Graphics", "Key Bindings", nullptr}, 2};
+constexpr Root SettingsRootRtl{0.6531f, {"Graphics", "Key Bindings", nullptr}, 2};
+constexpr float TitleSettingsFirstY = 0.1389f;
+constexpr int TitleSettingsLines = 7;
+constexpr float PauseSettingsFirstY = 0.0593f;
+constexpr int PauseSettingsLines = 5;
+// Which of the two the Settings list is: the menu it was opened from, the last one seen.
+std::atomic_bool settings_from_title{true};
+
 bool Mirrored() {
     static const bool mirrored = Lang::GameCode() == "ar";
     return mirrored;
 }
 
 const Root& RootOf(Kind kind) {
+    if (kind == Kind::Settings) {
+        return Mirrored() ? SettingsRootRtl : SettingsRoot;
+    }
     if (Mirrored()) {
         return kind == Kind::Pause ? PauseRootRtl : TitleRootRtl;
     }
     return kind == Kind::Pause ? PauseRoot : TitleRoot;
+}
+
+float SettingsFirstY() {
+    return settings_from_title.load() ? TitleSettingsFirstY : PauseSettingsFirstY;
+}
+
+int SettingsLines() {
+    return settings_from_title.load() ? TitleSettingsLines : PauseSettingsLines;
+}
+
+/// True when a cursor height is on one of the Settings list's lines.
+bool OnSettingsLine(float y) {
+    for (int line = 0; line < SettingsLines(); line++) {
+        if (std::abs(y - (SettingsFirstY() - line * RowStep)) < 0.006f) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::mutex mutex;
@@ -114,7 +148,7 @@ std::deque<Tap> taps;
 
 // A click on one of the game's own lines: the cursor is walked there by presses, and when it
 // has arrived the line is chosen.
-enum class Then { Nothing, Choose, Settings, StepToFirst };
+enum class Then { Nothing, Choose, StepToFirst };
 struct Seek {
     bool active = false;
     float y = 0.0f;
@@ -133,6 +167,12 @@ Kind Current(float& y) {
     float x;
     if (!Screens::Arrow(x, y)) {
         return Kind::None;
+    }
+    // The game's Settings list, opened from either menu. (The menu of a paused cutscene has
+    // lines of its own in that column.)
+    if (std::abs(x - RootOf(Kind::Settings).arrow_x) < 0.004f && OnSettingsLine(y) &&
+        !paused_in_cutscene.load()) {
+        return Kind::Settings;
     }
     const Kind kind = Screens::PauseMenu() ? Kind::Pause : Kind::Title;
     if (std::abs(x - RootOf(kind).arrow_x) > 0.004f) {
@@ -166,11 +206,23 @@ Kind Current(float& y) {
             }
         }
     }
+    settings_from_title = kind == Kind::Title;
     return kind;
 }
 
 float LastY(Kind kind) {
+    if (kind == Kind::Settings) {
+        return SettingsFirstY() - (SettingsLines() - 1) * RowStep;
+    }
     return kind == Kind::Pause ? PauseLastY : title_last_y.load();
+}
+
+/// The list's first line; Unknown while the title menu's has not been found out.
+float FirstY(Kind kind) {
+    if (kind == Kind::Settings) {
+        return SettingsFirstY();
+    }
+    return kind == Kind::Pause ? PauseFirstY : title_first_y.load();
 }
 
 bool Known(Kind kind) {
@@ -180,20 +232,6 @@ bool Known(Kind kind) {
 bool AtLast(Kind kind, float y) {
     return Known(kind) && std::abs(y - LastY(kind)) < SameLine;
 }
-
-/// The game's own Settings line: first in the pause menu, and in the title menu the one above
-/// Image Gallery, its last. Confirming it opens the port's settings page, which holds the PC
-/// options and a line that carries on into the game's own settings.
-float SettingsY(Kind kind) {
-    return kind == Kind::Pause ? PauseFirstY : LastY(kind) + RowStep;
-}
-
-bool AtSettings(Kind kind, float y) {
-    return Known(kind) && std::abs(y - SettingsY(kind)) < SameLine;
-}
-
-// Set by the settings page's "Game Settings" line: confirm the game's Settings line for real.
-std::atomic_bool pass_settings{false};
 
 bool PanelOpen() {
     return Menu::IsOpen() || Achievements::IsPanelOpen();
@@ -205,7 +243,12 @@ bool PanelOpen() {
 /// in between it is on the line that is one step from both. That works out for the title menu's
 /// five lines with a save and its three without; a list of another length costs a step more
 /// here and there, which the walk to the wanted line makes up.
-float HiddenY(int index) {
+float HiddenY(Kind kind, int index) {
+    if (kind == Kind::Settings) {
+        // Two lines: on the first the game's cursor is on the line above the last, on the
+        // second on the line below the first.
+        return index == 0 ? LastY(kind) + RowStep : FirstY(kind) - RowStep;
+    }
     const float last = title_last_y.load();
     const float first = title_first_y.load();
     if (index == 0) {
@@ -227,10 +270,10 @@ void SeekTo(float y, Then then = Then::Nothing, bool returning = false) {
 }
 
 /// Puts the cursor on an extra line.
-void GoToExtra(int index) {
+void GoToExtra(Kind kind, int index) {
     on_extra = true;
     extra_index = index;
-    SeekTo(HiddenY(index));
+    SeekTo(HiddenY(kind, index));
 }
 
 /// What stands at a place of the screen in a menu: nothing, an extra line, or a line of the
@@ -265,6 +308,14 @@ Spot SpotAt(Kind kind, float sx, float sy) {
     if (kind == Kind::Pause && row < -3) {
         return spot;
     }
+    if (kind == Kind::Settings) {
+        if (row < -(SettingsLines() - 1)) {
+            return spot;
+        }
+        spot.what = Spot::What::Line;
+        spot.y = LastY(kind) - row * RowStep;
+        return spot;
+    }
     spot.what = Spot::What::Line;
     // The four lines at the foot of either menu are a line apart. Higher up the title menu
     // with a save has Continue and the lines about it: that place means Continue, its first
@@ -282,9 +333,6 @@ Spot SpotAt(Kind kind, float sx, float sy) {
     }
     if (row >= -3) {
         spot.y = LastY(kind) - row * RowStep;
-        if ((row == -1 && kind == Kind::Title) || (row == -3 && kind == Kind::Pause)) {
-            spot.then = Then::Settings;
-        }
     } else {
         spot.y = LastY(kind);
         spot.then = Then::StepToFirst;
@@ -302,6 +350,10 @@ void Activate(Kind kind, int index) {
         }
     } else if (line == "Quit") {
         Menu::OpenQuit();
+    } else if (line == "Graphics") {
+        Menu::OpenGraphics();
+    } else if (line == "Key Bindings") {
+        Menu::OpenKeyBindings();
     }
 }
 
@@ -594,16 +646,16 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
                 on_extra = false;
                 SeekTo(LastY(kind), Then::Nothing, true);
             } else {
-                GoToExtra(extra_index - 1);
+                GoToExtra(kind, extra_index - 1);
             }
             break;
         case Nav::Down:
             if (extra_index + 1 < root.num_lines) {
-                GoToExtra(extra_index + 1);
-            } else if (title_first_y.load() < 1.5f) {
+                GoToExtra(kind, extra_index + 1);
+            } else if (FirstY(kind) < 1.5f) {
                 // Round to the game's first line.
                 on_extra = false;
-                SeekTo(title_first_y.load(), Then::Nothing, true);
+                SeekTo(FirstY(kind), Then::Nothing, true);
             }
             break;
         case Nav::Confirm:
@@ -616,21 +668,16 @@ bool OnNav(Nav nav, bool pressed, Input::GameController* controller) {
         swallowed[slot] = true;
         return true;
     }
-    if (nav == Nav::Confirm && AtSettings(kind, y) && taps.empty()) {
-        Menu::OpenSettings();
-        swallowed[slot] = true;
-        return true;
-    }
     if (root.num_lines > 0 && taps.empty() && !seek.active) {
         // The extra lines stand between the game's last line and its first: down from the
         // last and up from the first lead onto them.
         if (nav == Nav::Down && AtLast(kind, y)) {
-            GoToExtra(0);
+            GoToExtra(kind, 0);
             swallowed[slot] = true;
             return true;
         }
-        if (nav == Nav::Up && std::abs(y - title_first_y.load()) < SameLine) {
-            GoToExtra(root.num_lines - 1);
+        if (nav == Nav::Up && std::abs(y - FirstY(kind)) < SameLine) {
+            GoToExtra(kind, root.num_lines - 1);
             swallowed[slot] = true;
             return true;
         }
@@ -672,7 +719,7 @@ bool OnClick(float x, float y) {
     }
     if (spot.what == Spot::What::Extra) {
         if (!on_extra || extra_index != spot.extra) {
-            GoToExtra(spot.extra);
+            GoToExtra(kind, spot.extra);
         }
         Activate(kind, spot.extra);
         return true;
@@ -698,10 +745,6 @@ bool AtTitleRoot() {
     return Current(y) == Kind::Title;
 }
 
-void PassToGameSettings() {
-    pass_settings = true;
-}
-
 bool HideArrow() {
     return on_extra || arrow_returning.load() || HideText();
 }
@@ -717,9 +760,6 @@ void Draw() {
     }
     Input::GameController* controller = pad.load();
 
-    if (!PanelOpen() && pass_settings.exchange(false)) {
-        QueueTap(OrbisPadButtonDataOffset::Cross);
-    }
     // Presses on their way to the game: down for a twentieth of a second, then up for one. By
     // the clock: the picture may be drawn several times for each time the game reads the pad.
     const u64 now_ms = SDL_GetTicks();
@@ -774,7 +814,9 @@ void Draw() {
         }
         return;
     }
-    RenameQuitLine(kind == Kind::Pause ? 1 : 0);
+    if (kind != Kind::Settings) {
+        RenameQuitLine(kind == Kind::Pause ? 1 : 0);
+    }
 
     // Free play has no title menu of its own: leaving a battle for the main menu (the pause
     // menu's last line, or End after a defeat) starts the game again plainly.
@@ -866,9 +908,6 @@ void Draw() {
             case Then::Choose:
                 QueueTap(OrbisPadButtonDataOffset::Cross);
                 break;
-            case Then::Settings:
-                Menu::OpenSettings();
-                break;
             case Then::StepToFirst:
                 QueueTap(OrbisPadButtonDataOffset::Down);
                 QueueTap(OrbisPadButtonDataOffset::Cross);
@@ -894,7 +933,7 @@ void Draw() {
         const Spot spot = SpotAt(kind, sx, sy);
         if (spot.what == Spot::What::Extra) {
             if (!on_extra || extra_index != spot.extra) {
-                GoToExtra(spot.extra);
+                GoToExtra(kind, spot.extra);
             }
         } else if (spot.what == Spot::What::Line && spot.then != Then::StepToFirst) {
             const bool there = seek.active ? std::abs(seek.y - spot.y) < SameLine

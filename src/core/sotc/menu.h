@@ -8,12 +8,15 @@ union SDL_Event;
 
 namespace Sotc::Menu {
 
-/// Opens or closes the PC menu (F2, L3 + R3): free play, achievements, quit.
+/// Closes the page that is open.
 void Toggle();
 bool IsOpen();
-/// Opens the free play page, or the PC settings page, from a line of the game's own menu.
+/// Opens a page from a line of the game's own menus: free play from the title menu, the PC
+/// options (graphics, key bindings) from the game's Settings list, where they stand as pages of
+/// that list.
 void OpenFreePlay();
-void OpenSettings();
+void OpenGraphics();
+void OpenKeyBindings();
 /// The question before leaving to the desktop.
 void OpenQuit();
 /// True while the page is shown in the place of the game's title or pause menu.
@@ -32,8 +35,8 @@ float SceneShift();
 /// game again from its beginning instead (the game saves by itself, so little is lost).
 /// Not in scripted test runs, and not a third time in a row. True when a restart was begun.
 bool RecoverFromCrash();
-/// The menu hotkey (F2, L3 + R3). It only works during a free play battle, where the result
-/// screen points to it; everywhere else the menu is reached from the game's menus.
+/// The menu hotkey (F2, L3 + R3): closes a page that is open. The pages are reached from the
+/// game's own menus only.
 void HotkeyToggle();
 /// The game announced the start of play on its console. A free play battle boots into the
 /// starting field first and warps to the colossus a moment later, announcing play twice.
