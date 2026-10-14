@@ -36,6 +36,29 @@ Ryzen 7 5700X3D, Radeon RX 9060 XT, 1080p, frame rate uncapped. Average / 1% low
 
 ![Field with Agro, High preset, with the performance readout](docs/img/benchmark_field_with_agro_high.jpg)
 
+### Battles and scenes
+
+High preset, 1080p, no frame limit, with the performance readout. Frames of the benchmark videos recorded 2026-10-11 (build 61ad3f5); the averages are over each 24 s recording.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/img/battle_pelagia_high.jpg" alt="Pelagia, 12th colossus"><br>Pelagia, 12th colossus: average 74 FPS</td>
+<td width="50%"><img src="docs/img/battle_phaedra_high.jpg" alt="Phaedra, 4th colossus"><br>Phaedra, 4th colossus: average 93 FPS</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/img/battle_gaius_high.jpg" alt="Gaius, 3rd colossus"><br>Gaius, 3rd colossus: average 57 FPS</td>
+<td width="50%"><img src="docs/img/battle_malus_high.jpg" alt="Malus, 16th colossus"><br>Malus, 16th colossus: average 63 FPS</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/img/battle_basaran_high.jpg" alt="Basaran, 9th colossus, firing"><br>Basaran, 9th colossus, firing: average 78 FPS</td>
+<td width="50%"><img src="docs/img/scene_dirge_desert_high.jpg" alt="Dirge's desert"><br>Dirge's desert: average 125 FPS</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/img/scene_phalanx_desert_high.jpg" alt="Phalanx's desert"><br>Phalanx's desert: average 76 FPS</td>
+<td width="50%"><img src="docs/img/scene_shrine_of_worship_high.jpg" alt="Shrine of Worship"><br>Shrine of Worship: average 54 FPS</td>
+</tr>
+</table>
+
 Method, the third scene and the requirements: [showcase/BENCHMARK.md](showcase/BENCHMARK.md).
 Only this one PC has been measured; nothing has been run on Intel or NVIDIA graphics.
 
