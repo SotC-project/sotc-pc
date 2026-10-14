@@ -1127,15 +1127,15 @@ void Draw() {
         // haze they stand on, soft at the edges, before this page's are written there.
         constexpr int Layers = 6;
         for (int i = 0; i < Layers; i++) {
-            const float grow = (Layers - i) * 5.0f * scale;
+            const float grow = (Layers - 1 - i) * 5.0f * scale;
             draw->AddRectFilled({display.x * 0.875f - grow, display.y * 0.885f - grow},
                                 {display.x + grow, display.y * 0.99f + grow},
-                                IM_COL32(201, 201, 200, 120), 8.0f * scale);
+                                IM_COL32(201, 201, 200, i == Layers - 1 ? 255 : 120), 8.0f * scale);
             if (Lang::GameCode() == "ar") {
                 // The game's menus in Arabic have their prompts at the left.
                 draw->AddRectFilled({-grow, display.y * 0.885f - grow},
                                     {display.x * 0.125f + grow, display.y * 0.99f + grow},
-                                    IM_COL32(201, 201, 200, 120), 8.0f * scale);
+                                    IM_COL32(201, 201, 200, i == Layers - 1 ? 255 : 120), 8.0f * scale);
             }
         }
     }
