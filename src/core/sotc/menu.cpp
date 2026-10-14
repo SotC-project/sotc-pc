@@ -1130,12 +1130,12 @@ void Draw() {
             const float grow = (Layers - i) * 5.0f * scale;
             draw->AddRectFilled({display.x * 0.875f - grow, display.y * 0.885f - grow},
                                 {display.x + grow, display.y * 0.99f + grow},
-                                IM_COL32(201, 201, 200, 255 / Layers + 10), 8.0f * scale);
+                                IM_COL32(201, 201, 200, 120), 8.0f * scale);
             if (Lang::GameCode() == "ar") {
                 // The game's menus in Arabic have their prompts at the left.
                 draw->AddRectFilled({-grow, display.y * 0.885f - grow},
                                     {display.x * 0.125f + grow, display.y * 0.99f + grow},
-                                    IM_COL32(201, 201, 200, 255 / Layers + 10), 8.0f * scale);
+                                    IM_COL32(201, 201, 200, 120), 8.0f * scale);
             }
         }
     }
