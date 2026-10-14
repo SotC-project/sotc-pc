@@ -115,7 +115,7 @@ the controls and the settings are explained in [docs/TUTORIAL.md](docs/TUTORIAL.
 |---|---|
 | `build.bat`, `build-lto.bat`, `build-release.bat`, `build-pgo.bat` | Build the runtime (checked out in `runtime\`) |
 | `dist\Install.ps1`, `Install.bat` | Copy the built program beside the scripts, create shortcuts |
-| `dist\Settings.ps1`, `Settings.bat` | Graphics and display settings; also run by the in-game Settings page |
+| `dist\Settings.ps1` | Writes the graphics and display settings; run by Apply and Restart under Settings > Graphics in the game |
 | `dist\FreePlay.ps1`, `Play.bat`, `PlayColossus.bat` | Start the game, or one colossus battle |
 | `dist\glyphs.py`, `dist\glyphs\` | Draws the keyboard and Xbox button pictures that replace the PlayStation ones; the pictures are drawn by the script, not taken from the game |
 | `dist\user\config.json`, `dist\user\input_config\` | Default settings and key bindings |

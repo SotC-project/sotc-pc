@@ -12,7 +12,7 @@ if not exist "%EXE%" set "EXE=%~dp0..\runtime\Build\x64-Clang-Release\shadps4.ex
 if not exist "%EXE%" set "EXE=%~dp0..\runtime\Build\x64-Clang-RelWithDebInfo\shadps4.exe"
 if not exist "%ARGS%" (
   echo Launch options not found: %ARGS%
-  echo Run Settings.bat once first.
+  echo In the game choose Settings ^> Graphics ^> Apply and Restart once first.
   pause
   exit /b 1
 )

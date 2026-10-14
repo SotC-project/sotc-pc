@@ -87,7 +87,7 @@ pointer is hidden outside menus.
 A scene can be left by holding Enter (or the controller's confirm button); a hint says so when
 a scene begins.
 
-The game has four button schemes of its own (Game Settings > Controls: Classic, Classic
+The game has four button schemes of its own (Settings > Controls: Classic, Classic
 Remapped, Modern, Modern Remapped). Under each of them the keys keep their actions: Space still
 jumps, Q still calls Agro, the right mouse button still aims. The key pictures on screen and the
 Controls page follow the scheme too. In the two Classic schemes crouching and rolling are on the
@@ -99,21 +99,22 @@ The game runs at the same speed at any frame rate.
 
 ## Settings
 
-10. Choose **Settings** on the title menu or in the pause menu. It offers **Graphics**,
-    **Key Bindings** and **Game Settings** (the game's own display, audio, camera and controls).
+10. Choose **Settings** on the title menu or in the pause menu. This is the game's own Settings
+    list (Game, Display, Audio, Camera, Controls, ...); the PC options are its last two lines,
+    **Graphics** and **Key Bindings**, pages of that list like the game's own.
 11. The first start picks graphics settings from your graphics card and screen. To change them,
     open **Graphics** and choose a **Preset**: Medium is a good start; try High if the game runs
     well, Low if it is slow (Low is clearly the fastest). You can also set the frame rate limit
     (30 to 240, or uncapped), VSync, full screen, window size, FSR upscaling and each effect by
     itself. Then choose **Apply and Restart**; the game restarts by itself.
-12. If the camera moves the wrong way for you, change it under Game Settings > Camera.
+12. If the camera moves the wrong way for you, change it under Settings > Camera.
 
 The company logos at the start are left out. **Startup Logos** under Graphics brings them back.
 
 ## Language
 
-The game's own language is set under Game Settings > Language (Text and Subtitles). What this
-project adds (the extra menu lines, the Settings pages, Free Play, Time Attack, Achievements, the
+The game's own language is set under Settings > Language (Text and Subtitles). What this
+project adds (the extra menu lines, the Graphics and Key Bindings pages, Free Play, Time Attack, Achievements, the
 save list, the hints) follows the Text language after a restart of the game.
 
 Tables exist for all the game's languages besides English: Arabic, Danish, Dutch, Finnish,
@@ -124,8 +125,8 @@ native reader has checked yet; corrections are welcome. Each is a plain text fil
 line and restart.
 
 Arabic and Hebrew are written from right to left with their letters joined; with the game in
-Arabic the added menu lines stand on the right as the game's own do. The Settings and Free Play
-pages keep their left-hand layout in those languages.
+Arabic the added menu lines stand on the right as the game's own do. The Graphics, Key Bindings and
+Free Play pages keep their left-hand layout in those languages.
 
 To use a table the game has no language for, write its name (for Hebrew: `he`) into a file
 `sotc_language.txt` in the `user` folder. The game's own texts then stay in the game's language.

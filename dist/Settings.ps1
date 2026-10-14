@@ -1,7 +1,9 @@
 # Shadow of the Colossus - PC build settings.
 # Display options edit .\user\config.json. Graphics options are engine launch options, written to
 # an overlay next to the game data (<game folder>-mods\CommandLineArgs.txt); the dump is not touched.
-# Run Settings.bat, or e.g.: pwsh -File Settings.ps1 -Fps 120 -VSync off -MotionBlur off
+# The game runs it when Apply and Restart is chosen under Settings > Graphics; by hand, e.g.:
+# pwsh -File Settings.ps1 -Fps 120 -VSync off -MotionBlur off
+# Without switches it writes the settings as they are (the launch options overlay included).
 param(
     [ValidateSet('30', '60', '90', '120', '144', '165', '240', 'uncapped', '')] [string]$Fps = '',
     [ValidateSet('on', 'off', '')] [string]$VSync = '',
@@ -51,19 +53,7 @@ if (Test-Path $graphicsPath) {
     foreach ($key in @($graphics.Keys)) { if ($saved.$key) { $graphics[$key] = $saved.$key } }
 }
 
-function Ask($prompt, $choices, $current) {
-    Write-Host ""
-    Write-Host "$prompt  (current: $current)"
-    for ($i = 0; $i -lt $choices.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $choices[$i]) }
-    $answer = Read-Host "Choice, or Enter to keep"
-    if ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $choices.Count) {
-        return $choices[[int]$answer - 1]
-    }
-    return ''
-}
-
 $requested = @{ Shadows = $Shadows; MotionBlur = $MotionBlur; Bloom = $Bloom; DepthOfField = $DepthOfField; Vignette = $Vignette; Fur = $Fur; Fog = $Fog; MistParticles = $MistParticles; TextureFiltering = $TextureFiltering; DrawDistance = $DrawDistance; TextureDetail = $TextureDetail; Sharpening = $Sharpening }
-$interactive = -not ($Fps -or $VSync -or $Fullscreen -or $Window -or $Upscaling -or $Preset -or $Language -or $Prompts -or ($AchievementVolume -ge 0) -or ($requested.Values | Where-Object { $_ }))
 # The game presents every second tick of the frame clock in 3D scenes, so the clock runs at
 # twice the wanted frame rate. Menus present every tick.
 $currentFps = if ($config.GPU.vblank_frequency -ge 1000) { 'uncapped' } else { [string]($config.GPU.vblank_frequency / 2) }
@@ -83,24 +73,6 @@ $achievementVolumeFile = Join-Path $PSScriptRoot 'user\sotc_achievement_volume.t
 $currentAchievementVolume = if (Test-Path $achievementVolumeFile) { (Get-Content $achievementVolumeFile -TotalCount 1).Trim() } else { '100' }
 $currentPrompts = if (Test-Path $forceFile) { (Get-Content $forceFile -TotalCount 1).Trim() } else { 'auto' }
 
-if ($interactive) {
-    $Fps = Ask 'Frame rate cap' @('30', '60', '90', '120', '144', '165', '240', 'uncapped') $currentFps
-    $VSync = Ask 'VSync' @('on', 'off') $currentVSync
-    $Fullscreen = Ask 'Fullscreen' @('on', 'off') $currentFull
-    $Window = Ask 'Window size' @('720p', '1080p', '1440p', '4k') "$($config.GPU.window_width)x$($config.GPU.window_height)"
-    $Upscaling = Ask 'FSR upscaling to the window size' @('on', 'off') $(if ($config.GPU.fsr_enabled) { 'on' } else { 'off' })
-    $Language = Ask 'Language' @($languages.Keys) $currentLanguage
-    $Prompts = Ask 'Button prompts' @('auto', 'keyboard', 'xbox', 'playstation') $currentPrompts
-    $pick = Ask 'Achievement sound volume (%)' @('0', '25', '50', '75', '100') $currentAchievementVolume
-    if ($pick) { $AchievementVolume = [int]$pick }
-    $Preset = Ask 'Graphics preset (Enter to set options one by one)' @('low', 'medium', 'high', 'ultra') 'custom'
-    if (-not $Preset) {
-        foreach ($key in @($graphics.Keys)) {
-            $options = if ($choices[$key]) { $choices[$key] } else { @('on', 'off') }
-            $requested[$key] = Ask $key $options $graphics[$key]
-        }
-    }
-}
 if ($Preset) {
     foreach ($key in @($graphics.Keys)) { if (-not $requested[$key]) { $requested[$key] = $presets[$Preset][$key] } }
 }
