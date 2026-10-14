@@ -37,6 +37,16 @@ Build of 2026-10-13, one run per cell:
 | High | 59 / 22 | 106 / 55 | 74 / 28 |
 | Ultra | 59 / 35 | 102 / 56 | 81 / 38 |
 
+The same scenes on the High preset with the performance readout on (`SOTC_PERFHUD=1`). The
+readout shows the frame rate at that moment, the average and the 1% low since the scene started;
+the tables come from separate runs without it.
+
+![Gaius arena, High preset](../docs/img/benchmark_gaius_arena_high.jpg)
+
+![Field with Agro, High preset](../docs/img/benchmark_field_with_agro_high.jpg)
+
+![Valus arena, High preset](../docs/img/benchmark_valus_arena_high.jpg)
+
 Build of 2026-10-09, for comparison:
 
 | Preset | Gaius arena | Field with Agro | Valus arena |
