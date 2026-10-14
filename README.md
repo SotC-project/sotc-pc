@@ -32,6 +32,10 @@ Ryzen 7 5700X3D, Radeon RX 9060 XT, 1080p, frame rate uncapped. Average / 1% low
 | High | 59 / 22 | 106 / 55 | 74 / 28 |
 | Ultra | 59 / 35 | 102 / 56 | 81 / 38 |
 
+![Gaius arena, High preset, with the performance readout](docs/img/benchmark_gaius_arena_high.jpg)
+
+![Field with Agro, High preset, with the performance readout](docs/img/benchmark_field_with_agro_high.jpg)
+
 Method, the third scene and the requirements: [showcase/BENCHMARK.md](showcase/BENCHMARK.md).
 Only this one PC has been measured; nothing has been run on Intel or NVIDIA graphics.
 
