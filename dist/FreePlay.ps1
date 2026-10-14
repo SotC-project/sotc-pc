@@ -128,7 +128,7 @@ if ($Challenge -eq 'on') {
 
 $overlay = Join-Path "$GameDir-mods" 'CommandLineArgs.txt'
 if (-not (Test-Path $overlay)) {
-    Write-Host "Launch options not found ($overlay). Run Settings.bat once first."
+    Write-Host "Launch options not found ($overlay). In the game choose Settings > Graphics > Apply and Restart once first."
     exit 1
 }
 if (Get-Process shadps4, ShadowOfTheColossus -ErrorAction SilentlyContinue) {
