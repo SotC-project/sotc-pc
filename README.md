@@ -21,6 +21,20 @@ unchanged on the runtime, which translates its system and graphics calls to Wind
 
 **No game file is here and none may be added.** You need your own copy of the game.
 
+## How it runs
+
+Ryzen 7 5700X3D, Radeon RX 9060 XT, 1080p, frame rate uncapped. Average / 1% low FPS:
+
+| Preset | Gaius arena | Field with Agro | Valus arena |
+|---|---|---|---|
+| Low | 77 / 40 | 114 / 63 | 89 / 45 |
+| Medium | 61 / 34 | 80 / 39 | 73 / 42 |
+| High | 59 / 22 | 106 / 55 | 74 / 28 |
+| Ultra | 59 / 35 | 102 / 56 | 81 / 38 |
+
+Method, the third scene and the requirements: [showcase/BENCHMARK.md](showcase/BENCHMARK.md).
+Only this one PC has been measured; nothing has been run on Intel or NVIDIA graphics.
+
 ## How this works
 
 The game is not rewritten. Its PlayStation 4 program file runs as it is, on a runtime that

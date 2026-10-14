@@ -1,6 +1,6 @@
 # Shadow of the Colossus PC build: benchmark and requirements
 
-Measured 2026-10-09 on the only PC available. Everything about other hardware is an estimate and
+Measured 2026-10-13 (first measured 2026-10-09) on the only PC available. Everything about other hardware is an estimate and
 is marked as such.
 
 ## Test PC
@@ -11,7 +11,7 @@ is marked as such.
 | GPU | AMD Radeon RX 9060 XT, 16 GB, driver Vulkan 1.4.349 |
 | RAM | 32 GB |
 | OS | Windows 11 |
-| Build | optimised Release build of 2026-10-09 12:15 |
+| Build | optimised Release build of 2026-10-13 14:39 |
 
 ## Method
 
@@ -28,6 +28,17 @@ is marked as such.
 
 ## Results (average FPS / 1% low FPS)
 
+Build of 2026-10-13, one run per cell:
+
+| Preset | Gaius arena | Field with Agro | Valus arena |
+|---|---|---|---|
+| Low | 77 / 40 | 114 / 63 | 89 / 45 |
+| Medium | 61 / 34 | 80 / 39 | 73 / 42 |
+| High | 59 / 22 | 106 / 55 | 74 / 28 |
+| Ultra | 59 / 35 | 102 / 56 | 81 / 38 |
+
+Build of 2026-10-09, for comparison:
+
 | Preset | Gaius arena | Field with Agro | Valus arena |
 |---|---|---|---|
 | Low | 91 / 38 | 121 / 68 | 105 / 71 |
@@ -36,6 +47,10 @@ is marked as such.
 | High | 60 / 31 | 91 / 60 | 83 / 56 |
 | Ultra | 58 / 36 | 94 / 64 | 85 / 60 |
 
+The newer build is not faster in these scenes: the differences between the two tables are
+within the run-to-run spread described above. The work between them went into menus, input,
+languages and start-up time.
+
 What the presets change: Low turns off shadows, motion blur, depth of field and fur, with 2x
 texture filtering and reduced draw distance. Medium turns shadows, depth of field and fur back on
 with 4x filtering. High adds motion blur, 8x filtering and full draw distance. Ultra adds 16x
@@ -43,21 +58,21 @@ filtering and sharper textures. Mist particles are off in all of them (they rend
 this build).
 
 Reading:
-- Low is clearly faster than the rest (about 90-120 FPS against 60-95). Shadows, fur and depth
+- Low is clearly faster than the rest (about 77-120 FPS against 58-106). Shadows, fur and depth
   of field are the options that cost.
 - Medium, High and Ultra are within noise of each other on this PC. Filtering, draw distance
   and texture detail cost little here.
-- The Gaius arena is the heaviest scene; its 1% lows are 31-50 FPS at every preset above Low.
-- Stutters: 0 to 4 frames over 40 ms per 60 s. The worst single frames (155-163 ms) were in the
-  Gaius arena.
+- The Gaius arena is the heaviest scene; its 1% lows are 22-50 FPS at every preset above Low.
+- Stutters: 0 to 8 frames over 40 ms per 60 s. The worst single frames (135-204 ms) were in the
+  Gaius arena and in the field.
 
 Resource use of the game process during these runs:
 
 | | Measured |
 |---|---|
-| RAM | 6.2 to 9.3 GB |
-| Graphics memory | 6.3 to 8.2 GB (on a 16 GB card) |
-| CPU | about 2.7 cores busy of 16 threads |
+| RAM | 4.9 to 9.3 GB |
+| Graphics memory | 3.8 to 8.2 GB (on a 16 GB card) |
+| CPU | 2.7 to 3.8 cores busy of 16 threads |
 
 ## Upscalers: FSR 3.1, FSR 4, XeSS
 
