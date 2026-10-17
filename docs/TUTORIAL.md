@@ -83,7 +83,8 @@ mouse moves the aim. The left button draws whenever a ranged weapon was last tak
 the mouse wheel towards it, or the weapon wheel); after 1 or X it attacks again.
 
 Weapon wheel: hold G in play and the game stands still; move the mouse towards a weapon and let
-go of G to take it in hand. All swords, bows, arrows, the harpoon and the torch are on it. A
+go of G to take it in hand. The game holds still while the wheel is up, but its music and
+sounds keep playing. All swords, bows, arrows, the harpoon and the torch are on it. A
 bonus weapon not won yet is given to Wander when chosen and stays in the save.
 
 The mouse does not turn the camera in menus or during scenes. In the game's menus the pointer
