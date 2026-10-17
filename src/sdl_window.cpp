@@ -19,6 +19,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/wheel.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/perf_hud.h"
 #include "core/sotc/screens.h"
@@ -744,6 +745,12 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
     if (Overlay::PanelBlocksMouse() &&
         ((event->type == SDL_EVENT_KEY_DOWN && event->key.key != SDLK_F2) ||
          event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_WHEEL)) {
+        return;
+    }
+
+    // The weapon wheel takes the mouse buttons while it is open (the game runs on, slowed).
+    if (Sotc::Wheel::IsOpen() &&
+        (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_WHEEL)) {
         return;
     }
 

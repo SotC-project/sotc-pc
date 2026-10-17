@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <ctime>
+#include <mutex>
 #include <thread>
 
 #include "common/assert.h"
 #include "common/native_clock.h"
+#include "common/uint128.h"
 #include "common/thread.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -33,17 +36,72 @@ static std::chrono::system_clock::time_point network_boottime;
 static std::chrono::steady_clock::time_point initial_uptime;
 static std::unique_ptr<Common::NativeClock> clock;
 
+// Game time can run slower than real time (the weapon wheel's slow motion). The game's clocks are
+// the host's TSC less a lag that grows while the speed is below 1. Two slots so readers never
+// see a half-written one; the speed changes only when the wheel opens or closes.
+struct TimeScale {
+    u64 real{};  // host TSC when this speed began
+    u64 guest{}; // game TSC at that moment
+    double scale{1.0};
+};
+static TimeScale time_scales[2];
+static std::atomic<u32> time_scale_slot{0};
+static std::mutex time_scale_mutex;
+
+/// True on the game's sound threads (named sndx, Sound, Audio...): they keep real time in slow
+/// motion, or they render in bursts and the sound comes out chopped.
+static bool OnSoundThread() {
+#ifdef _WIN32
+    thread_local const bool sound = [] {
+        PWSTR name = nullptr;
+        bool found = false;
+        if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &name)) && name) {
+            std::wstring text = name;
+            for (auto& ch : text) {
+                ch = static_cast<wchar_t>(towlower(ch));
+            }
+            found = text.find(L"snd") != std::wstring::npos ||
+                    text.find(L"sound") != std::wstring::npos ||
+                    text.find(L"audio") != std::wstring::npos;
+            LocalFree(name);
+        }
+        return found;
+    }();
+    return sound;
+#else
+    return false;
+#endif
+}
+
+/// Host TSC ticks the game's clocks are behind, at host TSC `real`.
+static u64 GuestLag(u64 real) {
+    if (OnSoundThread()) {
+        return 0;
+    }
+    const TimeScale& t = time_scales[time_scale_slot.load(std::memory_order_acquire)];
+    if (t.scale == 1.0) {
+        return t.real - t.guest;
+    }
+    const u64 guest = t.guest + static_cast<u64>(static_cast<double>(real - t.real) * t.scale);
+    return real - guest;
+}
+
+static u64 GuestLag() {
+    return GuestLag(clock->GetUptime());
+}
+
 u64 PS4_SYSV_ABI sceKernelGetTscFrequency() {
     return clock->GetTscFrequency();
 }
 
 u64 PS4_SYSV_ABI sceKernelGetProcessTime() {
     // TODO: this timer should support suspends, so initial ptc needs to be updated on wake up
-    return clock->GetTimeUS(initial_ptc);
+    return clock->GetTimeUS(initial_ptc + GuestLag());
 }
 
 u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounter() {
-    return clock->GetUptime() - initial_ptc;
+    const u64 real = clock->GetUptime();
+    return real - GuestLag(real) - initial_ptc;
 }
 
 u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounterFrequency() {
@@ -51,7 +109,8 @@ u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounterFrequency() {
 }
 
 u64 PS4_SYSV_ABI sceKernelReadTsc() {
-    return clock->GetUptime();
+    const u64 real = clock->GetUptime();
+    return real - GuestLag(real);
 }
 
 static s32 posix_nanosleep_impl(const OrbisKernelTimespec* rqtp, OrbisKernelTimespec* rmtp,
@@ -182,8 +241,11 @@ s32 PS4_SYSV_ABI posix_clock_gettime(u32 clock_id, OrbisKernelTimespec* ts) {
             SetPosixErrno(EFAULT);
             return -1;
         }
-        ts->tv_sec = pc.QuadPart / pf.QuadPart;
-        ts->tv_nsec = ((pc.QuadPart % pf.QuadPart) * 1000'000'000) / pf.QuadPart;
+        const u64 lag_ns = Common::MultiplyAndDivide64(GuestLag(), 1'000'000'000,
+                                                       clock->GetTscFrequency());
+        const u64 ns = Common::MultiplyAndDivide64(pc.QuadPart, 1'000'000'000, pf.QuadPart) - lag_ns;
+        ts->tv_sec = ns / 1'000'000'000;
+        ts->tv_nsec = ns % 1'000'000'000;
         return 0;
     }
     case ORBIS_CLOCK_THREAD_CPUTIME_ID: {
@@ -489,6 +551,17 @@ u64& GetInitialPtc() {
 
 Common::NativeClock* GetClock() {
     return clock.get();
+}
+
+void SetTimeScale(double scale) {
+    std::lock_guard lock{time_scale_mutex};
+    const u32 slot = time_scale_slot.load();
+    const u64 real = clock->GetUptime();
+    TimeScale& next = time_scales[slot ^ 1];
+    next.real = real;
+    next.guest = real - GuestLag(real);
+    next.scale = scale;
+    time_scale_slot.store(slot ^ 1, std::memory_order_release);
 }
 
 } // namespace Dev
