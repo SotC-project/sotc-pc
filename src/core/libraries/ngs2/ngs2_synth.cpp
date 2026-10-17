@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -28,6 +29,7 @@
 #include "core/libraries/ngs2/ngs2_error.h"
 #include "core/libraries/ngs2/ngs2_hevag_table.h"
 #include "core/libraries/ngs2/ngs2_mastering.h"
+#include "core/libraries/ngs2/ngs2_reverb.h"
 #include "core/libraries/ngs2/ngs2_sampler.h"
 #include "core/libraries/ngs2/ngs2_submixer.h"
 #include "core/libraries/ngs2/ngs2_synth.h"
@@ -47,6 +49,7 @@ constexpr u32 SystemRate = 48000;
 enum RackId : u32 {
     RackSampler = 0x1000,
     RackSubmixer = 0x2000,
+    RackReverb = 0x2001,
     RackMastering = 0x3000,
 };
 
@@ -69,6 +72,8 @@ enum ParamId : u32 {
     SamplerFilter = 0x1000000a,
 
     SubmixerSetup = 0x20000000,
+    SubmixerFilter = 0x20000006,
+    ReverbI3DL2 = 0x20010001,
     SubmixerUserFx = 0x20000004,
 
     MasteringSetup = 0x30000000,
@@ -127,6 +132,36 @@ struct Block {
     OrbisNgs2WaveformBlock info;
 };
 
+// A reverb after Schroeder and Moorer (eight damped combs, four allpasses per side, as in
+// Freeverb), with early reflections tapped off a delay line; set from the game's I3DL2 values.
+struct Reverb {
+    static constexpr std::array<u32, 8> Combs{1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
+    static constexpr std::array<u32, 4> Allpasses{556, 441, 341, 225};
+    static constexpr u32 Spread = 23; // the right side's lines are this much longer
+    struct Line {
+        std::vector<float> buf;
+        u32 pos{};
+        float low{};
+    };
+    std::array<Line, 16> combs;
+    std::array<Line, 8> allpasses;
+    std::vector<float> pre; // input history for the reflections and the delay before the tail
+    u32 pre_pos{};
+    OrbisNgs2ReverbI3DL2Param p{.wet = 1.0f, .dry = 0.0f, .room = -1000, .decayTime = 1.5f,
+                                .decayHFRatio = 1.0f, .reflections = -2000,
+                                .reflectionsDelay = 0.01f, .reverb = -1000, .reverbDelay = 0.02f};
+
+    Reverb() {
+        for (u32 i = 0; i < combs.size(); i++) {
+            combs[i].buf.assign(Combs[i % 8] * 48 / 44 + (i >= 8 ? Spread : 0), 0.0f);
+        }
+        for (u32 i = 0; i < allpasses.size(); i++) {
+            allpasses[i].buf.assign(Allpasses[i % 4] * 48 / 44 + (i >= 4 ? Spread : 0), 0.0f);
+        }
+        pre.assign(48000 / 2, 0.0f);
+    }
+};
+
 struct Rack;
 
 struct Voice {
@@ -161,6 +196,7 @@ struct Voice {
     float prev[MaxChannels]{}; // frame before `last`, for interpolation
     Filter filters[MaxFilters];
     u32 block_lists{}; // waveform block lists given since setup: more than one is a stream
+    std::unique_ptr<Reverb> reverb; // reverb rack voices
 
     // Envelope: the forward points run from Play, the release points from Stop. The voice
     // ends when its release has run out.
@@ -595,6 +631,84 @@ void ApplyFilters(Voice& v, float* out, u32 ch, u32 frames) {
     }
 }
 
+/// Replaces the planar bus `x` (ch * frames) by what the reverb voice gives out: dry share of
+/// the input plus the wet reverb, on the front pair and (softer) the surround pairs.
+void ProcessReverb(Voice& v, float* x, u32 ch, u32 frames) {
+    if (!v.reverb) {
+        v.reverb = std::make_unique<Reverb>();
+    }
+    Reverb& r = *v.reverb;
+    const auto& p = r.p;
+    const auto mb = [](float millibels) { return std::pow(10.0f, millibels / 2000.0f); };
+    const float decay = std::clamp(p.decayTime, 0.1f, 20.0f);
+    // The bare tail is about 21 times the input at a 1.65 s decay, growing with its root.
+    const float norm = 1.0f / (21.0f * std::sqrt(decay / 1.65f));
+    const float room = mb(static_cast<float>(std::clamp(p.room, -10000, 0)));
+    const float late = room * mb(static_cast<float>(std::clamp(p.reverb, -10000, 2000))) * norm;
+    const float early = room * mb(static_cast<float>(std::clamp(p.reflections, -10000, 1000)));
+    const float wet = std::clamp(p.wet, 0.0f, 4.0f), dry = std::clamp(p.dry, 0.0f, 4.0f);
+    // High frequencies die away faster (ratio below 1) or as fast.
+    const float damp = std::clamp(0.45f - 0.3f * (p.decayHFRatio - 0.5f), 0.05f, 0.7f);
+    const u32 pre_n = static_cast<u32>(r.pre.size());
+    const u32 er_delay = std::clamp<u32>(static_cast<u32>(p.reflectionsDelay * SystemRate), 1, pre_n / 2);
+    const u32 tail_delay = std::clamp<u32>(
+        static_cast<u32>((p.reflectionsDelay + p.reverbDelay) * SystemRate), 1, pre_n - 1);
+    constexpr std::array<float, 5> TapsMs{0.0f, 7.3f, 13.1f, 19.7f, 29.3f};
+    std::array<float, 16> fb;
+    for (u32 i = 0; i < fb.size(); ++i) {
+        fb[i] = std::pow(10.0f, -3.0f * r.combs[i].buf.size() / (decay * SystemRate));
+    }
+    std::array<float, MaxChannels> g{};
+    for (u32 n = 0; n < frames; ++n) {
+        float in = 0.0f;
+        for (u32 c = 0; c < ch; ++c) {
+            in += x[c * frames + n];
+        }
+        in *= 0.5f;
+        r.pre[r.pre_pos] = in;
+        const auto past = [&](u32 back) { return r.pre[(r.pre_pos + pre_n - back) % pre_n]; };
+        float er[2] = {0.0f, 0.0f};
+        for (u32 t = 0; t < TapsMs.size(); t++) {
+            const u32 back = std::min(er_delay + static_cast<u32>(TapsMs[t] * 48.0f), pre_n - 1);
+            er[t % 2] += past(back) * (1.0f - 0.15f * t);
+        }
+        const float tail_in = past(tail_delay);
+        r.pre_pos = (r.pre_pos + 1) % pre_n;
+        float side[2];
+        for (u32 s = 0; s < 2; ++s) {
+            float acc = 0.0f;
+            for (u32 i = 0; i < 8; ++i) {
+                auto& line = r.combs[s * 8 + i];
+                const u32 len = static_cast<u32>(line.buf.size());
+                const float o = line.buf[line.pos];
+                line.low = o * (1.0f - damp) + line.low * damp;
+                line.buf[line.pos] = tail_in + line.low * fb[s * 8 + i];
+                line.pos = (line.pos + 1) % len;
+                acc += o;
+            }
+            for (u32 i = 0; i < 4; ++i) {
+                auto& line = r.allpasses[s * 4 + i];
+                const float b = line.buf[line.pos];
+                line.buf[line.pos] = acc + b * 0.5f;
+                line.pos = (line.pos + 1) % static_cast<u32>(line.buf.size());
+                acc = b - acc;
+            }
+            side[s] = acc * late + er[s] * early * 0.5f;
+        }
+        g.fill(0.0f);
+        g[0] = side[0];
+        g[1] = side[1];
+        if (ch >= 8) {
+            g[4] = g[6] = side[0] * 0.7f;
+            g[5] = g[7] = side[1] * 0.7f;
+        }
+        for (u32 c = 0; c < ch; ++c) {
+            float& value = x[c * frames + n];
+            value = value * dry + g[c] * wet;
+        }
+    }
+}
+
 // Renders a sampler voice into planar `out` (ch * frames). Returns the channel count.
 u32 RenderSampler(Voice& v, float* out, u32 frames) {
     const u32 ch = std::clamp<u32>(v.format.numChannels, 1, MaxChannels);
@@ -961,6 +1075,21 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         }
         break;
     }
+    case SubmixerFilter: {
+        // Submixer voices have the same filters as sampler voices (the game shapes its buses
+        // with them: a cut of 12 dB at 1.8 kHz, a low pass at 16 kHz, ...).
+        const auto& m = As<OrbisNgs2SamplerVoiceFilterParam>(p);
+        if (m.index < MaxFilters) {
+            SetFilter(v.filters[m.index], m);
+        }
+        break;
+    }
+    case ReverbI3DL2:
+        if (!v.reverb) {
+            v.reverb = std::make_unique<Reverb>();
+        }
+        v.reverb->p = As<OrbisNgs2ReverbVoiceI3DL2Param>(p).i3dl2;
+        break;
     case SubmixerSetup:
         v.channels = As<OrbisNgs2SubmixerVoiceSetupParam>(p).numIoChannels;
         v.state = InUse;
@@ -986,6 +1115,22 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
             static std::set<u32> named;
             if (named.insert(p->id).second) {
                 LOG_ERROR(Lib_Ngs2, "sampler parameter {:#x} is not handled", p->id);
+            }
+        }
+        if (!IsSampler(v) && AudioDiag()) {
+            // Settings of the bus racks this synth does not act on (reverb, custom): the first
+            // few of each kind, with the words that follow the header.
+            static std::map<u32, int> named;
+            if (named[p->id]++ < 3) {
+                const u32* w = reinterpret_cast<const u32*>(p) + 2;
+                std::string words;
+                for (int i = 0; i < 16; i++) {
+                    float f;
+                    std::memcpy(&f, &w[i], 4);
+                    words += fmt::format("{:#x}({:.3f}) ", w[i], f);
+                }
+                LOG_ERROR(Lib_Ngs2, "bus rack {:#x} parameter {:#x} size {}: {}", v.rack->id, p->id,
+                          p->size, words);
             }
         }
         // Setup of other bus racks (reverb, custom): first two fields are the channel counts.
@@ -1220,6 +1365,13 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             return std::pair{peak, jumps};
         };
         const auto rough_before = roughness(scratch.data());
+        ApplyFilters(*voice, scratch.data(), ch, frames);
+        if (voice->rack->id == RackReverb) {
+            static const bool no_reverb = std::getenv("SOTC_NO_REVERB") != nullptr;
+            if (!no_reverb) {
+                ProcessReverb(*voice, scratch.data(), ch, frames);
+            }
+        }
         if (voice->fx_handler && !no_fx) {
             // The game's own DSP (mixing, gain, compression) runs as a callback on the bus.
             float* channel_data[MaxChannels];
@@ -1257,6 +1409,22 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             g_diag.bus_peak = std::max(g_diag.bus_peak, std::abs(scratch[n]));
         }
         Route(*voice, scratch.data(), ch, frames);
+    }
+    if (AudioDiag() && g_diag.renders == 3000) {
+        // The mixing graph once: every bus voice, its channels, effect and sends.
+        for (Voice* voice : bus_voices) {
+            std::string sends;
+            for (const Port& port : voice->ports) {
+                if (port.dest) {
+                    sends += fmt::format("[{:x} vol {:.2f} m{}] ",
+                                         reinterpret_cast<uintptr_t>(port.dest) & 0xfffff, port.volume,
+                                         port.matrix_id);
+                }
+            }
+            LOG_ERROR(Lib_Ngs2, "bus {:x} rack {:#x} channels {} fx {} used {} depth {} sends {}",
+                      reinterpret_cast<uintptr_t>(voice) & 0xfffff, voice->rack->id, voice->channels,
+                      voice->fx_handler != nullptr, voice->bus_used, Depth(*voice), sends);
+        }
     }
     if (++g_diag.renders % 1000 == 0) {
         LOG_ERROR(Lib_Ngs2, "synth diag: sampler peak {:.3f} patched ports {} port vol {:.2f} "

@@ -87,6 +87,63 @@ void DebugStateImpl::PauseGuestThreads() {
     }
 }
 
+#ifdef _WIN32
+/// True for a thread the game's sound runs on (by the name it was given: sndx, Sound, Audio).
+static bool IsSoundThread(ThreadID id) {
+    const HANDLE handle = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, id);
+    if (!handle) {
+        return false;
+    }
+    PWSTR name = nullptr;
+    bool sound = false;
+    if (SUCCEEDED(GetThreadDescription(handle, &name)) && name) {
+        std::wstring text = name;
+        for (auto& ch : text) {
+            ch = static_cast<wchar_t>(towlower(ch));
+        }
+        sound = text.find(L"snd") != std::wstring::npos ||
+                text.find(L"sound") != std::wstring::npos ||
+                text.find(L"audio") != std::wstring::npos;
+        LocalFree(name);
+    }
+    CloseHandle(handle);
+    return sound;
+}
+#endif
+
+void DebugStateImpl::PauseGameKeepingSound() {
+    std::lock_guard lock{guest_threads_mutex};
+    if (is_guest_threads_paused || !held_threads.empty()) {
+        return;
+    }
+    const ThreadID self_id = ThisThreadID();
+    for (const auto& id : guest_threads) {
+#ifdef _WIN32
+        if (id == self_id || IsSoundThread(id)) {
+            continue;
+        }
+#else
+        if (id == self_id) {
+            continue;
+        }
+#endif
+        PauseThread(id);
+        held_threads.push_back(id);
+    }
+    is_game_held = true;
+}
+
+void DebugStateImpl::ResumeGameKeepingSound() {
+    // The clock is not wound back as for a full pause: the sound threads lived through the
+    // time, and the game takes the one long frame in its stride.
+    std::lock_guard lock{guest_threads_mutex};
+    for (const auto& id : held_threads) {
+        ResumeThread(id);
+    }
+    held_threads.clear();
+    is_game_held = false;
+}
+
 void DebugStateImpl::ResumeGuestThreads() {
     std::lock_guard lock{guest_threads_mutex};
     if (!is_guest_threads_paused) {
