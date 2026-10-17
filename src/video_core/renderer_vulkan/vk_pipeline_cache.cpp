@@ -485,7 +485,30 @@ bool PipelineCache::BuildInBackground() const {
     // A pass over the whole picture must not be left out: the picture would go black for the
     // time of the build. Those are drawn as a rectangle or a few vertices.
     const auto& regs = liverpool->regs;
-    return regs.primitive_type != AmdGpu::PrimitiveType::RectList && regs.num_indices > 6;
+    if (regs.primitive_type == AmdGpu::PrimitiveType::RectList || regs.num_indices <= 6) {
+        return false;
+    }
+    // Only draws whose sole result is colour on screen: a depth-only pass feeds occlusion and
+    // culling, and a shader writing memory may produce data the game reads back.
+    if (graphics_key.num_color_attachments == 0) {
+        return false;
+    }
+    for (const auto* info : infos) {
+        if (!info) {
+            continue;
+        }
+        for (const auto& buffer : info->buffers) {
+            if (buffer.is_written) {
+                return false;
+            }
+        }
+        for (const auto& image : info->images) {
+            if (image.is_written) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {

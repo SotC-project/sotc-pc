@@ -567,6 +567,23 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
     if (!following || !taps.empty() || rest_frames <= 6) {
         return;
     }
+    // The game's Yes/No questions ("Quit to Main Menu?"): two choices side by side, stepped with
+    // left and right. Only at these known places, since left and right change values in lists.
+    constexpr float AskY = -0.1259f, AskYesX = -0.1437f, AskNoX = 0.0052f, AskMid = -0.02f;
+    const bool on_yes = std::abs(arrow_x - AskYesX) < 0.01f;
+    if (!Mirrored() && std::abs(arrow_y - AskY) < SameLine &&
+        (on_yes || std::abs(arrow_x - AskNoX) < 0.01f)) {
+        following = false;
+        if (std::abs(pointer_y - (arrow_y + ArrowHeight * 0.5f)) > RowStep * 1.5f) {
+            return;
+        }
+        if (on_yes && pointer_x > AskMid && pointer_x < AskNoX + 0.25f) {
+            QueueTap(OrbisPadButtonDataOffset::Right);
+        } else if (!on_yes && pointer_x < AskMid && pointer_x > AskYesX - 0.15f) {
+            QueueTap(OrbisPadButtonDataOffset::Left);
+        }
+        return;
+    }
     if (Mirrored() ? pointer_x < arrow_x - 0.9f || pointer_x > arrow_x + 0.08f
                    : pointer_x < arrow_x - 0.03f || pointer_x > arrow_x + 0.9f) {
         following = false;

@@ -66,6 +66,7 @@ enum ParamId : u32 {
     SamplerExitLoop = 0x10000004,
     SamplerPitch = 0x10000005,
     SamplerEnvelope = 0x10000006,
+    SamplerFilter = 0x1000000a,
 
     SubmixerSetup = 0x20000000,
     SubmixerUserFx = 0x20000004,
@@ -830,6 +831,20 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
             }
             LOG_ERROR(Lib_Ngs2, "voice {:x} envelope (curve duration height): {}",
                       reinterpret_cast<uintptr_t>(&v) & 0xfffff, text);
+        }
+        break;
+    }
+    case SamplerFilter: {
+        // Not applied yet: logged to learn which filter types and settings the game sends.
+        const auto& m = As<OrbisNgs2SamplerVoiceFilterParam>(p);
+        static int traced = 0;
+        if (traced++ < 80) {
+            const auto& d = m.param.direct;
+            LOG_ERROR(Lib_Ngs2,
+                      "voice {:x} filter index {} location {} type {} mask {:#x}: {:.4f} {:.4f} "
+                      "{:.4f} {:.4f} {:.4f}",
+                      reinterpret_cast<uintptr_t>(&v) & 0xfffff, m.index, m.location, m.type,
+                      m.channelMask, d.i0, d.i1, d.i2, d.o1, d.o2);
         }
         break;
     }

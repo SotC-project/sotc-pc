@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
@@ -409,6 +410,16 @@ private:
     static constexpr float DOWNMIX_FRONT = 1.0f;
     static constexpr float DOWNMIX_CENTER = 0.7071f;
     static constexpr float DOWNMIX_SURROUND = 0.7071f;
+    // Explosions and stomps carry much of their weight in the LFE channel; left out, they
+    // sound thin on stereo speakers and headphones.
+    static constexpr float DOWNMIX_LFE = 0.5f;
+
+    // Front, centre, surround and LFE added together go well past full scale on loud sounds,
+    // and the system clips that flat (heard as crackle). Bend peaks over above 0.8 instead.
+    static float SoftLimit(float s) {
+        const float mag = std::abs(s);
+        return mag > 0.8f ? std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s) : s;
+    }
 
     static void DownmixS16_8CHToStereoPS4(const void* src, void* dst, u32 frames, const float*) {
         constexpr float INV = 1.0f / 32768.0f;
@@ -416,13 +427,13 @@ private:
         float* d = static_cast<float*>(dst);
         for (u32 i = 0; i < frames; i++) {
             const u32 o = i << 3;
-            const float center = DOWNMIX_CENTER * s[o + FC];
-            d[i * 2 + 0] =
-                (DOWNMIX_FRONT * s[o + FL] + center + DOWNMIX_SURROUND * (s[o + 4] + s[o + 6])) *
-                INV;
-            d[i * 2 + 1] =
-                (DOWNMIX_FRONT * s[o + FR] + center + DOWNMIX_SURROUND * (s[o + 5] + s[o + 7])) *
-                INV;
+            const float common = DOWNMIX_CENTER * s[o + FC] + DOWNMIX_LFE * s[o + LF];
+            d[i * 2 + 0] = SoftLimit(
+                (DOWNMIX_FRONT * s[o + FL] + common + DOWNMIX_SURROUND * (s[o + 4] + s[o + 6])) *
+                INV);
+            d[i * 2 + 1] = SoftLimit(
+                (DOWNMIX_FRONT * s[o + FR] + common + DOWNMIX_SURROUND * (s[o + 5] + s[o + 7])) *
+                INV);
         }
     }
     static void DownmixF32_8CHToStereoPS4(const void* src, void* dst, u32 frames, const float*) {
@@ -430,11 +441,11 @@ private:
         float* d = static_cast<float*>(dst);
         for (u32 i = 0; i < frames; i++) {
             const u32 o = i << 3;
-            const float center = DOWNMIX_CENTER * s[o + FC];
-            d[i * 2 + 0] =
-                DOWNMIX_FRONT * s[o + FL] + center + DOWNMIX_SURROUND * (s[o + 4] + s[o + 6]);
-            d[i * 2 + 1] =
-                DOWNMIX_FRONT * s[o + FR] + center + DOWNMIX_SURROUND * (s[o + 5] + s[o + 7]);
+            const float common = DOWNMIX_CENTER * s[o + FC] + DOWNMIX_LFE * s[o + LF];
+            d[i * 2 + 0] = SoftLimit(DOWNMIX_FRONT * s[o + FL] + common +
+                                     DOWNMIX_SURROUND * (s[o + 4] + s[o + 6]));
+            d[i * 2 + 1] = SoftLimit(DOWNMIX_FRONT * s[o + FR] + common +
+                                     DOWNMIX_SURROUND * (s[o + 5] + s[o + 7]));
         }
     }
 
