@@ -658,6 +658,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/sotc/prep_screen.h
             src/core/sotc/screens.cpp
             src/core/sotc/screens.h
+            src/core/sotc/wheel.cpp
+            src/core/sotc/wheel.h
             src/core/sotc/lang.cpp
             src/core/sotc/lang.h
             src/core/sotc/ui.cpp

@@ -472,13 +472,12 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 }
 
 bool PipelineCache::BuildInBackground() const {
-    // Off unless SOTC_PIPELINE_BACKGROUND=1: every pipeline is built in the frame that first
-    // uses it. Leaving the draws out for the time of the build removed the stalls at first
-    // sight, but the fight with the tenth colossus then stopped with a fault in the game's own
-    // code some seconds after two such builds, three runs out of three; with the builds in the
-    // frame it ran through. Until that is understood the stall is the lesser fault.
-    static const bool wait = std::getenv("SOTC_PIPELINE_BACKGROUND") == nullptr ||
-                             std::getenv("SOTC_PIPELINE_WAIT") != nullptr;
+    // A pipeline the game uses for the first time is built on another thread and its draws are
+    // left out meanwhile, instead of stalling the frame (100 ms and more each). Limited below to
+    // draws that only put colour on screen: when any draw qualified, the fight with the tenth
+    // colossus stopped with a fault in the game's own code; limited, 6 of 6 runs from an empty
+    // cache ran through. SOTC_PIPELINE_WAIT=1 builds every pipeline in its frame.
+    static const bool wait = std::getenv("SOTC_PIPELINE_WAIT") != nullptr;
     if (wait || EmulatorSettings.IsShaderCollect()) {
         return false;
     }

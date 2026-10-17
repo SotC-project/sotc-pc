@@ -25,6 +25,9 @@ extern std::atomic_bool mouse_look_blocked;
 /// A ranged weapon (the bow) is in Wander's hand: the last weapon button pressed in play was
 /// d-pad left; right (sword) or up (put away) end it. The game says nothing about it.
 extern std::atomic_bool ranged_out;
+/// Mouse movement made while the view does not follow it (summed until read), for overlays
+/// that point with the mouse in relative mode, like the weapon wheel.
+extern std::atomic<float> menu_motion_x, menu_motion_y;
 /// Set while the aim button (R1) is held: the mouse then also moves the left stick, which is
 /// what the game aims the bow with.
 extern std::atomic_bool aim_held;

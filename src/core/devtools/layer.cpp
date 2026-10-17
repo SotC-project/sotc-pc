@@ -11,6 +11,7 @@
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
+#include "core/sotc/wheel.h"
 #include "input/controller.h"
 #include "input/input_mouse.h"
 #include "sdl_window.h"
@@ -62,9 +63,11 @@ static void UpdateMenuCursor() {
     const bool panel =
         show_quit_window || Sotc::Achievements::IsPanelOpen() || Sotc::Menu::IsOpen();
     panel_blocks_mouse = panel;
+    // The weapon wheel points with the mouse but keeps it captured: it is no menu cursor.
+    const bool wheel = Sotc::Wheel::IsOpen();
     // The mouse turns the view in play only: not under a menu or a panel, and not in a
     // cutscene (the picture then has its black bars).
-    Input::mouse_look_blocked = panel || !game_started || Sotc::Screens::PauseMenu() ||
+    Input::mouse_look_blocked = panel || wheel || !game_started || Sotc::Screens::PauseMenu() ||
                                 Sotc::Screens::TitleMenu() || Sotc::Screens::GameOver() ||
                                 Sotc::Screens::Letterboxed();
     // Shown where there is something to point at: a panel or one of the game's menus. Not
@@ -467,7 +470,8 @@ void L::Draw() {
         }
     }
 
-    if (DebugState.IsGuestThreadsPaused()) {
+    // The weapon wheel holds the game still on purpose; no debug label over it.
+    if (DebugState.IsGuestThreadsPaused() && !Sotc::Wheel::IsOpen()) {
         ImVec2 pos = ImVec2(10, 10);
         ImU32 color = IM_COL32(255, 255, 255, 255);
         ImGui::GetForegroundDrawList()->AddText(pos, color, "Emulation Paused");
@@ -522,6 +526,7 @@ void L::Draw() {
 
     // Free play, the achievements and the PC settings are lines of the game's own menus.
     Sotc::MenuExt::Draw();
+    Sotc::Wheel::Draw();
     // A free play battle starting: black, with the loading animation, until the battle is up.
     // Without a recorded animation yet, the game's own is let through where it plays.
     Sotc::Loading::Draw(Sotc::Loading::HasAnimation() ? Sotc::Menu::StartCovered(true)

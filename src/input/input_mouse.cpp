@@ -62,6 +62,7 @@ void SetMouseGyroRollMode(bool mode) {
 std::atomic_bool mouse_look_blocked{false};
 std::atomic_bool aim_held{false};
 std::atomic_bool ranged_out{false};
+std::atomic<float> menu_motion_x{0.0f}, menu_motion_y{0.0f};
 
 void EmulateJoystick(GameController* controller, u32 interval) {
 
@@ -108,7 +109,9 @@ void EmulateJoystick(GameController* controller, u32 interval) {
         aim_moving = false;
     }
     if (mouse_look_blocked.load()) {
-        // A menu or a cutscene is up: the movement is read and dropped.
+        // A menu or a cutscene is up: the movement is not the view's.
+        menu_motion_x += d_x;
+        menu_motion_y += d_y;
         speed_x = speed_y = 0.0f;
         if (mouse_moving) {
             rest(axis_x, axis_y);

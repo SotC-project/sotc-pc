@@ -747,6 +747,11 @@ bool OnClick(float x, float y) {
     return true;
 }
 
+void PressButton(u32 button) {
+    std::scoped_lock lock{mutex};
+    QueueTap(static_cast<OrbisPadButtonDataOffset>(button));
+}
+
 void SetPad(Input::GameController* controller) {
     pad = controller;
 }
