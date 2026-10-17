@@ -290,7 +290,6 @@ void ResetSampler(Voice& v) {
 // index has seven bits (the high three in the flag byte) and each predictor four taps; its first
 // five entries are the plain VAG ones.
 void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
-    float h1 = 0, h2 = 0, h3 = 0, h4 = 0;
     {
         static int reported = 0;
         u32 high_pred = 0, high_flag = 0, frames = 0, flags_seen = 0;
@@ -307,6 +306,13 @@ void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
                       frames, high_pred, high_flag, flags_seen);
         }
     }
+    // Several channels take turns frame by frame, each with its own history; the output
+    // interleaves them sample by sample as the other formats do. The history is kept in whole
+    // numbers as the reference decoder keeps it.
+    const u32 ch = std::clamp<u32>(v.format.numChannels, 1, MaxChannels);
+    std::array<std::array<s32, 4>, MaxChannels> hist{};
+    std::array<std::array<float, 28>, MaxChannels> group{};
+    u32 c = 0;
     for (u32 off = 0; off + 16 <= b.info.dataSize; off += 16) {
         const u8* f = b.data + b.info.dataOffset + off;
         const u32 shift = f[0] & 0xf;
@@ -317,17 +323,28 @@ void DecodeVag(Voice& v, const Block& b, std::vector<float>& out) {
         const float* coef = HevagCoefs[pred];
         // A frame with flag 7 holds no sound.
         const bool silent = (f[1] & 0xf) == 7;
+        auto& h = hist[c];
         for (u32 i = 0; i < 28; ++i) {
             s32 nib = (f[2 + i / 2] >> ((i & 1) * 4)) & 0xf;
             nib = (nib << 28) >> 28;
-            const float s = silent ? 0.0f
-                                   : float((nib << 12) >> shift) + h1 * coef[0] + h2 * coef[1] +
-                                         h3 * coef[2] + h4 * coef[3];
-            h4 = h3;
-            h3 = h2;
-            h2 = h1;
-            h1 = s;
-            out.push_back(std::clamp(s, -32768.0f, 32767.0f) / 32768.0f);
+            const s32 s =
+                silent ? 0
+                       : ((nib << 12) >> shift) +
+                             static_cast<s32>(float(h[0]) * coef[0] + float(h[1]) * coef[1] +
+                                              float(h[2]) * coef[2] + float(h[3]) * coef[3]);
+            h[3] = h[2];
+            h[2] = h[1];
+            h[1] = h[0];
+            h[0] = s;
+            group[c][i] = static_cast<float>(std::clamp(s, -32768, 32767)) / 32768.0f;
+        }
+        if (++c == ch) {
+            c = 0;
+            for (u32 i = 0; i < 28; ++i) {
+                for (u32 k = 0; k < ch; ++k) {
+                    out.push_back(group[k][i]);
+                }
+            }
         }
     }
 }
@@ -917,7 +934,27 @@ Port& GetPort(Voice& v, u32 index) {
     return v.ports[std::min<u32>(index, 63)];
 }
 
+u32 g_render_calls = 0; // Render calls so far (the voice dump's clock)
+
 void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
+    if (static std::FILE* log = [] {
+            const char* path = std::getenv("SOTC_PARAMLOG");
+            return path ? std::fopen(path, "wb") : nullptr;
+        }();
+        log) {
+        // Every setting the game gives a voice (render call, voice, id, size, raw words), to
+        // match against the voice dump.
+        const u32 head[4] = {g_render_calls, static_cast<u32>(reinterpret_cast<uintptr_t>(&v)),
+                             p->id, p->size};
+        std::fwrite(head, sizeof(head), 1, log);
+        std::fwrite(p, 1, std::min<u32>(p->size, 256), log);
+        if (p->id == VoiceMatrixLevels) {
+            const auto& m = As<OrbisNgs2VoiceMatrixLevelsParam>(p);
+            const u32 n = m.aLevel ? std::min<u32>(m.numLevels, 64) : 0;
+            std::fwrite(&n, sizeof(n), 1, log);
+            std::fwrite(m.aLevel, sizeof(float), n, log);
+        }
+    }
     switch (p->id) {
     case VoiceMatrixLevels: {
         const auto& m = As<OrbisNgs2VoiceMatrixLevelsParam>(p);
@@ -1272,6 +1309,7 @@ s32 VoiceGetStateFlags(OrbisNgs2Handle voice_handle, u32* out_flags) {
 
 s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
     std::scoped_lock lock{g_mutex};
+    ++g_render_calls;
     // Debug switches while the synth is being brought up.
     static const bool mute = std::getenv("SOTC_NO_AUDIO") != nullptr;
     static const bool no_fx = std::getenv("SOTC_NO_FX") != nullptr;
@@ -1316,6 +1354,32 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
             }
             const u32 ch = RenderSampler(*voice, scratch.data(), frames);
             ApplyFilters(*voice, scratch.data(), ch, frames);
+            if (static std::FILE* dump = [] {
+                    const char* path = std::getenv("SOTC_VOICEDUMP");
+                    return path ? std::fopen(path, "wb") : nullptr;
+                }();
+                dump) {
+                // Each sampler voice's own output (folded to mono, loudest port volume), to tell
+                // which sound makes a tone heard in the mix: voice, render call, frames, pitch,
+                // volume, samples.
+                float vol = 0.0f;
+                for (const Port& port : voice->ports) {
+                    vol = std::max(vol, port.dest ? port.volume : 0.0f);
+                }
+                const u32 head[3] = {static_cast<u32>(reinterpret_cast<uintptr_t>(voice.get())),
+                                     g_render_calls, frames};
+                const float info[2] = {voice->pitch,
+                                       vol + static_cast<float>(voice->format.waveformType) * 16.0f};
+                std::vector<float> mono(frames);
+                for (u32 n = 0; n < frames; ++n) {
+                    for (u32 c = 0; c < ch; ++c) {
+                        mono[n] += scratch[c * frames + n];
+                    }
+                }
+                std::fwrite(head, sizeof(head), 1, dump);
+                std::fwrite(info, sizeof(info), 1, dump);
+                std::fwrite(mono.data(), sizeof(float), frames, dump);
+            }
             for (u32 n = 0; n < ch * frames; ++n) {
                 g_diag.sampler_peak = std::max(g_diag.sampler_peak, std::abs(scratch[n]));
             }
