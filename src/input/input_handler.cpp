@@ -999,6 +999,20 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         case MOUSE_GYRO_ROLL_MODE:
             SetMouseGyroRollMode(new_button_state);
             break;
+        case SQUARE_OR_BOW: {
+            // Chosen at the press and kept to the release, so a bow put away mid-draw still lets
+            // go of the button that was pressed.
+            static OrbisPadButtonDataOffset held = OrbisPadButtonDataOffset::Square;
+            if (new_button_state) {
+                const std::string aim = AimButton();
+                held = !Input::ranged_out        ? OrbisPadButtonDataOffset::Square
+                       : aim == "circle"         ? OrbisPadButtonDataOffset::Circle
+                       : aim == "r2"             ? OrbisPadButtonDataOffset::R2
+                                                 : OrbisPadButtonDataOffset::R1;
+            }
+            controller->Button(held, new_button_state);
+            break;
+        }
         default: { // is a normal key (hopefully)
             // Menu directions and buttons pass by the extra lines of the game's menus first.
             const auto orbis = SDLGamepadToOrbisButton(button);

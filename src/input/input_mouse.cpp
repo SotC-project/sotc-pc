@@ -61,6 +61,7 @@ void SetMouseGyroRollMode(bool mode) {
 
 std::atomic_bool mouse_look_blocked{false};
 std::atomic_bool aim_held{false};
+std::atomic_bool ranged_out{false};
 
 void EmulateJoystick(GameController* controller, u32 interval) {
 
