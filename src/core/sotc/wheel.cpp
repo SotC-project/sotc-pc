@@ -15,6 +15,7 @@
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/debug_state.h"
+#include "core/libraries/kernel/time.h"
 #include "core/libraries/pad/pad.h"
 #include "core/linker.h"
 #include "core/memory.h"
@@ -416,8 +417,8 @@ void Draw() {
         motion_x = motion_y = 0.0f;
         Input::menu_motion_x = 0.0f;
         Input::menu_motion_y = 0.0f;
-        // The game stands still while the wheel is up.
-        DebugState.PauseGameKeepingSound();
+        // The game runs in slow motion while the wheel is up; its sound plays on.
+        Libraries::Kernel::Dev::SetTimeScale(0.2);
         opened_at = Clock::now();
     }
     motion_x += Input::menu_motion_x.exchange(0.0f);
@@ -427,7 +428,7 @@ void Draw() {
         return;
     }
     open = false;
-    DebugState.ResumeGameKeepingSound();
+    Libraries::Kernel::Dev::SetTimeScale(1.0);
     if (chosen >= 0) {
         Take(Weapons[chosen]);
     }

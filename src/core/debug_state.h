@@ -141,8 +141,6 @@ class DebugStateImpl {
     std::vector<ThreadID> guest_threads{};
     std::atomic_bool is_guest_threads_paused = false;
     u64 pause_time{};
-    std::vector<ThreadID> held_threads;
-    std::atomic_bool is_game_held = false;
 
     std::atomic_int32_t flip_frame_count = 0;
     std::atomic_int32_t gnm_frame_count = 0;
@@ -188,13 +186,6 @@ public:
     void RemoveCurrentThreadFromGuestList();
 
     void PauseGuestThreads();
-    /// Holds the game still but leaves its sound threads running (music keeps playing), for
-    /// an overlay the player opens in play. Undone by ResumeGameKeepingSound.
-    void PauseGameKeepingSound();
-    void ResumeGameKeepingSound();
-    bool IsGameHeld() const {
-        return is_game_held;
-    }
 
     void ResumeGuestThreads();
 

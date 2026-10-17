@@ -68,6 +68,8 @@ namespace Dev {
 u64& GetInitialPtc();
 
 Common::NativeClock* GetClock();
+/// Runs the game's clocks at `scale` times real time from now on (1 for normal speed).
+void SetTimeScale(double scale);
 } // namespace Dev
 
 u64 PS4_SYSV_ABI sceKernelGetTscFrequency();
