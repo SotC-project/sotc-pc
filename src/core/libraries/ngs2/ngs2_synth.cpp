@@ -866,18 +866,40 @@ void WriteOutput(const Voice& v, const OrbisNgs2RenderBufferInfo& info, u32 fram
     if (ch != 0) {
         frames = std::min<u32>(frames, u32(info.bufferSize / ((is_float ? 4 : 2) * ch)));
     }
+    // The console ends the mix in a limiter: explosions and falls are mixed far above full
+    // scale. A volume that drops at once when a peak would go over and comes back up over a
+    // fifth of a second; bending the wave itself instead was heard as distortion. Peaks are
+    // measured on the stereo fold-down most players hear (front, centre, LFE and surrounds
+    // added up, 0.75 of headroom), the loudest case.
+    static std::map<const Voice*, float> gains; // one per output (main, music, ...)
+    float& gain = gains.try_emplace(&v, 1.0f).first->second;
+    const float release = 1.0f - std::exp(-1.0f / (0.2f * SystemRate));
+    const auto at = [&](u32 c, u32 n) {
+        return c < MaxChannels && c < ch && v.bus_used ? v.bus[c * MaxGrain + n] : 0.0f;
+    };
     for (u32 n = 0; n < frames; ++n) {
-        for (u32 c = 0; c < ch; ++c) {
-            // Peaks reach about 1.3 in busy scenes; bend them over above 0.8 instead of
-            // clipping them flat, which is audible as crackle.
-            float s = c < MaxChannels && v.bus_used ? v.bus[c * MaxGrain + n] : 0.0f;
-            if (const float mag = std::abs(s); mag > 0.8f) {
-                s = std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s);
+        float peak;
+        if (ch == 8) {
+            const float common = 0.7071f * at(2, n) + 0.5f * at(3, n);
+            peak = 0.75f * std::max(std::abs(at(0, n) + common + 0.7071f * (at(4, n) + at(6, n))),
+                                    std::abs(at(1, n) + common + 0.7071f * (at(5, n) + at(7, n))));
+        } else {
+            peak = 0.0f;
+            for (u32 c = 0; c < ch; ++c) {
+                peak = std::max(peak, std::abs(at(c, n)));
             }
+        }
+        gain += (1.0f - gain) * release;
+        if (peak * gain > 0.9f) {
+            gain = 0.9f / peak;
+        }
+        for (u32 c = 0; c < ch; ++c) {
+            const float s = at(c, n) * gain;
             if (is_float) {
                 static_cast<float*>(info.buffer)[n * ch + c] = s;
             } else {
-                static_cast<s16*>(info.buffer)[n * ch + c] = s16(s * 32767.0f);
+                static_cast<s16*>(info.buffer)[n * ch + c] =
+                    s16(std::clamp(s, -1.0f, 1.0f) * 32767.0f);
             }
         }
     }
