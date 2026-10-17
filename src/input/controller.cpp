@@ -105,6 +105,14 @@ void GameController::Button(OrbisPadButtonDataOffset button, bool is_pressed) {
     if (button == aim_button) {
         Input::aim_held = is_pressed;
     }
+    if (is_pressed && !Input::mouse_look_blocked) {
+        if (button == OrbisPadButtonDataOffset::Left) {
+            Input::ranged_out = true;
+        } else if (button == OrbisPadButtonDataOffset::Right ||
+                   button == OrbisPadButtonDataOffset::Up) {
+            Input::ranged_out = false;
+        }
+    }
     std::lock_guard lock{m_state_mutex};
     m_state.OnButton(button, is_pressed);
     PushStateLocked();
