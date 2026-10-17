@@ -105,6 +105,14 @@ constexpr u32 RepeatInfinite = 0xffffffff;
 
 struct Voice;
 
+// One of a sampler voice's filters, a biquad in direct form 1 per channel.
+struct Filter {
+    bool on{};
+    float b0 = 1, b1{}, b2{}, a1{}, a2{};
+    float x1[MaxChannels]{}, x2[MaxChannels]{}, y1[MaxChannels]{}, y2[MaxChannels]{};
+};
+constexpr u32 MaxFilters = 8;
+
 struct Port {
     s32 matrix_id = -1;
     float volume = 1.0f;
@@ -151,6 +159,8 @@ struct Voice {
     float pitch = 1.0f;
     float last[MaxChannels]{};
     float prev[MaxChannels]{}; // frame before `last`, for interpolation
+    Filter filters[MaxFilters];
+    u32 block_lists{}; // waveform block lists given since setup: more than one is a stream
 
     // Envelope: the forward points run from Play, the release points from Stop. The voice
     // ends when its release has run out.
@@ -483,6 +493,108 @@ float EnvelopeStep(Voice& v) {
     return v.env_height;
 }
 
+// Filter types as the game's sound engine numbers them for NGS2 (from its type table and the
+// names of its own equaliser: NONE LP HP BP_A BP_B NT LS HS PK): 0 none, 1 low pass, 2 high
+// pass, 3 and 4 band pass, 5 notch, 6 high shelf, 7 peak, 8 low shelf; 0x20 brings ready
+// coefficients. fc in Hz, q, level as a linear gain. Left out, the game's loud sounds came out
+// several decibels too loud (type 8 at 12.8 kHz, level 0.46, is a cut over nearly all of them).
+void SetFilter(Filter& f, const OrbisNgs2SamplerVoiceFilterParam& m) {
+    {
+        static int seen[64]{};
+        if (AudioDiag() && seen[m.type & 63]++ < 6) {
+            const auto& d = m.param.direct;
+            LOG_ERROR(Lib_Ngs2, "filter type {} index {} location {}: {:.5f} {:.5f} {:.5f} {:.5f} {:.5f}",
+                      m.type, m.index, m.location, d.i0, d.i1, d.i2, d.o1, d.o2);
+        }
+    }
+    const bool was_on = f.on;
+    f.on = true;
+    if (m.type == 0x20) {
+        const auto& d = m.param.direct;
+        f.b0 = d.i0, f.b1 = d.i1, f.b2 = d.i2, f.a1 = d.o1, f.a2 = d.o2;
+    } else {
+        const float fc = std::clamp(m.param.fcq.fc, 10.0f, SystemRate * 0.45f);
+        const float q = std::max(m.param.fcq.q, 0.05f);
+        const float level = std::max(m.param.fcq.level, 0.0f);
+        const float w = 2.0f * 3.14159265f * fc / SystemRate;
+        const float cw = std::cos(w), alpha = std::sin(w) / (2.0f * q);
+        // Shelves and peak: `level` is the gain of the band; the others: of the output.
+        const float A = std::sqrt(std::max(level, 1e-4f));
+        float b0 = 1, b1 = 0, b2 = 0, a0 = 1, a1 = 0, a2 = 0;
+        switch (m.type) {
+        case 1: // low pass
+            b0 = b2 = (1 - cw) / 2 * level, b1 = (1 - cw) * level;
+            a0 = 1 + alpha, a1 = -2 * cw, a2 = 1 - alpha;
+            break;
+        case 2: // high pass
+            b0 = b2 = (1 + cw) / 2 * level, b1 = -(1 + cw) * level;
+            a0 = 1 + alpha, a1 = -2 * cw, a2 = 1 - alpha;
+            break;
+        case 3:
+        case 4: // band pass
+            b0 = alpha * level, b1 = 0, b2 = -alpha * level;
+            a0 = 1 + alpha, a1 = -2 * cw, a2 = 1 - alpha;
+            break;
+        case 5: // notch
+            b0 = b2 = level, b1 = -2 * cw * level;
+            a0 = 1 + alpha, a1 = -2 * cw, a2 = 1 - alpha;
+            break;
+        case 6: { // high shelf
+            const float s = 2 * std::sqrt(A) * alpha;
+            b0 = A * ((A + 1) + (A - 1) * cw + s), b1 = -2 * A * ((A - 1) + (A + 1) * cw);
+            b2 = A * ((A + 1) + (A - 1) * cw - s);
+            a0 = (A + 1) - (A - 1) * cw + s, a1 = 2 * ((A - 1) - (A + 1) * cw);
+            a2 = (A + 1) - (A - 1) * cw - s;
+            break;
+        }
+        case 7: // peak
+            b0 = 1 + alpha * A, b1 = -2 * cw, b2 = 1 - alpha * A;
+            a0 = 1 + alpha / A, a1 = -2 * cw, a2 = 1 - alpha / A;
+            break;
+        case 8: { // low shelf
+            const float s = 2 * std::sqrt(A) * alpha;
+            b0 = A * ((A + 1) - (A - 1) * cw + s), b1 = 2 * A * ((A - 1) - (A + 1) * cw);
+            b2 = A * ((A + 1) - (A - 1) * cw - s);
+            a0 = (A + 1) + (A - 1) * cw + s, a1 = -2 * ((A - 1) + (A + 1) * cw);
+            a2 = (A + 1) + (A - 1) * cw - s;
+            break;
+        }
+        default: // none, or a kind not known: passes the sound unchanged
+            f.on = false;
+            break;
+        }
+        f.b0 = b0 / a0, f.b1 = b1 / a0, f.b2 = b2 / a0, f.a1 = a1 / a0, f.a2 = a2 / a0;
+    }
+    if (!was_on) {
+        std::fill(std::begin(f.x1), std::end(f.x1), 0.0f);
+        std::fill(std::begin(f.x2), std::end(f.x2), 0.0f);
+        std::fill(std::begin(f.y1), std::end(f.y1), 0.0f);
+        std::fill(std::begin(f.y2), std::end(f.y2), 0.0f);
+    }
+}
+
+void ApplyFilters(Voice& v, float* out, u32 ch, u32 frames) {
+    static const bool off = std::getenv("SOTC_NO_VOICE_FILTERS") != nullptr;
+    if (off) {
+        return;
+    }
+    for (Filter& f : v.filters) {
+        if (!f.on) {
+            continue;
+        }
+        for (u32 c = 0; c < ch; ++c) {
+            float* x = out + c * frames;
+            float x1 = f.x1[c], x2 = f.x2[c], y1 = f.y1[c], y2 = f.y2[c];
+            for (u32 n = 0; n < frames; ++n) {
+                const float y = f.b0 * x[n] + f.b1 * x1 + f.b2 * x2 - f.a1 * y1 - f.a2 * y2;
+                x2 = x1, x1 = x[n], y2 = y1, y1 = y;
+                x[n] = y;
+            }
+            f.x1[c] = x1, f.x2[c] = x2, f.y1[c] = y1, f.y2[c] = y2;
+        }
+    }
+}
+
 // Renders a sampler voice into planar `out` (ch * frames). Returns the channel count.
 u32 RenderSampler(Voice& v, float* out, u32 frames) {
     const u32 ch = std::clamp<u32>(v.format.numChannels, 1, MaxChannels);
@@ -496,11 +608,14 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
         while (v.phase >= 1.0) {
             if (!NextFrame(v, next, ch)) {
                 {
+                    // A stream (music) running dry stops it mid-play: always worth a line.
                     static int ended = 0;
-                    if (ended++ < 60) {
-                        LOG_ERROR(Lib_Ngs2, "voice {:x} out of data after {} samples, {} bytes",
+                    if (ended++ < 60 || v.block_lists > 1) {
+                        LOG_ERROR(Lib_Ngs2,
+                                  "voice {:x} out of data after {} samples, {} bytes, {} channels, "
+                                  "{} block lists",
                                   reinterpret_cast<uintptr_t>(&v) & 0xfffff, v.decoded_samples,
-                                  v.decoded_bytes);
+                                  v.decoded_bytes, v.format.numChannels, v.block_lists);
                     }
                 }
                 // Out of data: the voice finishes and frees itself.
@@ -777,6 +892,10 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         for (Port& port : v.ports) {
             port.applied = -1.0f;
         }
+        for (Filter& filter : v.filters) {
+            filter = {};
+        }
+        v.block_lists = 0;
         break;
     case SamplerWaveformBlocks: {
         const auto& m = As<OrbisNgs2SamplerVoiceWaveformBlocksParam>(p);
@@ -796,6 +915,7 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
                           m.numBlocks, v.blocks.size(), v.state, text);
             }
         }
+        ++v.block_lists;
         for (u32 i = 0; m.data && m.aBlock && i < m.numBlocks; ++i) {
             v.blocks.push_back({static_cast<const u8*>(m.data), m.aBlock[i]});
         }
@@ -835,16 +955,9 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
         break;
     }
     case SamplerFilter: {
-        // Not applied yet: logged to learn which filter types and settings the game sends.
         const auto& m = As<OrbisNgs2SamplerVoiceFilterParam>(p);
-        static int traced = 0;
-        if (traced++ < 80) {
-            const auto& d = m.param.direct;
-            LOG_ERROR(Lib_Ngs2,
-                      "voice {:x} filter index {} location {} type {} mask {:#x}: {:.4f} {:.4f} "
-                      "{:.4f} {:.4f} {:.4f}",
-                      reinterpret_cast<uintptr_t>(&v) & 0xfffff, m.index, m.location, m.type,
-                      m.channelMask, d.i0, d.i1, d.i2, d.o1, d.o2);
+        if (m.index < MaxFilters) {
+            SetFilter(v.filters[m.index], m);
         }
         break;
     }
@@ -1035,6 +1148,7 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                 continue;
             }
             const u32 ch = RenderSampler(*voice, scratch.data(), frames);
+            ApplyFilters(*voice, scratch.data(), ch, frames);
             for (u32 n = 0; n < ch * frames; ++n) {
                 g_diag.sampler_peak = std::max(g_diag.sampler_peak, std::abs(scratch[n]));
             }

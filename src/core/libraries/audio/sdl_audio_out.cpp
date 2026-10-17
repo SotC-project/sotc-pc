@@ -417,6 +417,9 @@ private:
     // Front, centre, surround and LFE added together go well past full scale on loud sounds,
     // and the system clips that flat (heard as crackle). Bend peaks over above 0.8 instead.
     static float SoftLimit(float s) {
+        // The game's front pair alone peaks near full scale, so the sum is first brought down
+        // about 2.5 dB; the bend above 0.8 is then for rare peaks only.
+        s *= 0.75f;
         const float mag = std::abs(s);
         return mag > 0.8f ? std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s) : s;
     }
