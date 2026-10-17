@@ -62,14 +62,15 @@ are the default keys. Change any of them under Settings > Key Bindings.
 | Move | W A S D | Left stick |
 | Look | Mouse | Right stick |
 | Jump | Space | Cross / A |
-| Attack; with the bow, draw (hold) and shoot (let go) | Left mouse button | Square / X |
-| Grab, hold on, use, pick up, pray | E (hold), or the mouse's back side button | R2 / RT |
+| Attack; with a bow or harpoon out, draw and aim (hold) and shoot (let go) | Left mouse button | Square / X |
+| Grab, hold on and climb, use, pick up, pray | Right mouse button or E (hold), or the mouse's back side button | R2 / RT |
 | Crouch, roll | C or Left Ctrl | Circle / B |
-| Aim the bow, raise the sword to the light | Right or middle mouse button (hold) | R1 / RB |
+| Aim the bow, raise the sword to the light | Middle mouse button (hold) | R1 / RB |
 | Call Agro; spur him on when riding | Q or Left Shift | Triangle / Y |
 | Walk instead of run (on and off) | Left Shift | (tilt the stick less) |
 | View the colossus | R (hold) | L2 / LT |
 | Camera focus | Z | L1 / LB |
+| Weapon wheel (every weapon, bonus ones included) | G (hold), point with the mouse, let go | |
 | Change sword / change ranged weapon | Mouse wheel, or 1 and 2 | D-pad right / left |
 | Unequip | X | D-pad up |
 | Photo mode | P | D-pad down |
@@ -77,8 +78,13 @@ are the default keys. Change any of them under Settings > Key Bindings.
 | Zoom | F | R3 |
 | Pause | Esc | Options / Start |
 
-With the bow: hold the right mouse button to aim, hold the left to draw, let go to shoot. While
-you aim, the mouse moves the aim.
+With the bow: hold the left mouse button to draw and aim, let go to shoot. While you aim, the
+mouse moves the aim. The left button draws whenever a ranged weapon was last taken in hand (2,
+the mouse wheel towards it, or the weapon wheel); after 1 or X it attacks again.
+
+Weapon wheel: hold G in play and the game stands still; move the mouse towards a weapon and let
+go of G to take it in hand. All swords, bows, arrows, the harpoon and the torch are on it. A
+bonus weapon not won yet is given to Wander when chosen and stays in the save.
 
 The mouse does not turn the camera in menus or during scenes. In the game's menus the pointer
 puts the cursor on the line it is over, a left click chooses, a right click goes back. The

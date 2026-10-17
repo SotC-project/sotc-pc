@@ -108,7 +108,8 @@ as a test version:
   **Intel and NVIDIA graphics cards are untested.** Reports from other hardware are the most
   useful help you can give.
 - Not every part of the game has been played through on it.
-- Some effect sounds are not right yet.
+- Some sounds may still be off: the game's per-sound filters are now applied and loud sounds
+  have headroom, but this is checked by measurement, not yet by ear.
 
 ## What you need
 

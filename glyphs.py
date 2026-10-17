@@ -165,6 +165,8 @@ def read_bindings(path, scheme=None):
         if '=' not in line:
             continue
         output, key = (part.strip() for part in line.split('=', 1))
+        if output == 'square_or_bow':  # attack key that also draws the bow while it is out
+            output = 'square'
         if not output or not key or ',' in key or key in PAD_NAMES:
             continue
         if key in MENU_KEYS:
