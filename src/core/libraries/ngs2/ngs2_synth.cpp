@@ -1319,9 +1319,42 @@ s32 Render(const OrbisNgs2RenderBufferInfo* buffers, u32 num_buffers) {
                                  .count(),
                              frames);
                 }
+                // What a stereo listener hears: eight channels folded down as the audio output
+                // does it (front, centre and surrounds, LFE, headroom and the bend above 0.8).
+                // The game's sound stops while it is paused (the weapon wheel): the gap is
+                // filled with silence so the file keeps time with the picture.
+                static const auto dump_start = std::chrono::steady_clock::now();
+                const u64 due = static_cast<u64>(
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - dump_start)
+                        .count() *
+                    SystemRate);
+                if (due > g_sotc_audio_frames + SystemRate / 4) {
+                    const u64 gap = due - g_sotc_audio_frames - frames;
+                    static const std::vector<float> silence(2 * 4800, 0.0f);
+                    for (u64 left = gap; left > 0;) {
+                        const u64 n = std::min<u64>(left, 4800);
+                        std::fwrite(silence.data(), sizeof(float), 2 * n, dump);
+                        left -= n;
+                    }
+                    g_sotc_audio_frames += gap;
+                }
                 const float* out = static_cast<const float*>(buffers[i].buffer);
+                const u32 chs = buffers[i].numChannels;
+                const auto fold = [](float s) {
+                    s *= 0.75f;
+                    const float mag = std::abs(s);
+                    return mag > 0.8f ? std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s)
+                                      : s;
+                };
                 for (u32 n = 0; n < frames; ++n) {
-                    std::fwrite(out + n * buffers[i].numChannels, sizeof(float), 2, dump);
+                    const float* f = out + n * chs;
+                    float lr[2] = {f[0], f[1]};
+                    if (chs == 8) {
+                        const float common = 0.7071f * f[2] + 0.5f * f[3];
+                        lr[0] = fold(f[0] + common + 0.7071f * (f[4] + f[6]));
+                        lr[1] = fold(f[1] + common + 0.7071f * (f[5] + f[7]));
+                    }
+                    std::fwrite(lr, sizeof(float), 2, dump);
                 }
                 g_sotc_audio_frames += frames;
             }

@@ -312,9 +312,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             }
         } else if (action.starts_with("mouse=")) {
             // "mouse=20*1500": mouse moving right 20 counts per poll for 1500 ms (negative =
-            // left), through the same mouse-to-stick conversion as a real mouse.
+            // left), through the same mouse-to-stick conversion as a real mouse. "mouse=20/-10*800"
+            // also moves it up 10 (positive = down).
             const auto star = action.find('*');
-            Input::test_mouse_delta[0] = std::stof(action.substr(6, star - 6));
+            const auto values = action.substr(6, star - 6);
+            const auto slash = values.find('/');
+            Input::test_mouse_delta[0] = std::stof(values.substr(0, slash));
+            Input::test_mouse_delta[1] =
+                slash == std::string::npos ? 0.0f : std::stof(values.substr(slash + 1));
             mouse_release_at =
                 now + (star == std::string::npos ? 250 : std::stoull(action.substr(star + 1)));
         } else if (action == "fault") {
