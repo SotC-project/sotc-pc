@@ -448,7 +448,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     while (!token.stop_requested()) {
         timer.Start();
 
-        if (DebugState.IsGuestThreadsPaused()) {
+        // Held still (the weapon wheel) too: the last picture is drawn again under the overlay.
+        if (DebugState.IsGuestThreadsPaused() || DebugState.IsGameHeld()) {
             DrawLastFrame();
             timer.End();
             continue;
