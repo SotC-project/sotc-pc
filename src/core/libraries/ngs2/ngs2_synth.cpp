@@ -196,6 +196,7 @@ struct Voice {
     float prev[MaxChannels]{}; // frame before `last`, for interpolation
     Filter filters[MaxFilters];
     u32 block_lists{}; // waveform block lists given since setup: more than one is a stream
+    u32 starved_frames{}; // output frames a stream has waited for its next block list
     std::unique_ptr<Reverb> reverb; // reverb rack voices
 
     // Envelope: the forward points run from Play, the release points from Stop. The voice
@@ -278,6 +279,7 @@ void ResetSampler(Voice& v) {
     v.phase = 0;
     v.decoded_samples = 0;
     v.decoded_bytes = 0;
+    v.starved_frames = 0;
     v.waveform_data = nullptr;
     std::fill(std::begin(v.last), std::end(v.last), 0.0f);
     if (v.at9) {
@@ -738,6 +740,23 @@ u32 RenderSampler(Voice& v, float* out, u32 frames) {
         // which is heard as a harsh crunch.
         while (v.phase >= 1.0) {
             if (!NextFrame(v, next, ch)) {
+                // A stream that runs dry waits, flagged Empty, for its next block list: the game
+                // refills it late after a stall of its own (a load, a pipeline build), and a
+                // voice freed at once cut music and ambience off for good.
+                constexpr u32 StreamWait = SystemRate * 3;
+                if (v.block_lists >= 3 && !v.releasing && v.starved_frames < StreamWait) {
+                    if (v.starved_frames == 0) {
+                        LOG_WARNING(Lib_Ngs2, "stream {:x} ran dry after {} samples, waiting",
+                                    reinterpret_cast<uintptr_t>(&v) & 0xfffff,
+                                    v.decoded_samples);
+                    }
+                    v.state |= Empty;
+                    v.starved_frames += frames - n;
+                    for (u32 c = 0; c < ch; ++c) {
+                        std::fill(out + c * frames + n, out + (c + 1) * frames, 0.0f);
+                    }
+                    return ch;
+                }
                 {
                     // A stream (music) running dry stops it mid-play: always worth a line.
                     static int ended = 0;
@@ -1089,6 +1108,12 @@ void ApplyParam(Voice& v, const OrbisNgs2VoiceParamHeader* p) {
             }
         }
         ++v.block_lists;
+        if (v.starved_frames > 0) {
+            LOG_WARNING(Lib_Ngs2, "stream {:x} refilled after {} ms",
+                        reinterpret_cast<uintptr_t>(&v) & 0xfffff,
+                        v.starved_frames * 1000ull / SystemRate);
+            v.starved_frames = 0;
+        }
         for (u32 i = 0; m.data && m.aBlock && i < m.numBlocks; ++i) {
             v.blocks.push_back({static_cast<const u8*>(m.data), m.aBlock[i]});
         }
