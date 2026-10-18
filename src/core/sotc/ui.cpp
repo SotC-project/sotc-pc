@@ -3,6 +3,7 @@
 #include <atomic>
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 #include "common/types.h"
@@ -230,6 +231,33 @@ float Prompt(ImDrawList* draw, float right_x, float y, const char* label, Action
     TextRight(draw, text_size, right_x - width - 12.0f * scale,
               y + (height - TextSize(text_size, label).y) * 0.5f, TextBright, label);
     return height + 10.0f * scale;
+}
+
+void PromptAround(ImDrawList* draw, float right_x, float center_y, float text_size,
+                  const char* before, const char* key, Action action, const char* after,
+                  ImU32 color) {
+    const float height = text_size * 1.35f;
+    const float gap = text_size * 0.55f;
+    TextRight(draw, text_size, right_x, center_y - TextSize(text_size, after).y * 0.5f, color,
+              after);
+    const float icon_right = right_x - TextSize(text_size, after).x - gap;
+    float width = height;
+    if (VideoCore::ActivePromptSet() == PromptSet::Keyboard) {
+        // The game's key pictures: a dark cap with a light rim and plain lettering.
+        const float key_size = height * 0.42f;
+        const ImVec2 extent = ImGui::GetFont()->CalcTextSizeA(key_size, FLT_MAX, 0.0f, key);
+        width = std::max(height, extent.x + height * 0.45f);
+        const ImVec2 min{icon_right - width, center_y - height * 0.5f};
+        const ImVec2 max{icon_right, center_y + height * 0.5f};
+        draw->AddRectFilled(min, max, IM_COL32(18, 18, 18, 255), height * 0.18f);
+        draw->AddRect(min, max, color, height * 0.18f, 0, std::max(1.5f, height * 0.06f));
+        draw->AddText(ImGui::GetFont(), key_size,
+                      {min.x + (width - extent.x) * 0.5f, center_y - extent.y * 0.5f}, color, key);
+    } else {
+        width = Icon(draw, icon_right, center_y - height * 0.5f, height, action);
+    }
+    TextRight(draw, text_size, icon_right - width - gap,
+              center_y - TextSize(text_size, before).y * 0.5f, color, before);
 }
 
 } // namespace Sotc::Ui
