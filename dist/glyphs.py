@@ -167,6 +167,8 @@ def read_bindings(path, scheme=None):
         output, key = (part.strip() for part in line.split('=', 1))
         if output == 'square_or_bow':  # attack key that also draws the bow while it is out
             output = 'square'
+        if output == 'sword_light':  # aim key that does nothing while the bow is out
+            output = 'r1'
         if not output or not key or ',' in key or key in PAD_NAMES:
             continue
         if key in MENU_KEYS:
