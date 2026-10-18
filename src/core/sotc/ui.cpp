@@ -135,6 +135,27 @@ float Scale() {
     return ImGui::GetIO().DisplaySize.y / 1080.0f;
 }
 
+void Fade(ImDrawList* draw, int first, float opacity) {
+    if (opacity >= 1.0f) {
+        return;
+    }
+    const float kept = std::clamp(opacity, 0.0f, 1.0f);
+    for (int i = first; i < draw->VtxBuffer.Size; i++) {
+        ImU32& col = draw->VtxBuffer[i].col;
+        const u32 alpha = (col >> IM_COL32_A_SHIFT) & 0xff;
+        col = (col & ~IM_COL32_A_MASK) |
+              (static_cast<u32>(alpha * kept + 0.5f) << IM_COL32_A_SHIFT);
+    }
+}
+
+float PageOpacity(u64 opened_ms, u64 closing_ms) {
+    const u64 now = SDL_GetTicks();
+    const float t = closing_ms != 0
+                        ? 1.0f - static_cast<float>(now - closing_ms) / PageFadeMs
+                        : static_cast<float>(now - opened_ms) / PageFadeMs;
+    return std::clamp(t, 0.0f, 1.0f);
+}
+
 void Veil(float opacity) {
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     // On the foreground list, ahead of the text drawn after it: the background list sits

@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 #include <fmt/format.h>
+#include <SDL3/SDL_timer.h>
 #include <imgui.h>
 
 #include "common/io_file.h"
@@ -306,8 +307,19 @@ float NotificationVolume() {
     return 1.0f;
 }
 
+static u64 panel_opened_ms = 0;
+static std::atomic<u64> panel_closing_ms{0};
+
 void TogglePanel() {
-    panel_open = !panel_open;
+    if (panel_open && panel_closing_ms == 0) {
+        panel_closing_ms = std::max<u64>(SDL_GetTicks(), 1);
+    } else {
+        if (!panel_open || panel_closing_ms != 0) {
+            panel_opened_ms = SDL_GetTicks();
+        }
+        panel_closing_ms = 0;
+        panel_open = true;
+    }
 }
 
 bool IsPanelOpen() {
@@ -320,10 +332,15 @@ void Draw() {
     if (!panel_open) {
         return;
     }
-    if (IsKeyPressed(ImGuiKey_Escape, false) || IsKeyPressed(ImGuiKey_F2, false) ||
-        IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+    if (panel_closing_ms != 0 && SDL_GetTicks() - panel_closing_ms >= Ui::PageFadeMs) {
         panel_open = false;
+        panel_closing_ms = 0;
         return;
+    }
+    const bool leaving = panel_closing_ms != 0;
+    if (!leaving && (IsKeyPressed(ImGuiKey_Escape, false) || IsKeyPressed(ImGuiKey_F2, false) ||
+                     IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
+        panel_closing_ms = std::max<u64>(SDL_GetTicks(), 1);
     }
 
     std::lock_guard lock{mutex};
@@ -347,6 +364,13 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
+    struct FadeScope {
+        ImDrawList* draw;
+        int first;
+        ~FadeScope() {
+            Ui::Fade(draw, first, Ui::PageOpacity(panel_opened_ms, panel_closing_ms));
+        }
+    } fade_scope{draw, draw->VtxBuffer.Size};
     // Opened from the title or pause menu, the list takes the menu's place the way the game's
     // own screens do (its Settings, for one): the picture washed out pale, the text in ink.
     // Over a free play battle it is a pale list on a dark veil.

@@ -4,6 +4,7 @@
 
 #include <string>
 #include <imgui.h>
+#include "common/types.h"
 
 // Shared look of the PC overlay screens, after the game's own menus: a dark veil, pale serif
 // text, a small triangle marking the selection, and button prompts bottom right that show only
@@ -33,6 +34,13 @@ bool DialogOpen();
 float Scale();
 /// Darkens the whole picture behind an overlay screen.
 void Veil(float opacity);
+/// Scales the opacity of everything added to `draw` since vertex `first` (a page fading in
+/// or out as a whole, the way the game's own menus come and go).
+void Fade(ImDrawList* draw, int first, float opacity);
+/// Opacity of a page opened at `opened_ms` and, when not 0, leaving since `closing_ms`.
+float PageOpacity(u64 opened_ms, u64 closing_ms);
+/// How long a page takes to come or go.
+inline constexpr u64 PageFadeMs = 200;
 ImVec2 TextSize(float size, const std::string& text);
 void Text(ImDrawList* draw, float size, ImVec2 pos, ImU32 color, const std::string& text);
 void TextCentered(ImDrawList* draw, float size, float center_x, float y, ImU32 color,

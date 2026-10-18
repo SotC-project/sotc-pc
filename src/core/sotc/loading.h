@@ -22,7 +22,7 @@ namespace Sotc::Loading {
 inline constexpr float RegionLeft = 0.84f;
 inline constexpr float RegionTop = 0.62f;
 inline constexpr float RegionRight = 1.0f;
-inline constexpr float RegionBottom = 0.96f;
+inline constexpr float RegionBottom = 1.0f; // Wander's feet reach the foot of the frame
 
 /// True when the frame being made should have that region read back for the recording.
 /// Called on the GPU thread, once per game frame.
