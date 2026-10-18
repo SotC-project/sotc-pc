@@ -555,6 +555,9 @@ bool PointerMoved(float& sx, float& sy) {
 /// The game's other lists (its settings, the difficulties, the save slots, ...): their lines are
 /// not known here, so the cursor is stepped towards the pointer and watched. It stops when it is
 /// on the pointer's line, at the end of the list, or when a step took it further away.
+// The game's Yes/No questions: where the cursor stands at Yes and at No, and the split between.
+constexpr float AskY = -0.1259f, AskYesX = -0.1437f, AskNoX = 0.0052f, AskMid = -0.02f;
+
 void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
     static bool following = false;
     static int last_direction = 0;
@@ -569,7 +572,6 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
     }
     // The game's Yes/No questions ("Quit to Main Menu?"): two choices side by side, stepped with
     // left and right. Only at these known places, since left and right change values in lists.
-    constexpr float AskY = -0.1259f, AskYesX = -0.1437f, AskNoX = 0.0052f, AskMid = -0.02f;
     const bool on_yes = std::abs(arrow_x - AskYesX) < 0.01f;
     if (!Mirrored() && std::abs(arrow_y - AskY) < SameLine &&
         (on_yes || std::abs(arrow_x - AskNoX) < 0.01f)) {
@@ -611,17 +613,23 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
 void DrawSkipHint() {
     const bool scene = Screens::Letterboxed() && !Screens::PauseMenu() && !Screens::Arrow() &&
                        !Overlay::InTitleMenu() && !PanelOpen() && !Ui::DialogOpen();
+    // How bright the hint is: dim, rising to full over a quarter second while the button is held.
+    static float glow = 0.0f;
     if (!scene) {
+        glow = 0.0f;
         return;
     }
     const bool held = ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_Space) ||
                       ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown);
     const ImGuiIO& io = ImGui::GetIO();
+    const float step = std::clamp(io.DeltaTime, 0.0f, 0.1f) / 0.25f;
+    glow = std::clamp(glow + (held ? step : -step), 0.0f, 1.0f);
+    const float ease = glow * glow * (3.0f - 2.0f * glow);
     auto* draw = ImGui::GetForegroundDrawList();
     const int first = draw->VtxBuffer.Size;
     Ui::Prompt(draw, io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.938f, "HOLD TO SKIP",
                Ui::Action::Confirm);
-    Ui::Fade(draw, first, held ? 1.0f : 0.4f);
+    Ui::Fade(draw, first, 0.4f + 0.6f * ease);
 }
 
 } // namespace
@@ -735,6 +743,29 @@ bool OnClick(float x, float y) {
     SeekTo(spot.y, spot.then);
     seek.presses_left = 10;
     return true;
+}
+
+bool PointerOnCursor(float x, float y) {
+    std::scoped_lock lock{mutex};
+    float arrow_x, arrow_y;
+    if (!Screens::Arrow(arrow_x, arrow_y)) {
+        return true;
+    }
+    const float sx = x * 2.0f - 1.0f, sy = 1.0f - y * 2.0f;
+    if (std::abs(sy - (arrow_y + ArrowHeight * 0.5f)) > RowStep * 0.5f) {
+        return false;
+    }
+    if (!Mirrored() && std::abs(arrow_y - AskY) < SameLine) {
+        if (std::abs(arrow_x - AskYesX) < 0.01f) {
+            return sx > AskYesX - 0.15f && sx < AskMid;
+        }
+        if (std::abs(arrow_x - AskNoX) < 0.01f) {
+            return sx > AskMid && sx < AskNoX + 0.25f;
+        }
+    }
+    // The same reach as hovering (FollowPointer): the text beside the arrow.
+    return Mirrored() ? sx >= arrow_x - 0.9f && sx <= arrow_x + 0.08f
+                      : sx >= arrow_x - 0.03f && sx <= arrow_x + 0.9f;
 }
 
 void PressButton(u32 button) {
