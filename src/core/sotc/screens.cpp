@@ -18,6 +18,9 @@
 
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "common/singleton.h"
+#include "core/linker.h"
+#include "core/memory.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/screens.h"
 
@@ -50,6 +53,7 @@ std::atomic<float> arrow_x{0.0f};
 std::atomic<float> arrow_y{0.0f};
 std::atomic<u64> arrow_ms{0};
 std::atomic<u64> pause_seen_ms{0};
+std::atomic<u64> confirm_seen_ms{0};
 std::array<std::atomic<u64>, GameOverTextures.size()> game_over_seen_ms{};
 
 // Draws that use a texture from this list are left out (see TakeSkipDraw).
@@ -105,6 +109,10 @@ void TextureUsed(u64 content_hash, u32 width, u32 height) {
             game_over_seen_ms[i].store(SDL_GetTicks(), std::memory_order_relaxed);
         }
     }
+    constexpr u64 ConfirmGlyph = 0xdbb1926987bdbf8eULL; // the cross button, as the game has it
+    if (content_hash == ConfirmGlyph) {
+        confirm_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
+    }
     if (Contains(PauseMenuTextures, content_hash)) {
         pause_seen_ms.store(SDL_GetTicks(), std::memory_order_relaxed);
     }
@@ -114,6 +122,10 @@ void TextureUsed(u64 content_hash, u32 width, u32 height) {
         used.insert(content_hash);
         used_sizes[content_hash] = {width, height};
     }
+}
+
+bool ConfirmPromptShown() {
+    return Recent(confirm_seen_ms);
 }
 
 bool TakeSkipDraw() {
@@ -251,6 +263,17 @@ bool FullSizeMenus() {
 }
 
 bool Letterboxed() {
+    // The game's own cinematic amount (1.0 through a cutscene, 0 in play and menus; found by
+    // diffing its memory between scenes and play). The bars read from the picture miss dark
+    // scenes such as Celosia's cave, so they are only the fallback.
+    constexpr u64 CinematicAmount = 0x2dcdf04;
+    const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+    if (module && module->IsValid()) {
+        const VAddr address = module->GetBaseAddress() + CinematicAmount;
+        if (Core::Memory::Instance()->IsValidMapping(address, 4)) {
+            return *reinterpret_cast<const float*>(address) > 0.0f;
+        }
+    }
     return letterboxed.load(std::memory_order_relaxed);
 }
 

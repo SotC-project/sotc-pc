@@ -52,5 +52,10 @@ void Triangle(ImDrawList* draw, ImVec2 center, float size, bool point_right, ImU
 /// One "LABEL [icon]" prompt, right aligned at `right_x`, for the device in use. Returns the
 /// height used, so prompts can be stacked.
 float Prompt(ImDrawList* draw, float right_x, float y, const char* label, Action action);
+/// "BEFORE [icon] AFTER" in the game's own prompt lettering, right aligned at `right_x` and
+/// centred on `center_y`; `key` names the keycap when the keyboard is in use.
+void PromptAround(ImDrawList* draw, float right_x, float center_y, float text_size,
+                  const char* before, const char* key, Action action, const char* after,
+                  ImU32 color);
 
 } // namespace Sotc::Ui

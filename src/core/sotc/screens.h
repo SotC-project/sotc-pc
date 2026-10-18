@@ -13,8 +13,9 @@ namespace Sotc::Screens {
 /// The game says nothing about which of its screens is up, so that is read from the textures
 /// only that screen draws.
 void TextureUsed(u64 content_hash, u32 width = 0, u32 height = 0);
-/// A cutscene is playing: the picture has the black bars above and below it. Found from a
-/// thin column of the picture read back a few times a second.
+/// A cutscene is playing: read from the game's cinematic amount, or, when that cannot be
+/// read, from the black bars above and below the picture (a thin column of it read back a few
+/// times a second).
 bool WantsColumn();
 void OnColumn(std::span<const u8> rgba, u32 height);
 bool Letterboxed();
@@ -35,6 +36,9 @@ bool TitleMenu();
 bool PauseMenu();
 /// True while the game's Game Over screen (Retry / End) is on screen.
 bool GameOver();
+/// True while the game draws the confirm button's picture: in a cutscene, its own "hold to
+/// skip" prompt, which it shows for a few seconds after a press.
+bool ConfirmPromptShown();
 /// False when no texture is known for a screen yet, so callers can fall back.
 bool KnowsTitleMenu();
 

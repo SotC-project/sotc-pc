@@ -265,6 +265,9 @@ float HiddenY(Kind kind, int index) {
 
 /// Sends the game's cursor to a line. With `returning` its arrow is blank until it is there.
 void SeekTo(float y, Then then = Then::Nothing, bool returning = false) {
+    if (std::getenv("SOTC_MENULOG")) {
+        LOG_INFO(Core, "seek to {:.4f}", y);
+    }
     seek = {true, y, then, 6};
     arrow_returning = returning;
 }
@@ -597,8 +600,21 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
         (last_direction != 0 &&
          (direction != last_direction || std::abs(arrow_y - stepped_from) < SameLine ||
           std::abs(off) >= last_distance))) {
+        // A step that wrapped round the list (up past the first line onto the last, or the
+        // other way) is taken back: the pointer was beyond the end of the list.
+        const bool wrapped = last_direction != 0 &&
+                             (last_direction < 0 ? arrow_y < stepped_from - SameLine
+                                                 : arrow_y > stepped_from + SameLine);
+        if (wrapped) {
+            QueueTap(last_direction < 0 ? OrbisPadButtonDataOffset::Down
+                                        : OrbisPadButtonDataOffset::Up);
+        }
         following = false;
         return;
+    }
+    if (std::getenv("SOTC_MENULOG")) {
+        LOG_INFO(Core, "follow pointer: step {} from {:.4f} toward {:.4f}", direction, arrow_y,
+                 pointer_y);
     }
     QueueTap(direction < 0 ? OrbisPadButtonDataOffset::Up : OrbisPadButtonDataOffset::Down);
     last_direction = direction;
@@ -606,30 +622,34 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
     stepped_from = arrow_y;
 }
 
-/// A cutscene can be left by holding the confirm button, which the game only says once a
-/// button is pressed. Said here for as long as the scene runs, in the black bar at the foot of
-/// the picture: dimmed, and full while the confirm button is held (user's wish, so it is always
-/// known that a scene can be skipped).
+/// A cutscene can be left by holding the confirm button, which the game only says for a few
+/// seconds after a press. Said here the rest of the time, dimmed, laid out as the game's own
+/// prompt (user's wish, so it is always known that a scene can be skipped); while the game
+/// shows its own, bright and with its hold ring, this one steps aside.
 void DrawSkipHint() {
     const bool scene = Screens::Letterboxed() && !Screens::PauseMenu() && !Screens::Arrow() &&
                        !Overlay::InTitleMenu() && !PanelOpen() && !Ui::DialogOpen();
-    // How bright the hint is: dim, rising to full over a quarter second while the button is held.
-    static float glow = 0.0f;
-    if (!scene) {
-        glow = 0.0f;
+    // The game's own fades in from nothing: this one fades out over the same time.
+    static u64 game_prompt_since = 0;
+    const u64 now = SDL_GetTicks();
+    if (!Screens::ConfirmPromptShown()) {
+        game_prompt_since = 0;
+    } else if (game_prompt_since == 0) {
+        game_prompt_since = now;
+    }
+    const float fade =
+        game_prompt_since ? 1.0f - std::min(1.0f, (now - game_prompt_since) / 300.0f) : 1.0f;
+    if (!scene || fade <= 0.0f) {
         return;
     }
-    const bool held = ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_Space) ||
-                      ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown);
     const ImGuiIO& io = ImGui::GetIO();
-    const float step = std::clamp(io.DeltaTime, 0.0f, 0.1f) / 0.25f;
-    glow = std::clamp(glow + (held ? step : -step), 0.0f, 1.0f);
-    const float ease = glow * glow * (3.0f - 2.0f * glow);
-    auto* draw = ImGui::GetForegroundDrawList();
-    const int first = draw->VtxBuffer.Size;
-    Ui::Prompt(draw, io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.938f, "HOLD TO SKIP",
-               Ui::Action::Confirm);
-    Ui::Fade(draw, first, 0.4f + 0.6f * ease);
+    // Measured on the game's prompt at 1080p: right edge x 1804, centre y 1038, capitals 16 px.
+    // shortcut: the keycap says Space, the first confirm key of the shipped bindings; read the
+    // bindings if players rebind it.
+    Ui::PromptAround(ImGui::GetForegroundDrawList(), io.DisplaySize.x * 0.9396f,
+                     io.DisplaySize.y * 0.961f, 23.0f * Ui::Scale(), "HOLD", "Space",
+                     Ui::Action::Confirm, "TO SKIP",
+                     IM_COL32(197, 197, 190, static_cast<int>(110 * fade)));
 }
 
 } // namespace
@@ -803,27 +823,35 @@ void Draw() {
     }
     Input::GameController* controller = pad.load();
 
-    // Presses on their way to the game: down for a twentieth of a second, then up for 40 ms. By
-    // the clock: the picture may be drawn several times for each time the game reads the pad.
+    // Presses on their way to the game: down for two frames, then up for two, so the game reads
+    // each state at least once (17 to 50 ms each, by the clock: the picture may be drawn
+    // several times for each time the game reads the pad). The next press starts as soon as
+    // the last one is over.
     const u64 now_ms = SDL_GetTicks();
-    if (!taps.empty() && controller) {
+    static float frame_ms = 16.0f;
+    frame_ms += (std::clamp(ImGui::GetIO().DeltaTime * 1000.0f, 1.0f, 100.0f) - frame_ms) * 0.2f;
+    const u64 phase_ms = static_cast<u64>(std::clamp(frame_ms * 2.0f, 17.0f, 50.0f));
+    while (!taps.empty() && controller) {
         Tap& tap = taps.front();
         if (tap.pressed_ms == 0) {
             controller->Button(tap.button, true);
             tap.pressed_ms = now_ms;
-        } else if (!tap.released && now_ms - tap.pressed_ms >= 50) {
+        } else if (!tap.released && now_ms - tap.pressed_ms >= phase_ms) {
             controller->Button(tap.button, false);
             tap.released = true;
-        } else if (now_ms - tap.pressed_ms >= 90) {
+            tap.pressed_ms = now_ms; // from here: how long it has been up
+        } else if (tap.released && now_ms - tap.pressed_ms >= phase_ms) {
             taps.pop_front();
+            continue;
         }
+        break;
     }
 
     if (std::getenv("SOTC_MENULOG")) {
-        static u64 logged = 0;
+        static float logged_y = 9.0f;
         float ax = 0.0f, ay = 0.0f;
-        if (Screens::Arrow(ax, ay) && SDL_GetTicks() - logged > 1500) {
-            logged = SDL_GetTicks();
+        if (Screens::Arrow(ax, ay) && std::abs(ay - logged_y) > 0.002f) {
+            logged_y = ay;
             LOG_INFO(Core, "menu cursor at {:.4f} {:.4f}, pause {}, last line {:.3f}, pad {}", ax,
                      ay, Screens::PauseMenu(), title_last_y.load(), pad.load() != nullptr);
         }

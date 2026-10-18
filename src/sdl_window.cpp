@@ -16,6 +16,7 @@
 #include <cmrc/cmrc.hpp>
 #include <stb_image.h>
 
+#include "common/path_util.h"
 #include "common/singleton.h"
 #include "core/linker.h"
 #include "core/memory.h"
@@ -252,14 +253,43 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
+        } else if (action.starts_with("dumpimg=")) {
+            // Test: the game image's data section to <user>/imgdump_<label>.bin (pages that
+            // are not mapped come out as zeros), for diffing game state between moments.
+            constexpr u64 DataStart = 0x1604000, DataEnd = 0x3957000, Page = 0x1000;
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            std::ofstream out{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                                  ("imgdump_" + action.substr(8) + ".bin"),
+                              std::ios::binary};
+            static const std::vector<char> zeros(Page);
+            for (u64 at = DataStart; module && at < DataEnd; at += Page) {
+                const VAddr address = module->GetBaseAddress() + at;
+                out.write(Core::Memory::Instance()->IsValidMapping(address, Page)
+                              ? reinterpret_cast<const char*>(address)
+                              : zeros.data(),
+                          Page);
+            }
         } else if (action.starts_with("poke=") || action.starts_with("peek=")) {
             // Test: write or log a 32-bit word of the game's image ("poke=325f430:3" sets game
             // variable 8; offsets as the eboot image has them).
+            // "peek=2ef8c08>80>6e8" follows pointers: the word at offset 0x6e8 of what the
+            // pointer at 0x80 of what the pointer at image offset 0x2ef8c08 points to.
             const auto colon = action.find(':');
-            const u64 offset = std::stoull(action.substr(5, colon - 5), nullptr, 16);
+            std::string path = action.substr(5, colon == std::string::npos ? colon : colon - 5);
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
-            const VAddr address = module ? module->GetBaseAddress() + offset : 0;
-            if (address && Core::Memory::Instance()->IsValidMapping(address, 4)) {
+            auto* memory = Core::Memory::Instance();
+            const auto step = path.find('>');
+            const u64 offset = std::stoull(path.substr(0, step), nullptr, 16);
+            VAddr address = module ? module->GetBaseAddress() + offset : 0;
+            for (auto at = step; address && at != std::string::npos;) {
+                const auto next = path.find('>', at + 1);
+                const u64 field = std::stoull(path.substr(at + 1, next - at - 1), nullptr, 16);
+                address = memory->IsValidMapping(address, 8)
+                              ? *reinterpret_cast<const u64*>(address) + field
+                              : 0;
+                at = next;
+            }
+            if (address && memory->IsValidMapping(address, 4)) {
                 auto* word = reinterpret_cast<u32*>(address);
                 if (action.starts_with("poke=") && colon != std::string::npos) {
                     *word = static_cast<u32>(std::stoll(action.substr(colon + 1), nullptr, 0));
