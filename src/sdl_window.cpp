@@ -16,6 +16,9 @@
 #include <cmrc/cmrc.hpp>
 #include <stb_image.h>
 
+#include "common/singleton.h"
+#include "core/linker.h"
+#include "core/memory.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
@@ -249,6 +252,20 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
+        } else if (action.starts_with("poke=") || action.starts_with("peek=")) {
+            // Test: write or log a 32-bit word of the game's image ("poke=325f430:3" sets game
+            // variable 8; offsets as the eboot image has them).
+            const auto colon = action.find(':');
+            const u64 offset = std::stoull(action.substr(5, colon - 5), nullptr, 16);
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const VAddr address = module ? module->GetBaseAddress() + offset : 0;
+            if (address && Core::Memory::Instance()->IsValidMapping(address, 4)) {
+                auto* word = reinterpret_cast<u32*>(address);
+                if (action.starts_with("poke=") && colon != std::string::npos) {
+                    *word = static_cast<u32>(std::stoll(action.substr(colon + 1), nullptr, 0));
+                }
+                LOG_INFO(Core, "script {}: {:#x} = {:#x}", action, offset, *word);
+            }
         } else if (action.starts_with("ach=")) {
             // Test: unlock an achievement as the game would.
             Sotc::Achievements::Unlock(std::stoi(action.substr(4)), nullptr);
