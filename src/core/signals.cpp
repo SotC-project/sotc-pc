@@ -21,6 +21,7 @@
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/threads/exception.h"
 #include "core/signals.h"
+#include "core/sotc/watch.h"
 #include "emulator.h"
 
 #ifdef _WIN32
@@ -40,6 +41,9 @@ namespace Core {
 
 static LONG SignalHandlerBody(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
+    if (Sotc::Watch::Handle(pExp)) {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     const auto* signals = Signals::Instance();
 
     const bool use_static_windows_guest_red_zone_protection =

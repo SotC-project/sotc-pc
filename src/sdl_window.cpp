@@ -23,6 +23,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/menu.h"
+#include "core/sotc/watch.h"
 #include "core/sotc/wheel.h"
 #include "core/sotc/menu_ext.h"
 #include "core/sotc/perf_hud.h"
@@ -298,6 +299,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                       std::ios::binary}
                             .write(bytes.data(), got);
                     }
+                    if (object && n == 0 && action.ends_with(":watchq")) {
+                        // "objlist=238:watchq": who queues the first object for destruction.
+                        Sotc::Watch::Arm(image + 0x2f296d0, 8, image, 0x1600000, 4, object);
+                    }
+                    if (object && n == 0 && action.ends_with(":watch")) {
+                        // "objlist=238:watch": who writes the first object's flag bytes.
+                        Sotc::Watch::Arm(object + 0xc, 4, image, 0x1600000, 8);
+                    }
                     if (moving && object && Core::Memory::Instance()->IsValidMapping(object, 0x1650)) {
                         float delta[3]{move[0], move[1], move[2]};
                         if (absolute) {
@@ -319,6 +328,25 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
             }
             LOG_INFO(Core, "objlist {:x}: world {:#x} handle {:#x}", field, world, u32(handle));
+        } else if (action.starts_with("patch=")) {
+            // Test: overwrite game code at an image offset with hex bytes
+            // ("patch=6a9950:b801000000c3" makes that function return 1).
+            const auto colon = action.find(':');
+            const u64 offset = std::stoull(action.substr(6, colon - 6), nullptr, 16);
+            std::vector<u8> bytes;
+            for (size_t i = colon + 1; i + 1 < action.size(); i += 2) {
+                bytes.push_back(static_cast<u8>(std::stoul(action.substr(i, 2), nullptr, 16)));
+            }
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            if (module && !bytes.empty()) {
+                auto* code = reinterpret_cast<u8*>(module->GetBaseAddress() + offset);
+                DWORD old = 0;
+                VirtualProtect(code, bytes.size(), PAGE_EXECUTE_READWRITE, &old);
+                std::memcpy(code, bytes.data(), bytes.size());
+                VirtualProtect(code, bytes.size(), old, &old);
+                FlushInstructionCache(GetCurrentProcess(), code, bytes.size());
+                LOG_INFO(Core, "script {}: {} bytes written", action, bytes.size());
+            }
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
@@ -371,7 +399,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                           Page);
             }
         } else if (action.starts_with("poke=") || action.starts_with("peek=") ||
-                   action.starts_with("pokef=") || action.starts_with("dumpat=")) {
+                   action.starts_with("pokef=") || action.starts_with("dumpat=") ||
+                   action.starts_with("watch=")) {
             // Test: write or log a 32-bit word of the game's image ("poke=325f430:3" sets game
             // variable 8; offsets as the eboot image has them).
             // "peek=2ef8c08>80>6e8" follows pointers: the word at offset 0x6e8 of what the
@@ -395,7 +424,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                               : 0;
                 at = next;
             }
-            if (action.starts_with("dumpat=") && address && colon != std::string::npos) {
+            if (action.starts_with("watch=") && address && colon != std::string::npos) {
+                Sotc::Watch::Arm(address, std::stoull(action.substr(colon + 1), nullptr, 16),
+                                 module->GetBaseAddress(), 0x1600000, 8);
+            } else if (action.starts_with("dumpat=") && address && colon != std::string::npos) {
                 static int dumps = 0;
                 const u64 size = std::stoull(action.substr(colon + 1), nullptr, 16);
                 std::vector<char> bytes(size);
