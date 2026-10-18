@@ -62,6 +62,8 @@ constexpr std::array<Weapon, 11> Weapons{{
 std::atomic_bool open{false};
 float motion_x = 0.0f, motion_y = 0.0f;
 int chosen = -1;
+// The weapons on the wheel while it is up: only those the player owns (empty hands always).
+std::vector<const Weapon*> shown;
 using Clock = std::chrono::steady_clock;
 Clock::time_point opened_at;
 
@@ -112,9 +114,6 @@ bool InPlay() {
 }
 
 void Take(const Weapon& weapon) {
-    // Bonus weapons the player has not won yet are given here, as the user asked; the game
-    // keeps them with the save like any other item.
-    SetBit(OwnedItems, weapon.item);
     SetBit(EquippedItems, weapon.item);
     // Swords are on the right button, bows on the left; the rest is tried on the right first.
     change = {.kind = weapon.kind,
@@ -320,9 +319,9 @@ void DrawWheel() {
         motion_x *= 120.0f / std::max(length, 120.0f);
         motion_y *= 120.0f / std::max(length, 120.0f);
         const float angle = std::atan2(motion_x, -motion_y); // 0 at the top, clockwise
-        const float step = 2.0f * Pi / Weapons.size();
+        const float step = 2.0f * Pi / shown.size();
         const float turns = std::fmod(angle + step * 0.5f + 4.0f * Pi, 2.0f * Pi);
-        chosen = static_cast<int>(turns / step) % static_cast<int>(Weapons.size());
+        chosen = static_cast<int>(turns / step) % static_cast<int>(shown.size());
     }
 
     // Each slot grows into its selection and shrinks back, and the pointer at the middle swings
@@ -331,7 +330,7 @@ void DrawWheel() {
     static float pointer = 0.0f;
     static bool pointer_shown = false;
     const float follow = 1.0f - std::exp(-dt / 0.06f);
-    for (size_t i = 0; i < Weapons.size(); i++) {
+    for (size_t i = 0; i < shown.size(); i++) {
         grow[i] += ((static_cast<int>(i) == chosen ? 1.0f : 0.0f) - grow[i]) * follow;
     }
     if (now < 0.02f) {
@@ -339,7 +338,7 @@ void DrawWheel() {
         pointer_shown = false;
     }
     if (chosen >= 0) {
-        const float target = 2.0f * Pi * chosen / Weapons.size();
+        const float target = 2.0f * Pi * chosen / shown.size();
         if (!pointer_shown) {
             pointer = target;
             pointer_shown = true;
@@ -358,15 +357,13 @@ void DrawWheel() {
     }
 
     const s32 in_hand = InHand();
-    for (size_t i = 0; i < Weapons.size(); i++) {
-        const Weapon& weapon = Weapons[i];
-        const float angle = 2.0f * Pi * i / Weapons.size();
+    for (size_t i = 0; i < shown.size(); i++) {
+        const Weapon& weapon = *shown[i];
+        const float angle = 2.0f * Pi * i / shown.size();
         const ImVec2 at{center.x + std::sin(angle) * radius, center.y - std::cos(angle) * radius};
         const float g = grow[i];
         const float r = slot * (1.0f + 0.14f * g);
-        const bool owned = HasBit(OwnedItems, weapon.item);
-        const ImU32 base_color = owned ? Ui::TextNormal : IM_COL32(150, 148, 140, 255);
-        const ImU32 color = Fade(g > 0.5f ? Ui::TextBright : base_color, ease);
+        const ImU32 color = Fade(g > 0.5f ? Ui::TextBright : Ui::TextNormal, ease);
         draw->AddCircleFilled(at, r, Fade(IM_COL32(0, 0, 0, 110 + static_cast<int>(90 * g)), ease), 48);
         draw->AddCircle(at, r, Fade(IM_COL32(244, 242, 232, 70 + static_cast<int>(160 * g)), ease), 48,
                         (1.2f + 1.3f * g) * scale);
@@ -387,15 +384,9 @@ void DrawWheel() {
         }
     }
     if (chosen >= 0) {
-        const Weapon& weapon = Weapons[chosen];
-        const bool bonus = !HasBit(OwnedItems, weapon.item);
-        FitText(draw, 34.0f * scale, 16.0f * scale, center.x,
-                center.y - (bonus ? 44.0f : 22.0f) * scale, middle * 1.6f,
-                Fade(Ui::TextBright, ease), weapon.name);
-        if (bonus) {
-            FitText(draw, 20.0f * scale, 12.0f * scale, center.x, center.y + 30.0f * scale,
-                    middle * 1.5f, Fade(Ui::TextNormal, ease), "Bonus item: given when chosen");
-        }
+        const Weapon& weapon = *shown[chosen];
+        FitText(draw, 34.0f * scale, 16.0f * scale, center.x, center.y - 22.0f * scale,
+                middle * 1.6f, Fade(Ui::TextBright, ease), weapon.name);
     }
 }
 
@@ -414,6 +405,12 @@ void Draw() {
         }
         open = true;
         chosen = -1;
+        shown.clear();
+        for (const Weapon& weapon : Weapons) {
+            if (weapon.kind == 10 || HasBit(OwnedItems, weapon.item)) {
+                shown.push_back(&weapon);
+            }
+        }
         motion_x = motion_y = 0.0f;
         Input::menu_motion_x = 0.0f;
         Input::menu_motion_y = 0.0f;
@@ -430,7 +427,7 @@ void Draw() {
     open = false;
     Libraries::Kernel::Dev::SetTimeScale(1.0);
     if (chosen >= 0) {
-        Take(Weapons[chosen]);
+        Take(*shown[chosen]);
     }
 }
 

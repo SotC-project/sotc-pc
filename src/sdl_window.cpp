@@ -801,6 +801,16 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
                                                          event->button.y / float(h));
                        }()) {
                 return;
+            } else if (event->button.button == SDL_BUTTON_LEFT && event->button.down &&
+                       [&] {
+                           // Away from the chosen line a click does nothing.
+                           int w = 0, h = 0;
+                           SDL_GetWindowSize(window, &w, &h);
+                           return w > 0 && h > 0 &&
+                                  !Sotc::MenuExt::PointerOnCursor(event->button.x / float(w),
+                                                                  event->button.y / float(h));
+                       }()) {
+                return;
             } else if (event->button.button == SDL_BUTTON_LEFT ||
                        event->button.button == SDL_BUTTON_RIGHT) {
                 key.type = event->button.down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;

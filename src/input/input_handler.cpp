@@ -1013,6 +1013,21 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
             controller->Button(held, new_button_state);
             break;
         }
+        case SWORD_LIGHT: {
+            // Likewise kept from press to release: nothing while a bow is out.
+            static std::optional<OrbisPadButtonDataOffset> held;
+            if (new_button_state) {
+                const std::string aim = AimButton();
+                held = Input::ranged_out ? std::nullopt
+                       : aim == "circle" ? std::optional{OrbisPadButtonDataOffset::Circle}
+                       : aim == "r2"     ? std::optional{OrbisPadButtonDataOffset::R2}
+                                         : std::optional{OrbisPadButtonDataOffset::R1};
+            }
+            if (held) {
+                controller->Button(*held, new_button_state);
+            }
+            break;
+        }
         default: { // is a normal key (hopefully)
             // Menu directions and buttons pass by the extra lines of the game's menus first.
             const auto orbis = SDLGamepadToOrbisButton(button);
