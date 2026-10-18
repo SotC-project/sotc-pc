@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -72,6 +73,7 @@ public:
     }
 
     ~SDLPortBackend() override {
+        shared_level[slot].store(0.0f, std::memory_order_relaxed);
         Cleanup();
     }
 
@@ -87,6 +89,9 @@ public:
         UpdateVolumeIfChanged();
         const u64 current_time = Kernel::sceKernelGetProcessTime();
         convert(ptr, internal_buffer, buffer_frames, nullptr);
+        if (ps4_downmix) {
+            SharedLimit(static_cast<float*>(internal_buffer), buffer_frames);
+        }
         HandleTiming(current_time);
 
         if ((output_count++ & 0xF) == 0) { // Check every 16 outputs
@@ -414,14 +419,48 @@ private:
     // sound thin on stereo speakers and headphones.
     static constexpr float DOWNMIX_LFE = 0.5f;
 
-    // Front, centre, surround and LFE added together go well past full scale on loud sounds,
-    // and the system clips that flat (heard as crackle). Bend peaks over above 0.8 instead.
+    // Front, centre, surround and LFE added together go well past full scale on loud sounds.
+    // The game's front pair alone peaks near full scale, so the sum is first brought down about
+    // 2.5 dB; what still goes over is held down by SharedLimit after the fold-down.
     static float SoftLimit(float s) {
-        // The game's front pair alone peaks near full scale, so the sum is first brought down
-        // about 2.5 dB; the bend above 0.8 is then for rare peaks only.
-        s *= 0.75f;
-        const float mag = std::abs(s);
-        return mag > 0.8f ? std::copysign(0.8f + 0.2f * std::tanh((mag - 0.8f) * 5.0f), s) : s;
+        return s * 0.75f;
+    }
+
+    // The game plays through three ports at once (effects, a second main port, music) and the
+    // system adds them up: each one kept under full scale on its own still clipped where loud
+    // effects met the music. So the ports share one budget: each publishes how loud it has been
+    // lately (instant rise, a fifth of a second to fall back), and every port turns down by the
+    // same factor when the sum would pass the ceiling. A soft bend near full scale catches what
+    // the few milliseconds between ports' updates let through.
+    static constexpr size_t SharedSlots = 8;
+    static inline std::array<std::atomic<float>, SharedSlots> shared_level{};
+    static inline std::atomic<u32> next_slot{0};
+    u32 slot = next_slot.fetch_add(1) % SharedSlots;
+    float level = 0.0f;
+
+    void SharedLimit(float* lr, u32 frames) {
+        constexpr float Ceiling = 0.9f;
+        const float release = std::exp(-1.0f / (0.2f * static_cast<float>(sample_rate)));
+        float others = 0.0f;
+        for (size_t i = 0; i < SharedSlots; i++) {
+            if (i != slot) {
+                others += shared_level[i].load(std::memory_order_relaxed);
+            }
+        }
+        for (u32 n = 0; n < frames; n++) {
+            const float peak = std::max(std::abs(lr[n * 2]), std::abs(lr[n * 2 + 1]));
+            level = std::max(peak, level * release);
+            const float total = level + others;
+            const float gain = total > Ceiling ? Ceiling / total : 1.0f;
+            for (int c = 0; c < 2; c++) {
+                const float s = lr[n * 2 + c] * gain;
+                const float mag = std::abs(s);
+                lr[n * 2 + c] =
+                    mag > 0.97f ? std::copysign(0.97f + 0.03f * std::tanh((mag - 0.97f) * 30.0f), s)
+                                : s;
+            }
+        }
+        shared_level[slot].store(level, std::memory_order_relaxed);
     }
 
     static void DownmixS16_8CHToStereoPS4(const void* src, void* dst, u32 frames, const float*) {

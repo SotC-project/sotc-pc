@@ -564,7 +564,7 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
         following = true;
         last_direction = 0;
     }
-    if (!following || !taps.empty() || rest_frames <= 6) {
+    if (!following || !taps.empty() || rest_frames <= 3) {
         return;
     }
     // The game's Yes/No questions ("Quit to Main Menu?"): two choices side by side, stepped with
@@ -605,33 +605,23 @@ void FollowPointer(float arrow_x, float arrow_y, int rest_frames) {
 }
 
 /// A cutscene can be left by holding the confirm button, which the game only says once a
-/// button is pressed. Said here for the first seconds of every scene, in the black bar at the
-/// foot of the picture; not while a key is down or was a moment ago, when the game's own hint
-/// stands in that place.
+/// button is pressed. Said here for as long as the scene runs, in the black bar at the foot of
+/// the picture: dimmed, and full while the confirm button is held (user's wish, so it is always
+/// known that a scene can be skipped).
 void DrawSkipHint() {
-    static u64 since_ms = 0, touched_ms = 0;
     const bool scene = Screens::Letterboxed() && !Screens::PauseMenu() && !Screens::Arrow() &&
                        !Overlay::InTitleMenu() && !PanelOpen() && !Ui::DialogOpen();
     if (!scene) {
-        since_ms = 0;
         return;
     }
-    const u64 now = SDL_GetTicks();
-    if (since_ms == 0) {
-        since_ms = now;
-    }
+    const bool held = ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_Space) ||
+                      ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown);
     const ImGuiIO& io = ImGui::GetIO();
-    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++) {
-        if (ImGui::IsKeyDown(static_cast<ImGuiKey>(key))) {
-            touched_ms = now;
-            break;
-        }
-    }
-    if (now - since_ms > 8000 || (touched_ms != 0 && now - touched_ms < 4000)) {
-        return;
-    }
-    Ui::Prompt(ImGui::GetForegroundDrawList(), io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.938f,
-               "HOLD TO SKIP", Ui::Action::Confirm);
+    auto* draw = ImGui::GetForegroundDrawList();
+    const int first = draw->VtxBuffer.Size;
+    Ui::Prompt(draw, io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.938f, "HOLD TO SKIP",
+               Ui::Action::Confirm);
+    Ui::Fade(draw, first, held ? 1.0f : 0.4f);
 }
 
 } // namespace
@@ -782,7 +772,7 @@ void Draw() {
     }
     Input::GameController* controller = pad.load();
 
-    // Presses on their way to the game: down for a twentieth of a second, then up for one. By
+    // Presses on their way to the game: down for a twentieth of a second, then up for 40 ms. By
     // the clock: the picture may be drawn several times for each time the game reads the pad.
     const u64 now_ms = SDL_GetTicks();
     if (!taps.empty() && controller) {
@@ -793,7 +783,7 @@ void Draw() {
         } else if (!tap.released && now_ms - tap.pressed_ms >= 50) {
             controller->Button(tap.button, false);
             tap.released = true;
-        } else if (now_ms - tap.pressed_ms >= 110) {
+        } else if (now_ms - tap.pressed_ms >= 90) {
             taps.pop_front();
         }
     }
@@ -922,7 +912,7 @@ void Draw() {
     }
 
     // A click being followed up.
-    if (seek.active && taps.empty() && rest_frames > 6 && !PanelOpen()) {
+    if (seek.active && taps.empty() && rest_frames > 3 && !PanelOpen()) {
         if (std::abs(y - seek.y) < SameLine) {
             seek.active = false;
             arrow_returning = false;
@@ -941,7 +931,16 @@ void Draw() {
             seek.active = false;
             arrow_returning = false;
         } else {
-            QueueTap(seek.y < y ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up);
+            // A whole number of even rows away: pressed all at once, then checked. Otherwise
+            // (the title's Continue block is taller) one line at a time.
+            const float rows = std::abs(seek.y - y) / RowStep;
+            const bool even = std::abs(rows - std::round(rows)) * RowStep < SameLine;
+            const int lines = even ? std::clamp(static_cast<int>(std::round(rows)), 1,
+                                                std::max(seek.presses_left + 1, 1))
+                                   : 1;
+            seek.presses_left -= lines - 1;
+            QueueTap(seek.y < y ? OrbisPadButtonDataOffset::Down : OrbisPadButtonDataOffset::Up,
+                     lines);
             rest_frames = 0, rest_since = now_ms;
         }
     }

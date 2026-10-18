@@ -27,7 +27,7 @@ namespace Sotc::Loading {
 
 namespace {
 
-constexpr char Magic[8] = {'S', 'O', 'T', 'C', 'L', 'D', '0', '1'};
+constexpr char Magic[8] = {'S', 'O', 'T', 'C', 'L', 'D', '0', '2'}; // 02: full height; 01 files cut the feet off
 constexpr u32 FrameMs = 33;      // one recorded frame per this much time
 constexpr size_t MaxFrames = 240; // eight seconds
 constexpr size_t MinLoop = 24;    // a turn shorter than this is not believed

@@ -1016,7 +1016,8 @@ void TextureCache::RefreshImage(Image& image) {
     ApplyTexturePack(image);
 }
 
-std::atomic<PromptSet> g_prompt_set{PromptSet::PlayStation};
+// Keyboard until a pad is used: a PC start with no input yet (the opening film) says Enter.
+std::atomic<PromptSet> g_prompt_set{PromptSet::Keyboard};
 std::atomic<u32> g_pack_generation{0};
 
 PromptSet ActivePromptSet() {

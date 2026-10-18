@@ -56,6 +56,15 @@ namespace {
 enum class Page { FreePlay, Graphics, Controls, Quit };
 
 std::atomic_bool open{false};
+// A page fades in when opened and out when left; `open` stays true until it is gone.
+u64 opened_ms = 0;
+std::atomic<u64> closing_ms{0};
+
+void Leave() {
+    if (open && closing_ms == 0) {
+        closing_ms = std::max<u64>(SDL_GetTicks(), 1);
+    }
+}
 Page page = Page::FreePlay;
 int selected = 0;
 
@@ -610,7 +619,7 @@ std::string KeyLabel(const std::string& key) {
 std::vector<Row> BuildRows() {
     std::vector<Row> rows;
     if (page == Page::Quit) {
-        rows.push_back({"No", "", "", true, false, [](int) { open = false; }});
+        rows.push_back({"No", "", "", true, false, [](int) { Leave(); }});
         rows.push_back({"Yes", "", "", true, false, [](int) { QuitGame(); }});
     } else if (page == Page::FreePlay) {
         const std::string target = fmt::format(
@@ -654,7 +663,7 @@ std::vector<Row> BuildRows() {
                         }});
         rows.push_back({"Back", "", "Return to the previous menu", true, false, [](int d) {
                             if (d == 0) {
-                                open = false;
+                                Leave();
                             }
                         }});
     } else if (page == Page::Graphics) {
@@ -698,7 +707,7 @@ std::vector<Row> BuildRows() {
                         }});
         rows.push_back({"Back", "", "Leave without saving", true, false, [](int d) {
                             if (d == 0) {
-                                open = false;
+                                Leave();
                             }
                         }});
     } else {
@@ -719,7 +728,7 @@ std::vector<Row> BuildRows() {
         }
         rows.push_back({"Back", "", "Changes are saved as you make them", true, false, [](int d) {
                             if (d == 0) {
-                                open = false;
+                                Leave();
                             }
                         }});
     }
@@ -745,6 +754,7 @@ const char* PageTitle() {
 void Toggle() {
     capture_row = -1;
     open = false;
+    closing_ms = 0;
 }
 
 bool IsOpen() {
@@ -756,6 +766,10 @@ void OpenFreePlay() {
     GoTo(Page::FreePlay);
     opened_on_page = true;
     wait_for_release = true;
+    if (!open || closing_ms != 0) {
+        opened_ms = SDL_GetTicks();
+    }
+    closing_ms = 0;
     open = true;
 }
 
@@ -764,6 +778,10 @@ void OpenQuit() {
     GoTo(Page::Quit);
     opened_on_page = true;
     wait_for_release = true;
+    if (!open || closing_ms != 0) {
+        opened_ms = SDL_GetTicks();
+    }
+    closing_ms = 0;
     open = true;
 }
 
@@ -825,6 +843,10 @@ void OpenGraphics() {
     GoTo(Page::Graphics);
     opened_on_page = true;
     wait_for_release = true;
+    if (!open || closing_ms != 0) {
+        opened_ms = SDL_GetTicks();
+    }
+    closing_ms = 0;
     open = true;
 }
 
@@ -834,6 +856,10 @@ void OpenKeyBindings() {
     GoTo(Page::Controls);
     opened_on_page = true;
     wait_for_release = true;
+    if (!open || closing_ms != 0) {
+        opened_ms = SDL_GetTicks();
+    }
+    closing_ms = 0;
     open = true;
 }
 
@@ -952,6 +978,12 @@ void Draw() {
     if (!open) {
         return;
     }
+    if (closing_ms != 0 && SDL_GetTicks() - closing_ms >= Ui::PageFadeMs) {
+        open = false;
+        closing_ms = 0;
+        return;
+    }
+    const bool leaving = closing_ms != 0;
 
     const std::vector<Row> rows = BuildRows();
     const int count = static_cast<int>(rows.size());
@@ -972,7 +1004,7 @@ void Draw() {
         wait_for_release = IsKeyDown(ImGuiKey_Enter) || IsKeyDown(ImGuiKey_Space) ||
                            IsKeyDown(ImGuiKey_GamepadFaceDown) || IsMouseDown(0);
     }
-    if (!capturing && !wait_for_release) {
+    if (!capturing && !wait_for_release && !leaving) {
         if (IsKeyPressed(ImGuiKey_DownArrow) || IsKeyPressed(ImGuiKey_GamepadDpadDown) ||
             IsKeyPressed(ImGuiKey_S)) {
             step_to_enabled(1);
@@ -1003,6 +1035,13 @@ void Draw() {
     const ImVec2 display = GetIO().DisplaySize;
     const float scale = Ui::Scale();
     auto* draw = GetForegroundDrawList();
+    struct FadeScope {
+        ImDrawList* draw;
+        int first;
+        ~FadeScope() {
+            Ui::Fade(draw, first, Ui::PageOpacity(opened_ms, closing_ms));
+        }
+    } fade_scope{draw, draw->VtxBuffer.Size};
     // Opened from one of the game's menus, the page takes that menu's place: the game's
     // lettering is left out meanwhile (see MenuExt::HideText) and the page is written where
     // it stood, in ink on the game's picture, like the game's own sub-menus.
@@ -1151,7 +1190,7 @@ void Draw() {
         rows[activate_row].act(activate_direction);
     } else if (back) {
         // Every page was opened from a line of the game's menus, which is behind it.
-        open = false;
+        Leave();
     }
 }
 
