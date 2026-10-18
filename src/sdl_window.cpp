@@ -253,6 +253,72 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
+        } else if (action.starts_with("objlist=")) {
+            // Test: walks a game object list the way the game's GetFirstObj (eboot 0x7c9820) does
+            // and dumps each object (0x800 bytes) to <user>/obj_<label>_<n>.bin.
+            // "objlist=228" is the list at world + 0x228 (the colossi); world from 0x15fe570.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const VAddr image = module ? module->GetBaseAddress() : 0;
+            const auto read = [](VAddr address, auto& value) {
+                SIZE_T got = 0;
+                return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+                                         &value, sizeof(value), &got) &&
+                       got == sizeof(value);
+            };
+            u64 world = 0, handle_base = 0;
+            s32 handle = 0;
+            static int pass = 0;
+            pass++;
+            // "objlist=228:0/40/0" also moves every object by that much (all copies of its
+            // position found in the object: 0x130 0x140 0x160 0x750 0x7b0 0x7c0 0x7f0 0x1640).
+            const u64 field = std::stoull(action.substr(8), nullptr, 16);
+            float move[3]{};
+            // "objlist=228:@x/y/z" puts them there instead.
+            const auto colon = action.find(':');
+            const bool absolute = colon != std::string::npos && action[colon + 1] == '@';
+            const bool moving = colon != std::string::npos &&
+                                sscanf(action.c_str() + colon + 1 + absolute, "%f/%f/%f",
+                                       &move[0], &move[1], &move[2]) == 3;
+            if (image && read(image + 0x15fe570, world) && read(world + field, handle)) {
+                read(image + 0x2f3b8c0, handle_base);
+                u64 node = (handle < 0 ? handle_base : 0) + (u32(handle) & 0x7fffffff);
+                for (int n = 0; node && n < 64; n++) {
+                    u64 object = 0, next = 0;
+                    u8 skip = 0;
+                    if (!read(node, object) || !read(node + 0x18, skip) || !read(node + 0x20, next)) {
+                        break;
+                    }
+                    std::vector<char> bytes(0x2000);
+                    SIZE_T got = 0;
+                    if (object) {
+                        ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(object),
+                                          bytes.data(), bytes.size(), &got);
+                        std::ofstream{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                                          fmt::format("obj_{:x}_{}_{}.bin", field, pass, n),
+                                      std::ios::binary}
+                            .write(bytes.data(), got);
+                    }
+                    if (moving && object && Core::Memory::Instance()->IsValidMapping(object, 0x1650)) {
+                        float delta[3]{move[0], move[1], move[2]};
+                        if (absolute) {
+                            const auto* now = reinterpret_cast<const float*>(object + 0x130);
+                            for (int k = 0; k < 3; k++) {
+                                delta[k] = move[k] - now[k];
+                            }
+                        }
+                        for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640}) {
+                            auto* p = reinterpret_cast<float*>(object + at);
+                            for (int k = 0; k < 3; k++) {
+                                p[k] += delta[k];
+                            }
+                        }
+                    }
+                    LOG_INFO(Core, "objlist {:x} #{}: node {:#x} object {:#x} type {} skip {}",
+                             field, n, node, object, got > 0xc ? int(u8(bytes[0xc])) : -1, skip);
+                    node = next;
+                }
+            }
+            LOG_INFO(Core, "objlist {:x}: world {:#x} handle {:#x}", field, world, u32(handle));
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
