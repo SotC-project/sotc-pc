@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <fstream>
+#include <thread>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -328,6 +329,58 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
             }
             LOG_INFO(Core, "objlist {:x}: world {:#x} handle {:#x}", field, world, u32(handle));
+        } else if (action.starts_with("layers=")) {
+            // Test: the game's streamed level layers (list at image 0x3017e88, next at +0xb8) with
+            // their type hash (*(+0x88)+8) and state (+0xa0), to <user>/layers_<label>.txt.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const auto read = [](u64 address, auto& value) {
+                SIZE_T got = 0;
+                return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+                                         &value, sizeof(value), &got) &&
+                       got == sizeof(value);
+            };
+            std::ofstream out{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                              ("layers_" + action.substr(7) + ".txt")};
+            u64 layer = 0;
+            if (module) {
+                read(module->GetBaseAddress() + 0x3017e88, layer);
+            }
+            for (int n = 0; layer && n < 4000; n++) {
+                u64 info = 0, next = 0;
+                u32 hash = 0, state = 0;
+                read(layer + 0x88, info);
+                read(info + 8, hash);
+                read(layer + 0xa0, state);
+                out << fmt::format("{:x} {:08x} {:08x}\n", layer, hash, state);
+                if (!read(layer + 0xb8, next)) {
+                    break;
+                }
+                layer = next;
+            }
+        } else if (action.starts_with("pinlayers=")) {
+            // Test: keeps the layers now in the list loaded for that many seconds, by holding
+            // their countdown (+0xa0, bits 20-29) at the game's "requested" value from a thread.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            std::vector<u64> pinned;
+            u64 layer = module ? *reinterpret_cast<const u64*>(module->GetBaseAddress() + 0x3017e88)
+                               : 0;
+            for (int n = 0; layer && n < 64; n++) {
+                pinned.push_back(layer);
+                layer = *reinterpret_cast<const u64*>(layer + 0xb8);
+            }
+            const int seconds = std::stoi(action.substr(10));
+            LOG_INFO(Core, "pinning {} layers for {} s", pinned.size(), seconds);
+            std::thread([pinned, seconds] {
+                const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+                while (std::chrono::steady_clock::now() < end) {
+                    for (const u64 l : pinned) {
+                        auto* state = reinterpret_cast<std::atomic<u32>*>(l + 0xa0);
+                        u32 v = state->load();
+                        state->compare_exchange_weak(v, (v & ~0x3ff00000u) | 0x1ff00000u);
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+            }).detach();
         } else if (action.starts_with("patch=")) {
             // Test: overwrite game code at an image offset with hex bytes
             // ("patch=6a9950:b801000000c3" makes that function return 1).
