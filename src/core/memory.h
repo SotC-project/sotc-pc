@@ -5,6 +5,7 @@
 
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include "common/enum.h"
@@ -209,6 +210,17 @@ public:
         // The PS4's GPU can only handle 40 bit addresses.
         const VAddr max_gpu_address{0x10000000000};
         return virtual_addr + size < max_gpu_address;
+    }
+
+    /// Test aid: every mapped area that the guest can read (base, size).
+    template <typename F>
+    void ForEachReadable(F&& f) {
+        std::shared_lock lk{mutex};
+        for (const auto& [base, vma] : vma_map) {
+            if (vma.IsMapped() && True(vma.prot & MemoryProt::CpuRead)) {
+                f(vma.base, vma.size);
+            }
+        }
     }
 
     bool IsValidMapping(const VAddr virtual_addr, const u64 size = 0) {

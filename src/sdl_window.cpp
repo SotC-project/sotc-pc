@@ -253,6 +253,41 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
+        } else if (action.starts_with("findvec=")) {
+            // Test: places in game memory holding three floats within r of x/y/z
+            // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
+            // ReadProcessMemory so pages without backing cannot fault.
+            float v[4]{};
+            sscanf(action.c_str() + 8, "%f/%f/%f/%f", &v[0], &v[1], &v[2], &v[3]);
+            std::vector<std::pair<VAddr, u64>> areas;
+            Core::Memory::Instance()->ForEachReadable(
+                [&](VAddr base, u64 size) { areas.emplace_back(base, size); });
+            std::vector<float> chunk(0x10000 / 4 + 2);
+            int hits = 0;
+            static int scan = 0;
+            std::ofstream out{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                              fmt::format("findvec_{}.txt", scan++)};
+            for (const auto& [base, size] : areas) {
+                for (u64 at = 0; at < size && hits < 200000; at += 0x10000) {
+                    const u64 n = std::min<u64>(0x10000 + 8, size - at);
+                    SIZE_T got = 0;
+                    if (!ReadProcessMemory(GetCurrentProcess(),
+                                           reinterpret_cast<const void*>(base + at),
+                                           chunk.data(), n, &got) ||
+                        got < 12) {
+                        continue;
+                    }
+                    for (u64 i = 0; i + 2 < got / 4 && i < 0x10000 / 4 && hits < 200000; i++) {
+                        if (std::abs(chunk[i] - v[0]) < v[3] && std::abs(chunk[i + 1] - v[1]) < v[3] &&
+                            std::abs(chunk[i + 2] - v[2]) < v[3]) {
+                            out << fmt::format("{:x} {:.3f} {:.3f} {:.3f}\n", base + at + i * 4,
+                                               chunk[i], chunk[i + 1], chunk[i + 2]);
+                            hits++;
+                        }
+                    }
+                }
+            }
+            LOG_INFO(Core, "findvec done: {} hits in {} areas", hits, areas.size());
         } else if (action.starts_with("dumpimg=")) {
             // Test: the game image's data section to <user>/imgdump_<label>.bin (pages that
             // are not mapped come out as zeros), for diffing game state between moments.
@@ -269,13 +304,18 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                               : zeros.data(),
                           Page);
             }
-        } else if (action.starts_with("poke=") || action.starts_with("peek=")) {
+        } else if (action.starts_with("poke=") || action.starts_with("peek=") ||
+                   action.starts_with("pokef=") || action.starts_with("dumpat=")) {
             // Test: write or log a 32-bit word of the game's image ("poke=325f430:3" sets game
             // variable 8; offsets as the eboot image has them).
             // "peek=2ef8c08>80>6e8" follows pointers: the word at offset 0x6e8 of what the
             // pointer at 0x80 of what the pointer at image offset 0x2ef8c08 points to.
+            // "pokef=<path>:<float>" writes a float; "dumpat=<path>:<hex size>" writes that many
+            // bytes from there to <user>/dumpat_<n>.bin.
             const auto colon = action.find(':');
-            std::string path = action.substr(5, colon == std::string::npos ? colon : colon - 5);
+            const auto from = action.find('=') + 1;
+            std::string path =
+                action.substr(from, colon == std::string::npos ? colon : colon - from);
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
             auto* memory = Core::Memory::Instance();
             const auto step = path.find('>');
@@ -289,12 +329,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                               : 0;
                 at = next;
             }
-            if (address && memory->IsValidMapping(address, 4)) {
+            if (action.starts_with("dumpat=") && address && colon != std::string::npos) {
+                static int dumps = 0;
+                const u64 size = std::stoull(action.substr(colon + 1), nullptr, 16);
+                std::vector<char> bytes(size);
+                SIZE_T got = 0;
+                ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+                                  bytes.data(), size, &got);
+                std::ofstream{Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
+                                  fmt::format("dumpat_{}.bin", dumps),
+                              std::ios::binary}
+                    .write(bytes.data(), got);
+                LOG_INFO(Core, "script {}: {:#x} bytes from {:#x} to dumpat_{}.bin", action, got,
+                         address, dumps++);
+            } else if (address && memory->IsValidMapping(address, 4)) {
                 auto* word = reinterpret_cast<u32*>(address);
-                if (action.starts_with("poke=") && colon != std::string::npos) {
+                if (action.starts_with("pokef=") && colon != std::string::npos) {
+                    *reinterpret_cast<float*>(word) = std::stof(action.substr(colon + 1));
+                } else if (action.starts_with("poke=") && colon != std::string::npos) {
                     *word = static_cast<u32>(std::stoll(action.substr(colon + 1), nullptr, 0));
                 }
-                LOG_INFO(Core, "script {}: {:#x} = {:#x}", action, offset, *word);
+                LOG_INFO(Core, "script {}: {:#x} = {:#x} ({})", action, address, *word,
+                         *reinterpret_cast<const float*>(word));
             }
         } else if (action.starts_with("ach=")) {
             // Test: unlock an achievement as the game would.
