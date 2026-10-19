@@ -603,8 +603,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(data + 0x08) = na ? *reinterpret_cast<const u64*>(na) : 0;
                 *reinterpret_cast<u64*>(data + 0x10) = nb ? *reinterpret_cast<const u64*>(nb) : 0;
                 *reinterpret_cast<u64*>(data + 0x18) = world + 0x228;
-                *reinterpret_cast<u32*>(data + 0x20) = nb ? handle_of(nb) : 0;
-                *reinterpret_cast<u32*>(data + 0x24) = na ? handle_of(na) : 0;
+                // One-entry lists for the redirect: our own nodes in the cave (object at +0,
+                // skip byte +0x18, next +0x20), as list nodes of the game come and go. The cave
+                // lies below 2 GB, so a plain (non-negative) handle is the node's address.
+                const u64 obj_a = na ? *reinterpret_cast<const u64*>(na) : 0;
+                const u64 obj_b = nb ? *reinterpret_cast<const u64*>(nb) : 0;
+                auto* node_for_a = reinterpret_cast<u64*>(image + 0x1593f00); // holds B
+                auto* node_for_b = reinterpret_cast<u64*>(image + 0x1593f40); // holds A
+                std::memset(node_for_a, 0, 0x40);
+                std::memset(node_for_b, 0, 0x40);
+                node_for_a[0] = obj_b;
+                node_for_b[0] = obj_a;
+                if (action.find(":oneway") != std::string::npos) {
+                    // B keeps its real target (the player list's first object).
+                    const u64 player_node = node_of(0x228, 0);
+                    node_for_b[0] = player_node ? *reinterpret_cast<const u64*>(player_node) : 0;
+                }
+                *reinterpret_cast<u32*>(data + 0x20) = u32(image + 0x1593f00);
+                *reinterpret_cast<u32*>(data + 0x24) = u32(image + 0x1593f40);
                 // 0x1593b28/30: their boss-table entries (table at *(image+0x16d21f8+0x20),
                 // 0x1e8 per colossus), which GetCurrentBoss answers while each one updates.
                 const u64 table = *reinterpret_cast<const u64*>(image + 0x16d21f8 + 0x20);
