@@ -139,6 +139,32 @@ static void AttachVirtualPad() {
     }
 }
 
+/// Test aid: moves a game character (an object of type 9) by a world-space delta. Besides the
+/// world position copies, the character keeps its transform three times (object+0x1e0, the
+/// movement code's copies at +0x13f8 and +0x14b8) and rebuilds world from them each frame
+/// (0x6611c0, 0x641850); each holds its translation at +0x10 (variant 0, +0x30 = 0) or, relative to
+/// the object it stands on, at +0x18 (variant 2, 0x59a8d0). Adding the world delta there assumes
+/// that object is not rotated. Returns the main transform's variant.
+static u32 MoveCharacter(u64 object, const float delta[3]) {
+    for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640}) {
+        auto* p = reinterpret_cast<float*>(object + at);
+        for (int k = 0; k < 3; k++) {
+            p[k] += delta[k];
+        }
+    }
+    for (const u64 transform : {0x1e0, 0x13f8, 0x14b8}) {
+        const u32 variant = *reinterpret_cast<const u32*>(object + transform + 0x30);
+        if (variant != 0 && variant != 2) {
+            continue;
+        }
+        auto* p = reinterpret_cast<float*>(object + transform + (variant == 0 ? 0x10 : 0x18));
+        for (int k = 0; k < 3; k++) {
+            p[k] += delta[k];
+        }
+    }
+    return *reinterpret_cast<const u32*>(object + 0x1e0 + 0x30);
+}
+
 static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
     struct Step {
@@ -147,11 +173,23 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
     };
     static const std::vector<Step> steps = [] {
         std::vector<Step> out;
-        std::stringstream ss{std::getenv("SOTC_SCRIPT")};
+        // "@<path>": the script is in that file (Windows caps an environment variable at 32 KB).
+        std::string text = std::getenv("SOTC_SCRIPT");
+        if (text.starts_with('@')) {
+            std::ifstream file{text.substr(1)};
+            text.assign(std::istreambuf_iterator<char>(file), {});
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+                text.pop_back();
+            }
+        }
+        std::stringstream ss{text};
         for (std::string item; std::getline(ss, item, ',');) {
             const auto colon = item.find(':');
             out.push_back({std::stod(item.substr(0, colon)), item.substr(colon + 1)});
         }
+        // Steps run in order, one per tick: a step listed after a later one would wait for it.
+        std::stable_sort(out.begin(), out.end(),
+                         [](const Step& a, const Step& b) { return a.at < b.at; });
         return out;
     }();
     // Script seconds are counted from the first presented frame plus the usual boot time, so
@@ -190,7 +228,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
     // that is polled for appended lines (one action per line, run as soon as it is seen) so a
     // run can be steered while it is in progress.
     std::vector<std::string> due;
-    if (next < steps.size() && (now - start) / 1000.0 >= steps[next].at) {
+    while (next < steps.size() && (now - start) / 1000.0 >= steps[next].at) {
         due.push_back(steps[next++].action);
     }
     static const char* live_path = std::getenv("SOTC_SCRIPT_FILE");
@@ -219,7 +257,27 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             }
         }
     }
-    for (const std::string& action : due) {
+    for (const std::string& queued : due) {
+        // "ifset=<image offset>:<action>" / "ifzero=...": run the action only while the u64 there
+        // is non-zero / zero (e.g. a cave slot that says the colossi are set up). May be chained.
+        std::string action = queued;
+        bool run = true;
+        while (run && (action.starts_with("ifset=") || action.starts_with("ifzero="))) {
+            const bool want_set = action.starts_with("ifset=");
+            const auto colon = action.find(':');
+            if (colon == std::string::npos) {
+                run = false;
+                break;
+            }
+            const u64 offset = std::stoull(action.substr(action.find('=') + 1), nullptr, 16);
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 value = module ? *reinterpret_cast<const u64*>(module->GetBaseAddress() + offset) : 0;
+            run = want_set == (value != 0);
+            action = action.substr(colon + 1);
+        }
+        if (!run) {
+            continue;
+        }
         static const std::unordered_map<std::string, OrbisPadButtonDataOffset> buttons = {
             {"cross", OrbisPadButtonDataOffset::Cross},
             {"circle", OrbisPadButtonDataOffset::Circle},
@@ -361,16 +419,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 delta[k] = move[k] - now[k];
                             }
                         }
-                        // World copies, then the character block's local transform translation
-                        // (+0x1f8, and the copies at +0x1410/+0x14d0) which the game rebuilds the
-                        // world position from each frame (eboot 0x6611c0).
-                        for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640,
-                                             0x1f8, 0x1410, 0x14d0}) {
-                            auto* p = reinterpret_cast<float*>(object + at);
-                            for (int k = 0; k < 3; k++) {
-                                p[k] += delta[k];
-                            }
-                        }
+                        const u32 variant = MoveCharacter(object, delta);
+                        LOG_INFO(Core, "objlist move #{}: variant {} delta {} {} {}", n, variant,
+                                 delta[0], delta[1], delta[2]);
                     }
                     LOG_INFO(Core, "objlist {:x} #{}: node {:#x} object {:#x} type {} skip {}",
                              field, n, node, object, got > 0xc ? int(u8(bytes[0xc])) : -1, skip);
@@ -548,21 +599,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto end =
                             std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
                         while (std::chrono::steady_clock::now() < end) {
-                            // World y copies, and the local transform's y (+0x1fc and copies),
-                            // which is world y minus the sector origin's y.
-                            const float origin_y = *reinterpret_cast<const float*>(object + 0x134) -
-                                                   *reinterpret_cast<const float*>(object + 0x1fc);
-                            for (const u64 at : {0x134, 0x144, 0x164, 0x754, 0x7b4, 0x7c4, 0x7f4, 0x1644}) {
-                                auto* y = reinterpret_cast<float*>(object + at);
-                                if (*y < floor_y) {
-                                    *y = floor_y;
-                                }
-                            }
-                            for (const u64 at : {0x1fc, 0x1414, 0x14d4}) {
-                                auto* y = reinterpret_cast<float*>(object + at);
-                                if (*y < floor_y - origin_y) {
-                                    *y = floor_y - origin_y;
-                                }
+                            const float y = *reinterpret_cast<const float*>(object + 0x134);
+                            if (y < floor_y) {
+                                const float lift[3]{0.0f, floor_y - y, 0.0f};
+                                MoveCharacter(object, lift);
                             }
                             std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         }
@@ -591,11 +631,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
                 return node;
             };
-            if (world) {
+            const u64 na = world ? node_of(la, ia) : 0, nb = world ? node_of(lb, ib) : 0;
+            if (!na || !nb) {
+                // Not both loaded yet: keep any earlier setup, so the action can be repeated.
+                LOG_INFO(Core, "cvctarget: not ready (A node {:#x}, B node {:#x})", na, nb);
+            } else {
                 DWORD old = 0;
                 VirtualProtect(reinterpret_cast<void*>(image + 0x1593000), 0x1000,
                                PAGE_EXECUTE_READWRITE, &old);
-                const u64 na = node_of(la, ia), nb = node_of(lb, ib);
                 const auto handle_of = [&](u64 node) {
                     return node >= base ? 0x80000000u | u32(node - base) : u32(node);
                 };
@@ -649,6 +692,391 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
                 LOG_INFO(Core, "sampcur: {} samples, A {}, B {}, {} distinct", total, a, b, seen.size());
             }).detach();
+        } else if (action.starts_with("awaitmoved=")) {
+            // Test: "awaitmoved=238:120:1593ef8" sets the byte at that image offset (cave page made
+            // writable) once the first object of list world+0x238 has moved more than 2 units from
+            // where it was first seen (a colossus whose logic has started), giving up after 120 s.
+            // "238#1:..." watches the second entry.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            unsigned long long field = 0, flag = 0;
+            float seconds = 0;
+            int pick = 0;
+            const bool picked = action.find('#') != std::string::npos;
+            if (picked) {
+                sscanf(action.c_str() + 11, "%llx#%d:%f:%llx", &field, &pick, &seconds, &flag);
+            } else {
+                sscanf(action.c_str() + 11, "%llx:%f:%llx", &field, &seconds, &flag);
+            }
+            if (image) {
+                DWORD old = 0;
+                VirtualProtect(reinterpret_cast<void*>((image + flag) & ~u64(0xfff)), 0x1000,
+                               PAGE_EXECUTE_READWRITE, &old);
+            }
+            std::thread([image, field, pick, seconds, flag] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                const auto end = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(u64(seconds * 1000));
+                u64 first_object = 0;
+                float first[3]{};
+                while (image && std::chrono::steady_clock::now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
+                    if (!world) {
+                        continue;
+                    }
+                    const s32 handle = *reinterpret_cast<const volatile s32*>(world + field);
+                    u64 node = (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff);
+                    for (int n = 0; node && n < pick; n++) {
+                        node = q(node + 0x20);
+                    }
+                    const u64 object = node ? q(node) : 0;
+                    if (!object) {
+                        continue;
+                    }
+                    const auto* p = reinterpret_cast<const volatile float*>(object + 0x130);
+                    if (object != first_object) {
+                        first_object = object;
+                        first[0] = p[0], first[1] = p[1], first[2] = p[2];
+                        continue;
+                    }
+                    // It moves during its intro cinematic already, and a boss jump started then
+                    // never finishes loading: also wait for 3 s without a cinematic (the
+                    // letterbox amount, image 0x2dcdf04, see Screens::Letterboxed).
+                    thread_local int calm = 0;
+                    const float cinematic = *reinterpret_cast<const volatile float*>(image + 0x2dcdf04);
+                    calm = cinematic == 0.0f ? calm + 1 : 0;
+                    if (std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f && calm >= 15) {
+                        *reinterpret_cast<volatile u8*>(image + flag) = 1;
+                        LOG_INFO(Core, "awaitmoved: object {:#x} moved, flag {:#x} set", object, flag);
+                        return;
+                    }
+                }
+                LOG_INFO(Core, "awaitmoved: gave up (object {:#x})", first_object);
+            }).detach();
+        } else if (action.starts_with("cvccam=")) {
+            // Test: spectator vantage. "cvccam=300:180:40": for 300 s keep Wander (list world+0x228)
+            // beside the colossi A/B (cave 0x1593b08/10): when he is not between 0.6 and 1.6 times
+            // 180 units from their midpoint, he is put 180 units from it, square to the line
+            // between them, 40 units above it (he then drops to the ground). With "view
+            // colossus" held the game's camera then looks past him at the fight.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            float seconds = 0, dist = 0, height = 0, steer = 1;
+            // A fourth value 0 leaves the camera to the game (e.g. "view colossus" held).
+            sscanf(action.c_str() + 7, "%f:%f:%f:%f", &seconds, &dist, &height, &steer);
+            std::thread([image, seconds, dist, height, steer] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                const auto end = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(u64(seconds * 1000));
+                float side = 1.0f;
+                int tick = 0;
+                while (std::chrono::steady_clock::now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                    const u64 a = q(image + 0x1593b08), b = q(image + 0x1593b10);
+                    const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
+                    if (!a || !b || !world) {
+                        continue;
+                    }
+                    // Camera: the game's camera (0x79efb0: slot [0x3259cf8] of the table after it)
+                    // orbits Wander; its yaw (+0x1770, radians) is atan2(dx, dz) of where it looks,
+                    // its position +0x1740. It is turned through the mouse-look input toward the
+                    // fight's midpoint (mouse right lowers the yaw), so it moves as smoothly as
+                    // when a player turns it.
+                    {
+                        const auto* pa = reinterpret_cast<const float*>(a + 0x130);
+                        const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                        const s32 slot = *reinterpret_cast<const volatile s32*>(image + 0x3259cf8);
+                        const u64 camera = slot >= 0 && slot < 8 ? q(image + 0x3259d00 + slot * 8ull) : 0;
+                        if (camera && steer != 0.0f) {
+                            const auto* cp = reinterpret_cast<const volatile float*>(camera + 0x1740);
+                            const float yaw = *reinterpret_cast<const volatile float*>(camera + 0x1770);
+                            const float want = std::atan2((pa[0] + pb[0]) / 2 - cp[0],
+                                                          (pa[2] + pb[2]) / 2 - cp[2]);
+                            float error = want - yaw;
+                            while (error > 3.14159265f) {
+                                error -= 6.2831853f;
+                            }
+                            while (error < -3.14159265f) {
+                                error += 6.2831853f;
+                            }
+                            // Near half a turn the error's sign flips back and forth: keep turning
+                            // the way already chosen until the error is small.
+                            static float turning = 0.0f;
+                            if (std::abs(error) > 2.0f && turning != 0.0f) {
+                                error = std::copysign(std::abs(error), -turning);
+                            }
+                            // Small stick values fall in the game's dead zone: at least 8 counts.
+                            const float push = std::clamp(-error * 40.0f, -35.0f, 35.0f);
+                            turning = std::abs(error) < 0.04f ? 0.0f : push;
+                            Input::test_mouse_delta[0] =
+                                std::abs(error) < 0.04f ? 0.0f
+                                                        : std::copysign(std::max(std::abs(push), 8.0f), push);
+                        }
+                    }
+                    if (++tick % 30 != 0) {
+                        continue;
+                    }
+                    const s32 handle = *reinterpret_cast<const volatile s32*>(world + 0x228);
+                    const u64 node = (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff);
+                    const u64 player = node ? q(node) : 0;
+                    if (!player) {
+                        continue;
+                    }
+                    const auto* pa = reinterpret_cast<const float*>(a + 0x130);
+                    const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                    auto* pp = reinterpret_cast<float*>(player + 0x130);
+                    const float mx = (pa[0] + pb[0]) / 2, my = std::max(pa[1], pb[1]),
+                                mz = (pa[2] + pb[2]) / 2;
+                    const float d = std::hypot(pp[0] - mx, pp[2] - mz);
+                    if (tick % 120 == 0) {
+                        const s32 slot = *reinterpret_cast<const volatile s32*>(image + 0x3259cf8);
+                        const u64 camera = slot >= 0 && slot < 8 ? q(image + 0x3259d00 + slot * 8ull) : 0;
+                        const auto* cp = camera ? reinterpret_cast<const float*>(camera + 0x1740) : pp;
+                        LOG_INFO(Core, "cvccam: Wander {:.0f} from the fight, yaw {:.2f}, mouse {:.1f}; "
+                                 "A {:.0f} {:.0f} {:.0f} B {:.0f} {:.0f} {:.0f} W {:.0f} {:.0f} {:.0f} "
+                                 "cam {:.0f} {:.0f} {:.0f}", d,
+                                 camera ? *reinterpret_cast<const float*>(camera + 0x1770) : 0.0f,
+                                 Input::test_mouse_delta[0], pa[0], pa[1], pa[2], pb[0], pb[1], pb[2],
+                                 pp[0], pp[1], pp[2], cp[0], cp[1], cp[2]);
+                    }
+                    // Far enough back for both to fit in the picture.
+                    const float want_dist = std::max(dist, 0.9f * std::hypot(pa[0] - pb[0], pa[2] - pb[2]));
+                    if (d > 0.5f * want_dist && d < 2.0f * want_dist) {
+                        continue;
+                    }
+                    // Along the line from the fight to where Wander already stands: open ground he
+                    // reached himself, where a spot square to the colossi may be inside a cliff.
+                    float px = pp[0] - mx, pz = pp[2] - mz;
+                    const float len = std::hypot(px, pz);
+                    if (len < 1.0f) {
+                        px = pb[2] - pa[2], pz = pa[0] - pb[0];
+                    }
+                    const float norm = std::max(std::hypot(px, pz), 0.001f);
+                    px /= norm, pz /= norm;
+                    const float target[3]{mx + side * px * want_dist, std::max(pp[1], my) + height,
+                                          mz + side * pz * want_dist};
+                    const float delta[3]{target[0] - pp[0], target[1] - pp[1], target[2] - pp[2]};
+                    const u32 variant = MoveCharacter(player, delta);
+                    LOG_INFO(Core, "cvccam: Wander to {:.0f} {:.0f} {:.0f} (was {:.0f} from the fight, "
+                             "variant {})", target[0], target[1], target[2], d, variant);
+                }
+                Input::test_mouse_delta[0] = 0.0f;
+            }).detach();
+        } else if (action == "cvcbones") {
+            // Test: the segments the contact test (re/cvc/contact_patch.py) tries against the
+            // other colossus's attack surfaces: each colossus's skeleton as a chain of segments
+            // between bones (ids index its world matrices, object+0x120 -> +0x198, 64 bytes each,
+            // translation at +0x30; see 0x616470) plus feet (-2) to the highest bone. The table
+            // is built here and its address put at cave 0x1593dc0; earlier tables stay allocated
+            // as the game may be reading one.
+            struct Segment {
+                u64 victim;
+                s32 bone_a, bone_b;
+                u64 attacker_list;
+                u64 hit_counter;
+            };
+            static std::vector<std::unique_ptr<std::vector<Segment>>> tables;
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            auto table = std::make_unique<std::vector<Segment>>();
+            for (const u64 slot : {0x1593b08ull, 0x1593b10ull}) {
+                const u64 object = image ? *reinterpret_cast<const u64*>(image + slot) : 0;
+                if (!object) {
+                    continue;
+                }
+                const u64 matrices = *reinterpret_cast<const u64*>(object + 0x120 + 0x198);
+                const auto* pos = reinterpret_cast<const float*>(object + 0x130);
+                int top = -2, count = 0;
+                float top_y = pos[1];
+                for (int i = 0; matrices && i < 512; i++) {
+                    float m[4]{};
+                    SIZE_T got = 0;
+                    if (!ReadProcessMemory(GetCurrentProcess(),
+                                           reinterpret_cast<const void*>(matrices + i * 64 + 0x30), m,
+                                           sizeof(m), &got) ||
+                        m[3] != 1.0f || std::hypot(m[0] - pos[0], m[2] - pos[2]) > 400.0f) {
+                        break;
+                    }
+                    count++;
+                    if (m[1] > top_y) {
+                        top_y = m[1], top = i;
+                    }
+                }
+                // A's attacker is B: the list holding B (0x1593b20), hits counted as by B.
+                const bool is_a = slot == 0x1593b08;
+                const u64 list = image + (is_a ? 0x1593b20 : 0x1593b24);
+                const u64 counter = image + (is_a ? 0x1593ecc : 0x1593ec8);
+                table->push_back({object, -2, top, list, counter});
+                const int step = std::max(1, count / 40);
+                for (int i = 0; i + step < count; i += step) {
+                    table->push_back({object, i, i + step, list, counter});
+                }
+                LOG_INFO(Core, "cvcbones: object {:#x}: {} bones, highest {} at {:.0f} above its feet",
+                         object, count, top, top_y - pos[1]);
+            }
+            // Check of the test itself: Wander (first of list world+0x228) with the bones his own
+            // damage test uses (0x71d8e5: ids at *(0x24c0c78)+0x10 and *(0x24c0c70)+0x10) against
+            // colossus A's attacks, counted at cave 0x1593ed0.
+            if (image) {
+                const u64 world = *reinterpret_cast<const u64*>(image + 0x15fe570);
+                const u64 base = *reinterpret_cast<const u64*>(image + 0x2f3b8c0);
+                const s32 handle = world ? *reinterpret_cast<const s32*>(world + 0x228) : 0;
+                const u64 node = handle ? (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff) : 0;
+                const u64 player = node ? *reinterpret_cast<const u64*>(node) : 0;
+                const u64 id_a = *reinterpret_cast<const u64*>(image + 0x24c0c78);
+                const u64 id_b = *reinterpret_cast<const u64*>(image + 0x24c0c70);
+                if (player && id_a && id_b) {
+                    const s32 bone_a = *reinterpret_cast<const s32*>(id_a + 0x10);
+                    const s32 bone_b = *reinterpret_cast<const s32*>(id_b + 0x10);
+                    table->push_back({player, bone_a, bone_b, image + 0x1593b24, image + 0x1593ed0});
+                    LOG_INFO(Core, "cvcbones: Wander {:#x} bones {:#x} {:#x}, hits so far {}", player,
+                             bone_a, bone_b, *reinterpret_cast<const u32*>(image + 0x1593ed0));
+                }
+            }
+            table->push_back({});
+            *reinterpret_cast<volatile u64*>(image + 0x1593dc0) = reinterpret_cast<u64>(table->data());
+            LOG_INFO(Core, "cvcbones: {} segments", table->size() - 1);
+            tables.push_back(std::move(table));
+        } else if (action.starts_with("cvcbrawl=")) {
+            // Test: colossus-vs-colossus hits from the two skeletons. "cvcbrawl=300:20:15:12:60:1200":
+            // for 300 s, a bone of one colossus moving faster than 60 units/s that comes within 12
+            // units of any bone of the other is a hit: A's hit takes 20 off B's manager health
+            // (0x1593e08 -> +0x50), B's 15 off A's (0x1593e00), at most one per attacker per
+            // 1200 ms. Bones: the world matrices of object+0x120 -> +0x198 (64 bytes, translation
+            // at +0x30). Counts hits like cvchits= (0x1593ec8 by A, 0x1593ecc by B).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            float seconds = 0, dmg_a = 0, dmg_b = 0, radius = 0, speed = 0, cooldown = 0;
+            sscanf(action.c_str() + 9, "%f:%f:%f:%f:%f:%f", &seconds, &dmg_a, &dmg_b, &radius, &speed,
+                   &cooldown);
+            std::thread([image, seconds, dmg_a, dmg_b, radius, speed, cooldown] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                using Clock = std::chrono::steady_clock;
+                const auto end = Clock::now() + std::chrono::milliseconds(u64(seconds * 1000));
+                using Points = std::vector<std::array<float, 3>>;
+                // A colossus's bone positions; empty while its matrices are not where it is.
+                const auto bones = [&](u64 object, Points& out) {
+                    out.clear();
+                    const u64 matrices = q(object + 0x120 + 0x198);
+                    const auto* pos = reinterpret_cast<const volatile float*>(object + 0x130);
+                    for (int i = 0; matrices && i < 256; i++) {
+                        float m[4]{};
+                        SIZE_T got = 0;
+                        if (!ReadProcessMemory(GetCurrentProcess(),
+                                               reinterpret_cast<const void*>(matrices + i * 64 + 0x30),
+                                               m, sizeof(m), &got) ||
+                            m[3] != 1.0f || std::hypot(m[0] - pos[0], m[2] - pos[2]) > 400.0f) {
+                            break;
+                        }
+                        out.push_back({m[0], m[1], m[2]});
+                    }
+                };
+                const auto distance = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+                    return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
+                                     (a[2] - b[2]) * (a[2] - b[2]));
+                };
+                Points now[2], before[2];
+                Clock::time_point ready[2]{Clock::now(), Clock::now()};
+                auto last = Clock::now();
+                while (Clock::now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                    const u64 objects[2]{q(image + 0x1593b08), q(image + 0x1593b10)};
+                    const u64 managers[2]{q(image + 0x1593e00), q(image + 0x1593e08)};
+                    if (!objects[0] || !objects[1] || !managers[0] || !managers[1]) {
+                        continue;
+                    }
+                    const float dt = std::chrono::duration<float>(Clock::now() - last).count();
+                    last = Clock::now();
+                    for (int k = 0; k < 2; k++) {
+                        before[k].swap(now[k]);
+                        bones(objects[k], now[k]);
+                    }
+                    for (int k = 0; k < 2; k++) {
+                        if (Clock::now() < ready[k] || now[k].size() != before[k].size() ||
+                            now[1 - k].empty() || dt <= 0.0f) {
+                            continue;
+                        }
+                        int hit_bone = -1;
+                        float hit_speed = 0.0f, hit_gap = 0.0f;
+                        for (size_t i = 0; i < now[k].size() && hit_bone < 0; i++) {
+                            const float v = distance(now[k][i], before[k][i]) / dt;
+                            if (v < speed || v > 2000.0f) { // over 2000: a teleport, not a blow
+                                continue;
+                            }
+                            for (const auto& t : now[1 - k]) {
+                                const float gap = distance(now[k][i], t);
+                                if (gap < radius) {
+                                    hit_bone = int(i), hit_speed = v, hit_gap = gap;
+                                    break;
+                                }
+                            }
+                        }
+                        if (hit_bone < 0) {
+                            continue;
+                        }
+                        ready[k] = Clock::now() + std::chrono::milliseconds(u64(cooldown));
+                        auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
+                        *health = std::max(0.0f, *health - (k == 0 ? dmg_a : dmg_b));
+                        (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
+                        LOG_INFO(Core,
+                                 "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart), health A {:.0f} B {:.0f}",
+                                 k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
+                                 *reinterpret_cast<const float*>(managers[0] + 0x50),
+                                 *reinterpret_cast<const float*>(managers[1] + 0x50));
+                    }
+                }
+            }).detach();
+        } else if (action.starts_with("cvchits=")) {
+            // Test: colossus-vs-colossus damage from the game's own attack contact. With the
+            // attack patches (re/cvc/attack_patch.py) the AI's attack check 0x82ede0 tests the
+            // attack volume against the opponent and counts in the cave: checks by A/B at
+            // 0x1593ec0/c4, hits by A/B at 0x1593ec8/cc. "cvchits=120:20:15:900": for 120 s each
+            // new hit by A takes 20 off B's manager health (0x1593e08 -> +0x50), each by B 15 off
+            // A's, at most one hit per attacker per 900 ms.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            float seconds = 0, dmg_a = 0, dmg_b = 0, cooldown = 0;
+            sscanf(action.c_str() + 8, "%f:%f:%f:%f", &seconds, &dmg_a, &dmg_b, &cooldown);
+            std::thread([image, seconds, dmg_a, dmg_b, cooldown] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                const auto u = [](u64 a) { return *reinterpret_cast<const volatile u32*>(a); };
+                const auto now = [] { return std::chrono::steady_clock::now(); };
+                const auto end = now() + std::chrono::milliseconds(u64(seconds * 1000));
+                u32 seen_a = u(image + 0x1593ec8), seen_b = u(image + 0x1593ecc);
+                auto ready_a = now(), ready_b = now(), report = now();
+                while (now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    const u64 ma = q(image + 0x1593e00), mb = q(image + 0x1593e08);
+                    const u32 hits_a = u(image + 0x1593ec8), hits_b = u(image + 0x1593ecc);
+                    if (now() >= report) {
+                        report = now() + std::chrono::seconds(5);
+                        LOG_INFO(Core, "cvchits: checks A {} B {}, hits A {} B {}",
+                                 u(image + 0x1593ec0), u(image + 0x1593ec4), hits_a, hits_b);
+                    }
+                    if (!ma || !mb) {
+                        continue;
+                    }
+                    auto* ha = reinterpret_cast<float*>(ma + 0x50);
+                    auto* hb = reinterpret_cast<float*>(mb + 0x50);
+                    if (hits_a != seen_a && now() >= ready_a) {
+                        *hb = std::max(0.0f, *hb - dmg_a);
+                        ready_a = now() + std::chrono::milliseconds(u64(cooldown));
+                        LOG_INFO(Core, "cvchits: A hit B, A {:.0f} B {:.0f}", *ha, *hb);
+                    }
+                    if (hits_b != seen_b && now() >= ready_b) {
+                        *ha = std::max(0.0f, *ha - dmg_b);
+                        ready_b = now() + std::chrono::milliseconds(u64(cooldown));
+                        LOG_INFO(Core, "cvchits: B hit A, A {:.0f} B {:.0f}", *ha, *hb);
+                    }
+                    seen_a = hits_a;
+                    seen_b = hits_b;
+                    if (*ha <= 0.0f || *hb <= 0.0f) {
+                        LOG_INFO(Core, "cvchits: {} wins", *ha > 0.0f ? "A" : "B");
+                        break;
+                    }
+                }
+            }).detach();
         } else if (action.starts_with("cvcfight=")) {
             // Test: synthetic colossus-vs-colossus hits. "cvcfight=90:55:20:15:2500": for 90 s,
             // while colossi A and B (cave slots 0x1593b08/10) are within 55 units (x/z), every
@@ -684,8 +1112,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     *hb = std::max(0.0f, *hb - dmg_a);
                     *ha = std::max(0.0f, *ha - dmg_b);
                     const float push = 0.0f / std::max(d, 0.001f);
-                    for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640,
-                                         0x1f8, 0x1410, 0x14d0}) {
+                    for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640}) {
                         auto* p = reinterpret_cast<float*>(a + at);
                         p[0] += dx * push;
                         p[2] += dz * push;
