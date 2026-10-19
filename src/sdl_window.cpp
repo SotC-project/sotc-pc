@@ -649,6 +649,55 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
                 LOG_INFO(Core, "sampcur: {} samples, A {}, B {}, {} distinct", total, a, b, seen.size());
             }).detach();
+        } else if (action.starts_with("cvcfight=")) {
+            // Test: synthetic colossus-vs-colossus hits. "cvcfight=90:55:20:15:2500": for 90 s,
+            // while colossi A and B (cave slots 0x1593b08/10) are within 55 units (x/z), every
+            // 2.5 s A takes 15 and B takes 20 off their manager's health (0x1593e00/08 -> +0x50),
+            // and A is pushed 6 units away from B (world copies and local transform).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            float seconds = 0, reach = 0, dmg_a = 0, dmg_b = 0, period = 0;
+            sscanf(action.c_str() + 9, "%f:%f:%f:%f:%f", &seconds, &reach, &dmg_a, &dmg_b, &period);
+            std::thread([image, seconds, reach, dmg_a, dmg_b, period] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                const auto end = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(u64(seconds * 1000));
+                auto next_hit = std::chrono::steady_clock::now();
+                int hits = 0;
+                while (std::chrono::steady_clock::now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    const u64 a = q(image + 0x1593b08), b = q(image + 0x1593b10);
+                    const u64 ma = q(image + 0x1593e00), mb = q(image + 0x1593e08);
+                    if (!a || !b || !ma || !mb) {
+                        continue;
+                    }
+                    auto* pa = reinterpret_cast<float*>(a + 0x130);
+                    const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                    const float dx = pa[0] - pb[0], dz = pa[2] - pb[2];
+                    const float d = std::sqrt(dx * dx + dz * dz);
+                    if (d > reach || std::chrono::steady_clock::now() < next_hit) {
+                        continue;
+                    }
+                    next_hit = std::chrono::steady_clock::now() + std::chrono::milliseconds(u64(period));
+                    auto* ha = reinterpret_cast<float*>(ma + 0x50);
+                    auto* hb = reinterpret_cast<float*>(mb + 0x50);
+                    *hb = std::max(0.0f, *hb - dmg_a);
+                    *ha = std::max(0.0f, *ha - dmg_b);
+                    const float push = 0.0f / std::max(d, 0.001f);
+                    for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640,
+                                         0x1f8, 0x1410, 0x14d0}) {
+                        auto* p = reinterpret_cast<float*>(a + at);
+                        p[0] += dx * push;
+                        p[2] += dz * push;
+                    }
+                    LOG_INFO(Core, "cvcfight hit {}: distance {:.1f}, A {:.0f}, B {:.0f}", ++hits, d,
+                             *ha, *hb);
+                    if (*ha <= 0.0f || *hb <= 0.0f) {
+                        LOG_INFO(Core, "cvcfight: {} wins", *ha > 0.0f ? "A" : "B");
+                        break;
+                    }
+                }
+            }).detach();
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
