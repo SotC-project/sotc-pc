@@ -455,6 +455,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 FlushInstructionCache(GetCurrentProcess(), code, bytes.size());
                 LOG_INFO(Core, "script {}: {} bytes written", action, bytes.size());
             }
+        } else if (action.starts_with("setlist=")) {
+            // Test: "setlist=228:238#1" points the head of list world+0x228 at the second node of
+            // list world+0x238 (handle = 0x80000000 | (node - *(image+0x2f3b8c0))).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            unsigned long long dst = 0, src = 0;
+            int pick = 0;
+            sscanf(action.c_str() + 8, "%llx:%llx#%d", &dst, &src, &pick);
+            const u64 world = image ? *reinterpret_cast<const u64*>(image + 0x15fe570) : 0;
+            const u64 base = image ? *reinterpret_cast<const u64*>(image + 0x2f3b8c0) : 0;
+            if (world) {
+                const s32 handle = *reinterpret_cast<const s32*>(world + src);
+                u64 node = (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff);
+                for (int n = 0; node && n < pick; n++) {
+                    node = *reinterpret_cast<const u64*>(node + 0x20);
+                }
+                if (node) {
+                    const u32 value = node >= base ? 0x80000000u | u32(node - base) : u32(node);
+                    *reinterpret_cast<u32*>(world + dst) = value;
+                    LOG_INFO(Core, "setlist: world+{:x} = {:#x} (node {:#x})", dst, value, node);
+                }
+            }
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
