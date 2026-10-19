@@ -293,7 +293,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     if (!read(node, object) || !read(node + 0x18, skip) || !read(node + 0x20, next)) {
                         break;
                     }
-                    std::vector<char> bytes(0x2000);
+                    std::vector<char> bytes(0x8000);
                     SIZE_T got = 0;
                     if (object) {
                         ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(object),
@@ -302,6 +302,47 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                           fmt::format("obj_{:x}_{}_{}.bin", field, pass, n),
                                       std::ios::binary}
                             .write(bytes.data(), got);
+                    }
+                    if (object && action.ends_with(":findref")) {
+                        // "objlist=238:findref": game memory within 4 MB of each object that
+                        // points at its position (object+0x130), with 0x60 bytes from there-0x90.
+                        std::vector<u64> chunk(0x800000 / 8);
+                        SIZE_T got = 0;
+                        ReadProcessMemory(GetCurrentProcess(),
+                                          reinterpret_cast<const void*>(object - 0x400000),
+                                          chunk.data(), chunk.size() * 8, &got);
+                        for (size_t i = 0; i < got / 8; i++) {
+                            if (chunk[i] == object + 0x130) {
+                                const u64 at = object - 0x400000 + i * 8;
+                                const float* m = reinterpret_cast<const float*>(at - 0x90);
+                                LOG_INFO(Core, "findref #{}: {:#x} (obj{:+#x}) m {} {} {} {} | {} {} {} {} | {} {} {} {}",
+                                         n, at, s64(at - object), m[0], m[1], m[2], m[3], m[4], m[5],
+                                         m[6], m[7], m[12], m[13], m[14], m[15]);
+                            }
+                        }
+                    }
+                    if (object && n == 0 && action.find(":watchat=") != std::string::npos) {
+                        // "objlist=238:watchat=7030": who writes 12 bytes at that offset.
+                        const u64 off = std::stoull(action.substr(action.find(":watchat=") + 9),
+                                                    nullptr, 16);
+                        Sotc::Watch::Arm(object + off, 12, image, 0x1600000, 6);
+                    }
+                    if (object && n == 0 && action.ends_with(":watchreadA")) {
+                        // "objlist=228:watchreadA": code reading the first object's position
+                        // while colossus A (cvctarget) is the object being updated.
+                        Sotc::Watch::reads = true;
+                        Sotc::Watch::only_when = image + 0x1593b00;
+                        Sotc::Watch::only_value = *reinterpret_cast<const u64*>(image + 0x1593b08);
+                        Sotc::Watch::Arm(object + 0x130, 0x10, image, 0x1600000, 1000000);
+                    }
+                    if (object && n == 0 && action.ends_with(":watchjump")) {
+                        // "objlist=238:watchjump": who moves the first object's x by over 50.
+                        Sotc::Watch::jumps_only = true;
+                        Sotc::Watch::Arm(object + 0x130, 4, image, 0x1600000, 6);
+                    }
+                    if (object && n == 0 && action.ends_with(":watchpos")) {
+                        // "objlist=238:watchpos": who writes the first object's position.
+                        Sotc::Watch::Arm(object + 0x130, 12, image, 0x1600000, 6);
                     }
                     if (object && n == 0 && action.ends_with(":watchq")) {
                         // "objlist=238:watchq": who queues the first object for destruction.
@@ -320,7 +361,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 delta[k] = move[k] - now[k];
                             }
                         }
-                        for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640}) {
+                        // World copies, then the character block's local transform translation
+                        // (+0x1f8, and the copies at +0x1410/+0x14d0) which the game rebuilds the
+                        // world position from each frame (eboot 0x6611c0).
+                        for (const u64 at : {0x130, 0x140, 0x160, 0x750, 0x7b0, 0x7c0, 0x7f0, 0x1640,
+                                             0x1f8, 0x1410, 0x14d0}) {
                             auto* p = reinterpret_cast<float*>(object + at);
                             for (int k = 0; k < 3; k++) {
                                 p[k] += delta[k];
@@ -503,10 +548,20 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto end =
                             std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
                         while (std::chrono::steady_clock::now() < end) {
+                            // World y copies, and the local transform's y (+0x1fc and copies),
+                            // which is world y minus the sector origin's y.
+                            const float origin_y = *reinterpret_cast<const float*>(object + 0x134) -
+                                                   *reinterpret_cast<const float*>(object + 0x1fc);
                             for (const u64 at : {0x134, 0x144, 0x164, 0x754, 0x7b4, 0x7c4, 0x7f4, 0x1644}) {
                                 auto* y = reinterpret_cast<float*>(object + at);
                                 if (*y < floor_y) {
                                     *y = floor_y;
+                                }
+                            }
+                            for (const u64 at : {0x1fc, 0x1414, 0x14d4}) {
+                                auto* y = reinterpret_cast<float*>(object + at);
+                                if (*y < floor_y - origin_y) {
+                                    *y = floor_y - origin_y;
                                 }
                             }
                             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -514,6 +569,70 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }).detach();
                 }
             }
+        } else if (action.starts_with("cvctarget=")) {
+            // Test: data for the per-colossus target stubs in the code segment's spare tail
+            // (cave page image 0x1593000 made writable): at 0x1593b00 the object being updated,
+            // 0x1593b08/10 colossus A/B objects, 0x1593b18 the player list (world+0x228),
+            // 0x1593b20/24 one-entry lists holding B's / A's node handle.
+            // "cvctarget=238#0:238#1".
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            unsigned long long la = 0, lb = 0;
+            int ia = 0, ib = 0, boss_a = -1, boss_b = -1;
+            sscanf(action.c_str() + 10, "%llx#%d:%llx#%d:%d:%d", &la, &ia, &lb, &ib, &boss_a,
+                   &boss_b);
+            const u64 world = image ? *reinterpret_cast<const u64*>(image + 0x15fe570) : 0;
+            const u64 base = image ? *reinterpret_cast<const u64*>(image + 0x2f3b8c0) : 0;
+            const auto node_of = [&](u64 field, int pick) -> u64 {
+                const s32 handle = *reinterpret_cast<const s32*>(world + field);
+                u64 node = (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff);
+                for (int n = 0; node && n < pick; n++) {
+                    node = *reinterpret_cast<const u64*>(node + 0x20);
+                }
+                return node;
+            };
+            if (world) {
+                DWORD old = 0;
+                VirtualProtect(reinterpret_cast<void*>(image + 0x1593000), 0x1000,
+                               PAGE_EXECUTE_READWRITE, &old);
+                const u64 na = node_of(la, ia), nb = node_of(lb, ib);
+                const auto handle_of = [&](u64 node) {
+                    return node >= base ? 0x80000000u | u32(node - base) : u32(node);
+                };
+                auto* data = reinterpret_cast<u8*>(image + 0x1593b00);
+                *reinterpret_cast<u64*>(data + 0x08) = na ? *reinterpret_cast<const u64*>(na) : 0;
+                *reinterpret_cast<u64*>(data + 0x10) = nb ? *reinterpret_cast<const u64*>(nb) : 0;
+                *reinterpret_cast<u64*>(data + 0x18) = world + 0x228;
+                *reinterpret_cast<u32*>(data + 0x20) = nb ? handle_of(nb) : 0;
+                *reinterpret_cast<u32*>(data + 0x24) = na ? handle_of(na) : 0;
+                // 0x1593b28/30: their boss-table entries (table at *(image+0x16d21f8+0x20),
+                // 0x1e8 per colossus), which GetCurrentBoss answers while each one updates.
+                const u64 table = *reinterpret_cast<const u64*>(image + 0x16d21f8 + 0x20);
+                *reinterpret_cast<u64*>(data + 0x28) = boss_a >= 0 ? table + boss_a * 0x1e8ull : 0;
+                *reinterpret_cast<u64*>(data + 0x30) = boss_b >= 0 ? table + boss_b * 0x1e8ull : 0;
+                LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
+                         *reinterpret_cast<u64*>(data + 0x08), na,
+                         *reinterpret_cast<u64*>(data + 0x10), nb);
+            }
+        } else if (action == "sampcur") {
+            // Test: how often the update wrapper's current object (image 0x1593b00) is colossus
+            // A or B (0x1593b08/10), sampled for 2 s.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 data = module ? module->GetBaseAddress() + 0x1593b00 : 0;
+            std::thread([data] {
+                const auto* v = reinterpret_cast<const volatile u64*>(data);
+                int a = 0, b = 0, total = 0;
+                std::map<u64, int> seen;
+                const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (std::chrono::steady_clock::now() < end) {
+                    const u64 cur = v[0];
+                    a += cur == v[1];
+                    b += cur == v[2];
+                    seen[cur]++;
+                    total++;
+                }
+                LOG_INFO(Core, "sampcur: {} samples, A {}, B {}, {} distinct", total, a, b, seen.size());
+            }).detach();
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
