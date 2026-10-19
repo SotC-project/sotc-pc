@@ -477,6 +477,43 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     LOG_INFO(Core, "setlist: world+{:x} = {:#x} (node {:#x})", dst, value, node);
                 }
             }
+        } else if (action.starts_with("floor=")) {
+            // Test: "floor=238#0:63:60000" keeps that list entry from sinking below height 63 for
+            // 60 s (every copy of its position's y), for colossi outside their own arena, whose
+            // ground they would fall through.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            unsigned long long src = 0;
+            int pick = 0;
+            float floor_y = 0.0f;
+            unsigned ms = 0;
+            sscanf(action.c_str() + 6, "%llx#%d:%f:%u", &src, &pick, &floor_y, &ms);
+            const u64 world = image ? *reinterpret_cast<const u64*>(image + 0x15fe570) : 0;
+            const u64 base = image ? *reinterpret_cast<const u64*>(image + 0x2f3b8c0) : 0;
+            if (world) {
+                const s32 handle = *reinterpret_cast<const s32*>(world + src);
+                u64 node = (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff);
+                for (int n = 0; node && n < pick; n++) {
+                    node = *reinterpret_cast<const u64*>(node + 0x20);
+                }
+                const u64 object = node ? *reinterpret_cast<const u64*>(node) : 0;
+                LOG_INFO(Core, "floor: object {:#x} kept above {}", object, floor_y);
+                if (object) {
+                    std::thread([object, floor_y, ms] {
+                        const auto end =
+                            std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+                        while (std::chrono::steady_clock::now() < end) {
+                            for (const u64 at : {0x134, 0x144, 0x164, 0x754, 0x7b4, 0x7c4, 0x7f4, 0x1644}) {
+                                auto* y = reinterpret_cast<float*>(object + at);
+                                if (*y < floor_y) {
+                                    *y = floor_y;
+                                }
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                    }).detach();
+                }
+            }
         } else if (action.starts_with("findvec=")) {
             // Test: places in game memory holding three floats within r of x/y/z
             // ("findvec=-288/56/1388/300"), e.g. an actor's position. Read through
