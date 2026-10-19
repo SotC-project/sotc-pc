@@ -273,7 +273,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             pass++;
             // "objlist=228:0/40/0" also moves every object by that much (all copies of its
             // position found in the object: 0x130 0x140 0x160 0x750 0x7b0 0x7c0 0x7f0 0x1640).
+            // "objlist=238#0:..." moves only that entry of the list.
             const u64 field = std::stoull(action.substr(8), nullptr, 16);
+            const auto hash_at = action.find('#');
+            const int only = hash_at != std::string::npos ? std::stoi(action.substr(hash_at + 1)) : -1;
             float move[3]{};
             // "objlist=228:@x/y/z" puts them there instead.
             const auto colon = action.find(':');
@@ -308,7 +311,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // "objlist=238:watch": who writes the first object's flag bytes.
                         Sotc::Watch::Arm(object + 0xc, 4, image, 0x1600000, 8);
                     }
-                    if (moving && object && Core::Memory::Instance()->IsValidMapping(object, 0x1650)) {
+                    if (moving && object && (only < 0 || only == n) &&
+                        Core::Memory::Instance()->IsValidMapping(object, 0x1650)) {
                         float delta[3]{move[0], move[1], move[2]};
                         if (absolute) {
                             const auto* now = reinterpret_cast<const float*>(object + 0x130);
@@ -381,6 +385,57 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 }
             }).detach();
+        } else if (action.starts_with("sheet=") || action.starts_with("loadsheet=")) {
+            // Test: queues a load request for one of the game's streamed packages ("sheets"),
+            // as the game's 0x6af8e0 does: the registry at image 0x16d3848 and the package id
+            // (free list 0x30262c0/0x30262c8, queue 0x30262f0..0x30262f8, next at +0x48).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            const u32 id = std::stoul(action.substr(action.find('=') + 1), nullptr, 16);
+            const auto q = [&](u64 a) { return *reinterpret_cast<u64*>(a); };
+            const u64 desc = image ? image + 0x16d3848 : 0;
+            if (action.starts_with("loadsheet=") && desc) {
+                const u64 node = q(image + 0x30262c0);
+                if (node) {
+                    const u64 next = q(node + 0x48);
+                    *reinterpret_cast<u64*>(image + 0x30262c0) = next;
+                    if (!next) {
+                        *reinterpret_cast<u64*>(image + 0x30262c8) = 0;
+                    }
+                    *reinterpret_cast<u8*>(node + 4) &= 0xfe;
+                    *reinterpret_cast<u32*>(node) = 0;
+                    *reinterpret_cast<u64*>(node + 8) = desc;
+                    *reinterpret_cast<u32*>(node + 0x10) = id;
+                    *reinterpret_cast<u64*>(node + 0x40) = 0;
+                    *reinterpret_cast<u64*>(node + 0x48) = 0;
+                    const u64 tail = q(image + 0x30262f8);
+                    if (tail) {
+                        *reinterpret_cast<u64*>(tail + 0x48) = node;
+                    } else {
+                        *reinterpret_cast<u64*>(image + 0x30262f0) = node;
+                    }
+                    *reinterpret_cast<u64*>(image + 0x30262f8) = node;
+                    LOG_INFO(Core, "sheet {:#x}: load queued", id);
+                }
+            }
+        } else if (action.starts_with("hold=")) {
+            // Test: keeps a 32-bit word of the game image at a value for a while, rewriting it
+            // every millisecond ("hold=325f430:3:20000").
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            unsigned long long offset = 0;
+            unsigned value = 0, ms = 0;
+            sscanf(action.c_str() + 5, "%llx:%u:%u", &offset, &value, &ms);
+            if (module) {
+                auto* word = reinterpret_cast<std::atomic<u32>*>(module->GetBaseAddress() + offset);
+                std::thread([word, value, ms] {
+                    const auto end =
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+                    while (std::chrono::steady_clock::now() < end) {
+                        word->store(value);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                }).detach();
+            }
         } else if (action.starts_with("patch=")) {
             // Test: overwrite game code at an image offset with hex bytes
             // ("patch=6a9950:b801000000c3" makes that function return 1).
@@ -453,6 +508,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             }
         } else if (action.starts_with("poke=") || action.starts_with("peek=") ||
                    action.starts_with("pokef=") || action.starts_with("dumpat=") ||
+                   action.starts_with("pokeb=") ||
                    action.starts_with("watch=")) {
             // Test: write or log a 32-bit word of the game's image ("poke=325f430:3" sets game
             // variable 8; offsets as the eboot image has them).
@@ -495,7 +551,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                          address, dumps++);
             } else if (address && memory->IsValidMapping(address, 4)) {
                 auto* word = reinterpret_cast<u32*>(address);
-                if (action.starts_with("pokef=") && colon != std::string::npos) {
+                if (action.starts_with("pokeb=") && colon != std::string::npos) {
+                    // "pokeb=<path>:+1" adds to the byte there; "pokeb=<path>:5" sets it.
+                    auto* byte = reinterpret_cast<u8*>(word);
+                    const auto value = action.substr(colon + 1);
+                    *byte = value.starts_with('+') ? u8(*byte + std::stoi(value.substr(1)))
+                                                   : u8(std::stoi(value, nullptr, 0));
+                } else if (action.starts_with("pokef=") && colon != std::string::npos) {
                     *reinterpret_cast<float*>(word) = std::stof(action.substr(colon + 1));
                 } else if (action.starts_with("poke=") && colon != std::string::npos) {
                     *word = static_cast<u32>(std::stoll(action.substr(colon + 1), nullptr, 0));
