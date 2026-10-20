@@ -105,10 +105,14 @@ void Relaunch(const std::string& freeplay_args, const std::string& challenge_spe
     SetEnv("SOTC_FREEPLAY", freeplay_args);
     SetEnv("SOTC_CHALLENGE", challenge_spec);
     SetEnv("SOTC_WAIT_PID", std::to_string(GetCurrentProcessId()));
+    SetEnv("SOTC_LAUNCH_EXTRA", ""); // a test run's start options were for the first instance
     // Scripted test runs hand the next instance its own script.
     const char* next_script = std::getenv("SOTC_SCRIPT_NEXT");
     SetEnv("SOTC_SCRIPT", next_script && *next_script ? next_script : script);
-    SetEnv("SOTC_SCRIPT_NEXT", "");
+    // A run over three instances (menu, battle, back at the title) hands on one more script.
+    const char* after_next = std::getenv("SOTC_SCRIPT_NEXT2");
+    SetEnv("SOTC_SCRIPT_NEXT", after_next ? after_next : "");
+    SetEnv("SOTC_SCRIPT_NEXT2", "");
     // Same program, same arguments, same folder; the environment carries the request.
     std::wstring command_line = GetCommandLineW();
     STARTUPINFOW startup{};
@@ -1240,6 +1244,10 @@ std::filesystem::path LaunchOptionsFile(const std::filesystem::path& original) {
         }
         const char* env = std::getenv("SOTC_FREEPLAY");
         std::string args = env ? env : "";
+        // Test runs: more start options for this instance only (not a free play start).
+        if (const char* extra = std::getenv("SOTC_LAUNCH_EXTRA"); extra && *extra) {
+            args += args.empty() ? extra : std::string(" ") + extra;
+        }
         // The company logos at the start take half a minute and cannot be cut short while
         // they play; the game has a start option that leaves them out.
         if (!ShowLogos() && text.find("skipSplash") == std::string::npos &&

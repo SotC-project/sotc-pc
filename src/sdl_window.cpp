@@ -717,6 +717,66 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }).detach();
                 }
             }
+        } else if (action == "pinloaded") {
+            // Colossus vs colossus with any guest: before the jump to the host's arena, one more
+            // reference on every package loaded now (request counts, a byte per stage index, at
+            // *(image+0x3026330)), so the guest colossus and its arena's data stay (for Gaius
+            // these were found one by one: his motions, switch and E2 area layouts).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            auto* counts = image ? *reinterpret_cast<u8**>(image + 0x3026330) : nullptr;
+            int pinned = 0;
+            for (int i = 0; counts && i < 0x700; i++) { // ~0x6da stages; other data follows
+                if (counts[i] > 0 && counts[i] < 0xff) {
+                    counts[i]++, pinned++;
+                }
+            }
+            LOG_INFO(Core, "pinloaded: {} packages kept", pinned);
+        } else if (action.starts_with("cvcplace=")) {
+            // Colossus vs colossus in any arena: "cvcplace=80" puts the guest A (cave 0x1593b08)
+            // 80 units from the host B (0x1593b10) on the side toward Wander, who arrived over open
+            // ground, keeps A from sinking below B's ground (it walks only on its own arena's
+            // ground) and records the middle as the fight's centre for the leash (0x1593b78 x,
+            // 0x1593b7c z).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            const float dist = std::stof(action.substr(9));
+            const u64 a = image ? *reinterpret_cast<const u64*>(image + 0x1593b08) : 0;
+            const u64 b = image ? *reinterpret_cast<const u64*>(image + 0x1593b10) : 0;
+            const u64 wander = image ? PlayerObject(image) : 0;
+            if (a && b && wander) {
+                const auto* pa = reinterpret_cast<const float*>(a + 0x130);
+                const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                const auto* pw = reinterpret_cast<const float*>(wander + 0x130);
+                float dx = pw[0] - pb[0], dz = pw[2] - pb[2];
+                const float len = std::max(std::hypot(dx, dz), 0.001f);
+                dx /= len, dz /= len;
+                const float to[3]{pb[0] + dx * dist, pb[1] + 3.0f, pb[2] + dz * dist};
+                const float delta[3]{to[0] - pa[0], to[1] - pa[1], to[2] - pa[2]};
+                MoveCharacter(a, delta);
+                auto* centre = reinterpret_cast<float*>(image + 0x1593b78);
+                centre[0] = pb[0] + dx * dist / 2, centre[1] = pb[2] + dz * dist / 2;
+                const float floor_y = pb[1] - 3.0f;
+                LOG_INFO(Core, "cvcplace: A to {:.0f} {:.0f} {:.0f} ({:.0f} from B toward Wander), kept above {:.0f}",
+                         to[0], to[1], to[2], dist, floor_y);
+                std::thread([a, floor_y] {
+                    const auto end = std::chrono::steady_clock::now() + std::chrono::hours(1);
+                    while (std::chrono::steady_clock::now() < end) {
+                        u8 type = 0;
+                        SIZE_T got = 0;
+                        if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(a + 0xc), &type, 1,
+                                               &got) || type != 9) {
+                            return;
+                        }
+                        const float y = *reinterpret_cast<const volatile float*>(a + 0x134);
+                        if (y < floor_y) {
+                            const float lift[3]{0.0f, floor_y - y, 0.0f};
+                            MoveCharacter(a, lift);
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                }).detach();
+            }
         } else if (action.starts_with("cvctarget=")) {
             // Test: data for the per-colossus target stubs in the code segment's spare tail
             // (cave page image 0x1593000 made writable): at 0x1593b00 the object being updated,
@@ -810,6 +870,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(data + 0x58) = 0;
                 *reinterpret_cast<u64*>(data + 0x60) = 0; // the colossi have not closed in yet (cvccam)
                 *reinterpret_cast<u64*>(data + 0x68) = 0; // not yet back to the title (Free Play CvC)
+                *reinterpret_cast<u64*>(data + 0x70) = 0; // PARENTGUARD count (re/cvc/contact_patch.py)
+                *reinterpret_cast<u64*>(data + 0x78) = 0; // no fight centre yet (cvcplace)
                 LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
                          *reinterpret_cast<u64*>(data + 0x08), na,
                          *reinterpret_cast<u64*>(data + 0x10), nb);
@@ -1389,6 +1451,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Our own camera: Wander only has to be out of the way. A spot worked out
                         // from the fight can be above a hole (he fell through the ground, then the
                         // game re-created a colossus); this ledge of Basaran's arena held in every run.
+                        // Elsewhere he stays where he arrived (open ground, away from the host).
+                        if (std::hypot(737.0f - mx, -990.0f - mz) > 400.0f) {
+                            continue;
+                        }
                         target[0] = 737.0f, target[1] = 92.0f, target[2] = -990.0f;
                     }
                     const float delta[3]{target[0] - pp[0], target[1] - pp[1], target[2] - pp[2]};
@@ -1556,11 +1622,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 MoveCharacter(objects[0], to_b);
                                 MoveCharacter(objects[1], to_a);
                             }
-                            // Leash, for Basaran's valley (the only arena CvC runs in so far): the open
-                            // geyser field around (950, -860); Gaius heads home under the rock arch,
+                            // Leash: the fight's centre (Basaran's valley: the open geyser field around
+                            // (950, -860)); Gaius heads home under the rock arch,
                             // where the view is cramped. Their middle drifted over 70 units away: both
                             // nudged back, 3 units a second.
-                            const float field[2]{950.0f, -860.0f};
+                            // The centre cvcplace recorded, else Basaran's open geyser field.
+                            const auto* placed_centre = reinterpret_cast<const volatile float*>(image + 0x1593b78);
+                            const float field[2]{placed_centre[0] != 0.0f ? placed_centre[0] : 950.0f,
+                                                 placed_centre[0] != 0.0f ? placed_centre[1] : -860.0f};
                             const float mx = (pa[0] + pb[0]) / 2 - field[0], mz = (pa[2] + pb[2]) / 2 - field[1];
                             const float off = std::hypot(mx, mz);
                             if (off > 70.0f) {
@@ -1616,7 +1685,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
                         if (hit_bone >= 0) {
                             ready[k] = Clock::now() + std::chrono::milliseconds(u64(cooldown));
-                            const float damage = k == 0 ? dmg_a : dmg_b;
+                            // Below 1: a share of the victim's full health (any pair, same number of blows).
+                        const float set = k == 0 ? dmg_a : dmg_b;
+                        const float damage =
+                            set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set;
                             *health = std::max(0.0f, *health - damage);
                             // The blow's effect on the victim: shoved away from the attacker, 9 units
                             // over 300 ms. (Reporting weak-point damage here too made Basaran's script
@@ -1773,7 +1845,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // 30 s after the knockout: the fight has been shown (a script can end the
                             // recording on this byte).
                             *reinterpret_cast<volatile u8*>(image + 0x1593b50) = 1;
-                            LOG_INFO(Core, "cvcbrawl: knockout shown");
+                            LOG_INFO(Core, "cvcbrawl: knockout shown (support-object guard stepped in {} times)",
+                                     *reinterpret_cast<const volatile u32*>(image + 0x1593b70));
                             return;
                         }
                     }
