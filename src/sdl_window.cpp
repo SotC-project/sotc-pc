@@ -152,11 +152,11 @@ static u64 PlayerObject(u64 image) {
 }
 
 /// Test aid: line tests for the CvC spectator camera with the game's own camera collision
-/// (re/cvc/camera_patch.py). cvccam queues up to 16 lines and sets the state to 1; on the game
+/// (re/cvc/camera_patch.py). cvccam queues up to 40 lines and sets the state to 1; on the game
 /// thread the camera calls CvcRayThunk, which runs 0x7a7e40 for each (true when nothing is in the
 /// way, else the hit position at +0 of its 0x30-byte result) and sets the state to 2.
 struct CvcRays {
-    float from[16][4], to[16][4], hit[16][4]; // hit: where the line stops (to when clear)
+    float from[40][4], to[40][4], hit[40][4]; // hit: where the line stops (to when clear)
     int count = 0;
     std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
     u64 image = 0;
@@ -197,9 +197,19 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
     using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter,
                                          u32 single, u64 ignore);
     const auto test = reinterpret_cast<LineTest>(r.image + 0x7a7e40);
+    // Both of the filter's masks (r8b 1 [filter+0x18], the camera's; 0 [filter+0x19]): the camera's
+    // alone lets lines through some boulders. The nearer hit counts.
     for (int i = 0; i < r.count; i++) {
-        alignas(16) float hit[12]{};
-        std::memcpy(r.hit[i], test(hit, r.from[i], r.to[i], filter, 1, 0) ? r.to[i] : hit, 16);
+        std::memcpy(r.hit[i], r.to[i], 16);
+        for (const u32 single : {1u, 0u}) {
+            alignas(16) float hit[12]{};
+            const auto distance = [&](const float* p) {
+                return std::hypot(p[0] - r.from[i][0], p[1] - r.from[i][1], p[2] - r.from[i][2]);
+            };
+            if (!test(hit, r.from[i], r.to[i], filter, single, 0) && distance(hit) < distance(r.hit[i])) {
+                std::memcpy(r.hit[i], hit, 16);
+            }
+        }
     }
     r.state.store(2);
 }
@@ -978,11 +988,44 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static float last[2][3];
                     static bool seen[2];
                     for (int k = 0; k < 2; k++) {
-                        const u64 object = k ? b : a;
+                        // A knocked-out colossus is followed through the loser slot (0x1593b38) once
+                        // its own is cleared: its body still falls some way.
+                        const u8 won = *reinterpret_cast<const volatile u8*>(image + 0x1593efb);
+                        u64 object = (k ? b : a) ? (k ? b : a) : won == (k ? 1 : 2) ? q(image + 0x1593b38) : 0;
+                        if (object && !(k ? b : a)) {
+                            // Only while it is still a character (it may be freed after its death).
+                            u8 type = 0;
+                            SIZE_T got = 0;
+                            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(object + 0xc),
+                                                   &type, 1, &got) ||
+                                type != 9) {
+                                object = 0;
+                            }
+                        }
                         const auto* p = object ? reinterpret_cast<const float*>(object + 0x130) : nullptr;
                         if (p && std::abs(p[0]) < 1e5f && std::abs(p[1]) < 1e5f && std::abs(p[2]) < 1e5f) {
                             std::memcpy(last[k], p, sizeof(last[k]));
                             seen[k] = true;
+                            // Across the ground, the middle of its skeleton (bone world matrices at
+                            // component +0x198, translation +0x30): a falling colossus's body ends up
+                            // far from its root position.
+                            const u64 matrices = q(object + 0x120 + 0x198);
+                            float sum[2]{};
+                            int bones = 0;
+                            for (int i = 0; matrices && i < 256; i++) {
+                                float m[4]{};
+                                SIZE_T got = 0;
+                                if (!ReadProcessMemory(GetCurrentProcess(),
+                                                       reinterpret_cast<const void*>(matrices + i * 64 + 0x30), m,
+                                                       sizeof(m), &got) ||
+                                    m[3] != 1.0f || std::hypot(m[0] - p[0], m[2] - p[2]) > 400.0f) {
+                                    break;
+                                }
+                                sum[0] += m[0], sum[1] += m[2], bones++;
+                            }
+                            if (bones > 0) {
+                                last[k][0] = sum[0] / bones, last[k][2] = sum[1] / bones;
+                            }
                         }
                     }
                     if (!seen[0] || !seen[1]) {
@@ -1005,14 +1048,25 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             reinterpret_cast<u64>(&CvcRayThunk); // line tests (camera_patch.py)
                         static int which = 0;
                         static float cam[3]{}, look[3]{}, angle = 0.0f;
+                        // Farthest the camera may be from the fight in the direction of its last
+                        // blocked line (line 37), until that line is clear again.
+                        static float cap = 1e9f, cap_dir[3]{};
                         static bool placed = false;
                         // After a knockout (winner byte 0x1593efb: 1 A, 2 B) the loser's death is the
                         // picture: the view favours it while the winner walks off.
                         const u8 winner = *reinterpret_cast<const volatile u8*>(image + 0x1593efb);
-                        const float wa = winner == 1 ? 0.25f : winner == 2 ? 0.75f : 0.5f;
-                        const float mid[3]{pa[0] * wa + pb[0] * (1 - wa), std::max(pa[1], pb[1]),
-                                           pa[2] * wa + pb[2] * (1 - wa)};
-                        const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
+                        float mid[3]{(pa[0] + pb[0]) / 2, std::max(pa[1], pb[1]), (pa[2] + pb[2]) / 2};
+                        float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
+                        if (winner == 1 || winner == 2) {
+                            // On the body, drawn at most 12 units toward the winner, framed tight.
+                            const float* loser_at = winner == 1 ? pb : pa;
+                            const float* winner_at = winner == 1 ? pa : pb;
+                            const float pull = std::min(0.25f * sep, 12.0f) / std::max(sep, 0.001f);
+                            mid[0] = loser_at[0] + (winner_at[0] - loser_at[0]) * pull;
+                            mid[1] = loser_at[1];
+                            mid[2] = loser_at[2] + (winner_at[2] - loser_at[2]) * pull;
+                            sep = std::min(sep, 80.0f);
+                        }
                         const auto wrap = [](float a) {
                             while (a > 3.14159265f) {
                                 a -= 6.2831853f;
@@ -1035,11 +1089,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // comes in in front of the obstacle (as the game's camera does). Hits on
                         // the colossi themselves do not count.
                         static float clear_part[13]; // of each line, up to the first hit (12: the overhead view)
+                        // Whether the colossi can be seen from each spot (from the camera itself for
+                        // the current angle): lines from there to both (after a knockout, the loser).
+                        static bool visible[12];
                         static float tested_angle = 0.0f;
                         static bool tested = false;
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
                         const float centre[3]{mid[0], mid[1] + 20.0f, mid[2]};
-                        const float reach = std::max(dist, sep + 40.0f);
+                        // Close (the arena is foggy): both in view while fighting, the body after.
+                        const float reach = winner == 1 || winner == 2 ? std::max(dist, 60.0f)
+                                                                       : std::max(dist, 0.8f * sep + 30.0f);
                         const float lift = 0.45f * reach - 10.0f; // spot height above the centre
                         auto& rays = g_cvc_rays;
                         if (rays.state.load() == 2) {
@@ -1065,31 +1124,61 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 LOG_INFO(Core, "cvccam: line filter {:#x}",
                                          *reinterpret_cast<const volatile u64*>(image + 0x1593ed8));
                             }
+                            {
+                                // The camera itself (line 37): kept in front of anything between it
+                                // and the fight, as the game's camera is, also while it moves.
+                                const float *f = rays.from[37], *t = rays.to[37], *h = rays.hit[37];
+                                const float full = std::hypot(t[0] - f[0], t[1] - f[1], t[2] - f[2]);
+                                const float part = std::hypot(h[0] - f[0], h[1] - f[1], h[2] - f[2]);
+                                cap = 1e9f;
+                                if (part < full - 1.0f && full > 1.0f) {
+                                    cap = std::max(part - 8.0f, 0.0f);
+                                    for (int c = 0; c < 3; c++) {
+                                        cap_dir[c] = (t[c] - f[c]) / full;
+                                    }
+                                }
+                            }
+                            for (int k = 0; k < 12; k++) {
+                                visible[k] = true;
+                                for (int j = 13 + 2 * k; j < 15 + 2 * k; j++) {
+                                    const float *t = rays.to[j], *h = rays.hit[j];
+                                    visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
+                                }
+                            }
                             tested = true;
                             rays.state.store(0);
                         }
                         const float overhead_radius = radius, overhead_rise = rise;
                         if (tested) {
+                            // Clear, near the current angle, and side-on to the line between them
+                            // (from along it one colossus hides the other).
+                            const float axis = std::atan2(pb[2] - pa[2], pb[0] - pa[0]);
+                            const auto score = [&](int k) {
+                                return clear_part[k] - 0.2f * std::abs(offset(k)) -
+                                       0.5f * std::abs(std::cos(tested_angle + offset(k) - axis)) -
+                                       (visible[k] ? 0.0f : 1.5f);
+                            };
                             int pick = 0;
                             for (int k = 1; k < 12; k++) {
-                                if (clear_part[k] - 0.2f * std::abs(offset(k)) >
-                                    clear_part[pick] - 0.2f * std::abs(offset(pick))) {
+                                if (score(k) > score(pick)) {
                                     pick = k;
                                 }
                             }
                             target_angle = tested_angle + offset(pick);
-                            if (clear_part[0] >= 0.6f) {
+                            if (clear_part[0] >= 0.6f && visible[0]) {
                                 // In front of whatever blocks the far end of its own line.
-                                const float part = clear_part[0] - 0.05f;
+                                const float part = clear_part[0] - 12.0f / reach; // 12 units off the hit
                                 radius = reach * part, rise = 20.0f + lift * part;
                             } else {
-                                // Rock close around this angle: the overhead view (on its own
-                                // line, in front of anything above) until a clear angle is reached.
+                                // Rock close around this angle, or between it and the colossi: the
+                                // overhead view (on its own line, in front of anything above) until a
+                                // clear angle is reached.
                                 const float part = std::max(clear_part[12] - 0.05f, 0.3f);
                                 radius = overhead_radius * part, rise = 20.0f + (overhead_rise - 20.0f) * part;
                             }
                         }
-                        if (rays.state.load() == 0) {
+                        static int queue_tick = 0; // ten rounds a second: 74 line tests each
+                        if (++queue_tick % 6 == 0 && rays.state.load() == 0) {
                             for (int k = 0; k < 12; k++) {
                                 const float at = angle + offset(k);
                                 const float to[4]{centre[0] + reach * std::cos(at), centre[1] + lift,
@@ -1101,7 +1190,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                 mid[2] + overhead_radius * std::sin(angle), 1.0f};
                             std::memcpy(rays.from[12], centre, 12), rays.from[12][3] = 1.0f;
                             std::memcpy(rays.to[12], over, 16);
-                            rays.count = 13, rays.image = image, tested_angle = angle;
+                            // Sight lines: from each spot (the camera itself for this angle) to the
+                            // colossi, 10 units up their bodies.
+                            const float* loser_at = winner == 1 ? pb : winner == 2 ? pa : nullptr;
+                            const float* subjects[2]{loser_at ? loser_at : pa, loser_at ? loser_at : pb};
+                            for (int k = 0; k < 12; k++) {
+                                const float at = angle + offset(k);
+                                const float spot[4]{k == 0 ? cam[0] : centre[0] + reach * std::cos(at),
+                                                    k == 0 ? cam[1] : centre[1] + lift,
+                                                    k == 0 ? cam[2] : centre[2] + reach * std::sin(at), 1.0f};
+                                for (int j = 0; j < 2; j++) {
+                                    const float target[4]{subjects[j][0], subjects[j][1] + 10.0f, subjects[j][2], 1.0f};
+                                    std::memcpy(rays.from[13 + 2 * k + j], spot, 16);
+                                    std::memcpy(rays.to[13 + 2 * k + j], target, 16);
+                                }
+                            }
+                            std::memcpy(rays.from[37], centre, 12), rays.from[37][3] = 1.0f;
+                            std::memcpy(rays.to[37], cam, 12), rays.to[37][3] = 1.0f;
+                            rays.count = 38, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
@@ -1114,6 +1220,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             look[k] += (want_look[k] - look[k]) * ease;
                         }
                         placed = true;
+                        {
+                            const float d[3]{cam[0] - centre[0], cam[1] - centre[1], cam[2] - centre[2]};
+                            const float length = std::hypot(d[0], d[1], d[2]);
+                            const float along = (d[0] * cap_dir[0] + d[1] * cap_dir[1] + d[2] * cap_dir[2]) /
+                                                std::max(length, 0.001f);
+                            if (length > cap && along > 0.9f) {
+                                for (int c = 0; c < 3; c++) {
+                                    cam[c] = centre[c] + d[c] * (cap / length);
+                                }
+                            }
+                        }
                         float dir[3]{look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]};
                         const float length = std::max(std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] +
                                                                 dir[2] * dir[2]), 0.001f);
@@ -1200,8 +1317,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }
                     const float norm = std::max(std::hypot(px, pz), 0.001f);
                     px /= norm, pz /= norm;
-                    const float target[3]{mx + side * px * want_dist, std::max(pp[1], my) + height,
-                                          mz + side * pz * want_dist};
+                    float target[3]{mx + side * px * want_dist, std::max(pp[1], my) + height,
+                                    mz + side * pz * want_dist};
+                    if (steer == 2.0f) {
+                        // Our own camera: Wander only has to be out of the way. A spot worked out
+                        // from the fight can be above a hole (he fell through the ground, then the
+                        // game re-created a colossus); this ledge of Basaran's arena held in every run.
+                        target[0] = 737.0f, target[1] = 92.0f, target[2] = -990.0f;
+                    }
                     const float delta[3]{target[0] - pp[0], target[1] - pp[1], target[2] - pp[2]};
                     const u32 variant = MoveCharacter(player, delta);
                     LOG_INFO(Core, "cvccam: Wander to {:.0f} {:.0f} {:.0f} (was {:.0f} from the fight, "
@@ -1338,13 +1461,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }
                     const float dt = std::chrono::duration<float>(Clock::now() - last).count();
                     last = Clock::now();
+                    static int ticks = 0;
+                    if (++ticks % 600 == 0) {
+                        LOG_INFO(Core, "cvcbrawl: motions A {:#x} B {:#x}, health A {:.0f} B {:.0f}",
+                                 q(objects[0] + 0x380) - image, q(objects[1] + 0x380) - image,
+                                 *reinterpret_cast<const float*>(managers[0] + 0x50),
+                                 *reinterpret_cast<const float*>(managers[1] + 0x50));
+                    }
                     for (int k = 0; k < 2; k++) {
                         before[k].swap(now[k]);
                         bones(objects[k], now[k]);
                     }
                     for (int k = 0; k < 2; k++) {
-                        if (Clock::now() < ready[k] || now[k].size() != before[k].size() ||
-                            now[1 - k].empty() || dt <= 0.0f) {
+                        // The other one down without a blow of ours (the game's own damage, e.g. a
+                        // native attack): the same knockout.
+                        // Or already playing a death motion (the game's own death of a character,
+                        // after native attacks): component +0x260 = object +0x380.
+                        const u64 motion = q(objects[1 - k] + 0x380) - image;
+                        const bool fell = (*reinterpret_cast<const volatile float*>(managers[1 - k] + 0x50) <= 0.0f &&
+                                           *reinterpret_cast<const volatile float*>(managers[1 - k] + 0x4c) > 0.0f) ||
+                                          motion == 0x1d39370 || motion == 0x1d395c0; // Knight_died_early, _loop
+                        if (!fell && (Clock::now() < ready[k] || now[k].size() != before[k].size() ||
+                                      now[1 - k].empty() || dt <= 0.0f)) {
                             continue;
                         }
                         int hit_bone = -1;
@@ -1362,32 +1500,36 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                             }
                         }
-                        if (hit_bone < 0) {
+                        if (hit_bone < 0 && !fell) {
                             continue;
                         }
-                        ready[k] = Clock::now() + std::chrono::milliseconds(u64(cooldown));
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
-                        const float damage = k == 0 ? dmg_a : dmg_b;
-                        *health = std::max(0.0f, *health - damage);
-                        // The blow's effect on the victim: shoved away from the attacker, 9 units
-                        // over 300 ms. (Reporting weak-point damage here too made Basaran's script
-                        // run its death early; that is kept for the knockout below.)
-                        std::thread([victim = objects[1 - k], from = now[k][hit_bone]] {
-                            const auto* pv = reinterpret_cast<const volatile float*>(victim + 0x130);
-                            float push[3]{pv[0] - from[0], 0.0f, pv[2] - from[2]};
-                            const float length = std::max(std::hypot(push[0], push[2]), 0.001f);
-                            push[0] *= 0.6f / length, push[2] *= 0.6f / length;
-                            for (int step = 0; step < 15; step++) {
-                                MoveCharacter(victim, push);
-                                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                            }
-                        }).detach();
-                        (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
-                        LOG_INFO(Core,
-                                 "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart), health A {:.0f} B {:.0f}",
-                                 k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
-                                 *reinterpret_cast<const float*>(managers[0] + 0x50),
-                                 *reinterpret_cast<const float*>(managers[1] + 0x50));
+                        if (hit_bone >= 0) {
+                            ready[k] = Clock::now() + std::chrono::milliseconds(u64(cooldown));
+                            const float damage = k == 0 ? dmg_a : dmg_b;
+                            *health = std::max(0.0f, *health - damage);
+                            // The blow's effect on the victim: shoved away from the attacker, 9 units
+                            // over 300 ms. (Reporting weak-point damage here too made Basaran's script
+                            // run its death early; that is kept for the knockout below.)
+                            std::thread([victim = objects[1 - k], from = now[k][hit_bone]] {
+                                const auto* pv = reinterpret_cast<const volatile float*>(victim + 0x130);
+                                float push[3]{pv[0] - from[0], 0.0f, pv[2] - from[2]};
+                                const float length = std::max(std::hypot(push[0], push[2]), 0.001f);
+                                push[0] *= 0.6f / length, push[2] *= 0.6f / length;
+                                for (int step = 0; step < 15; step++) {
+                                    MoveCharacter(victim, push);
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                                }
+                            }).detach();
+                            (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
+                            LOG_INFO(Core,
+                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart), health A {:.0f} B {:.0f}",
+                                     k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
+                                     *reinterpret_cast<const float*>(managers[0] + 0x50),
+                                     *reinterpret_cast<const float*>(managers[1] + 0x50));
+                        } else {
+                            LOG_INFO(Core, "cvcbrawl: {} down without a blow", k == 0 ? "B" : "A");
+                        }
                         if (*health <= 0.0f) {
                             LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
                             *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
@@ -1459,11 +1601,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             *reinterpret_cast<volatile u64*>(image + (k == 0 ? 0x1593b10 : 0x1593b08)) = 0;
                             LOG_INFO(Core, "cvcbrawl: loser cleared from the fight");
-                            for (int step = 0; step < 16; step++) {
+                            for (int step = 0; step < 60; step++) {
                                 const auto* at = reinterpret_cast<const volatile float*>(loser + 0x130);
-                                LOG_INFO(Core, "cvcbrawl: loser motion {:#x} at {:.0f} {:.0f} {:.0f}",
+                                Points body;
+                                bones(loser, body);
+                                float low = 1e9f, high = -1e9f;
+                                for (const auto& b : body) {
+                                    low = std::min(low, b[1]), high = std::max(high, b[1]);
+                                }
+                                LOG_INFO(Core, "cvcbrawl: loser motion {:#x} at {:.0f} {:.0f} {:.0f}, type {}, "
+                                         "{} bones y {:.0f}..{:.0f}",
                                          *reinterpret_cast<const volatile u64*>(loser + 0x380) - image, at[0], at[1],
-                                         at[2]);
+                                         at[2], *reinterpret_cast<const volatile u8*>(loser + 0xc), body.size(), low,
+                                         high);
                                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                             }
                             return;
