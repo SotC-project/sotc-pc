@@ -404,6 +404,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
+        } else if (action == "openfreeplay") {
+            // Test: the Free Play page, as its title menu line opens it.
+            Sotc::Menu::OpenFreePlay();
         } else if (action == "leavefreeplay") {
             // Back to a plain start of the game (the end of a Free Play battle).
             Sotc::Menu::LeaveFreePlay();
