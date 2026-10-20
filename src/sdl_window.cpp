@@ -1516,6 +1516,37 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }
                     const float dt = std::chrono::duration<float>(Clock::now() - last).count();
                     last = Clock::now();
+                    {
+                        // Fight director: their AIs do not always commit (they can circle 80 units
+                        // apart for minutes). Kept apart more than 45 units for 8 s, both are drawn
+                        // toward each other, 5 units a second each, until within 30.
+                        static Clock::time_point apart_since = Clock::now();
+                        static bool drawing = false;
+                        const auto* pa = reinterpret_cast<const volatile float*>(objects[0] + 0x130);
+                        const auto* pb = reinterpret_cast<const volatile float*>(objects[1] + 0x130);
+                        const float dx = pb[0] - pa[0], dz = pb[2] - pa[2];
+                        const float gap = std::hypot(dx, dz);
+                        if (gap < 1e4f) {
+                            if (gap <= 45.0f) {
+                                apart_since = Clock::now();
+                            }
+                            if (!drawing && Clock::now() - apart_since > std::chrono::seconds(8)) {
+                                drawing = true;
+                                LOG_INFO(Core, "cvcbrawl: drawing them together ({:.0f} apart)", gap);
+                            }
+                            if (drawing && gap < 30.0f) {
+                                drawing = false;
+                                apart_since = Clock::now();
+                            }
+                            if (drawing && gap > 1.0f) {
+                                const float step = 5.0f * std::min(dt, 0.1f) / gap;
+                                const float to_b[3]{dx * step, 0.0f, dz * step};
+                                const float to_a[3]{-dx * step, 0.0f, -dz * step};
+                                MoveCharacter(objects[0], to_b);
+                                MoveCharacter(objects[1], to_a);
+                            }
+                        }
+                    }
                     static int ticks = 0;
                     if (++ticks % 600 == 0) {
                         LOG_INFO(Core, "cvcbrawl: motions A {:#x} B {:#x}, health A {:.0f} B {:.0f}",
