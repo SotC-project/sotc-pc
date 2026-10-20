@@ -1110,7 +1110,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // They have closed in: the fight has begun (cvc_arena.sh FILM starts here).
                             *reinterpret_cast<volatile u8*>(image + 0x1593b60) = 1;
                         }
-                        const float lift = 0.45f * reach - 10.0f; // spot height above the centre
+                        // Spot height above the centre; low when the view from above is blocked (the
+                        // fight under the rock arch), where only spots beside them can see in.
+                        static bool low = false;
+                        const float lift = (0.45f * reach - 10.0f) * (low ? 0.3f : 1.0f);
                         auto& rays = g_cvc_rays;
                         if (rays.state.load() == 2) {
                             for (int k = 0; k < 13; k++) {
@@ -1187,7 +1190,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                             }
                             target_angle = tested_angle + offset(pick);
-                            if (clear_part[0] >= 0.6f && visible[0]) {
+                            low = clear_part[12] < 0.6f;
+                            if (low) {
+                                // Under cover: beside the fight, in front of whatever its own line meets.
+                                const float part = std::max(clear_part[0] - 12.0f / reach, 0.3f);
+                                radius = reach * part, rise = 20.0f + lift * part;
+                            } else if (clear_part[0] >= 0.6f && visible[0]) {
                                 // In front of whatever blocks the far end of its own line.
                                 const float part = clear_part[0] - 12.0f / reach; // 12 units off the hit
                                 radius = reach * part, rise = 20.0f + lift * part;
@@ -1199,8 +1207,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 radius = overhead_radius * part, rise = 20.0f + (overhead_rise - 20.0f) * part;
                             }
                         }
-                        static int queue_tick = 0; // ten rounds a second: 74 line tests each
-                        if (++queue_tick % 6 == 0 && rays.state.load() == 0) {
+                        static int queue_tick = 0; // twenty rounds a second: 76 line tests each
+                        if (++queue_tick % 3 == 0 && rays.state.load() == 0) {
                             for (int k = 0; k < 12; k++) {
                                 const float at = angle + offset(k);
                                 const float to[4]{centre[0] + reach * std::cos(at), centre[1] + lift,
@@ -1236,7 +1244,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + rise,
                                                 mid[2] + radius * std::sin(angle)};
                         const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
-                        const float ease = placed ? 0.04f : 1.0f;
+                        const float ease = placed ? 0.03f : 1.0f;
                         for (int k = 0; k < 3; k++) {
                             cam[k] += (want_cam[k] - cam[k]) * ease;
                             look[k] += (want_look[k] - look[k]) * ease;
