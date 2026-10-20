@@ -1241,12 +1241,21 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
-                        const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + rise,
-                                                mid[2] + radius * std::sin(angle)};
+                        // Eased around the fight (angle, distance, height) rather than in a straight
+                        // line: a change of view swings round or comes in, it does not cut through the
+                        // rock between two spots. In quickly, out slowly.
+                        static float reach_now = 0.0f, rise_now = 0.0f;
+                        if (!placed) {
+                            reach_now = radius, rise_now = rise;
+                        } else {
+                            reach_now += (radius - reach_now) * (radius < reach_now ? 0.15f : 0.03f);
+                            rise_now += (rise - rise_now) * (rise < rise_now ? 0.1f : 0.03f);
+                        }
+                        cam[0] = mid[0] + reach_now * std::cos(angle), cam[1] = mid[1] + rise_now;
+                        cam[2] = mid[2] + reach_now * std::sin(angle);
                         const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
                         const float ease = placed ? 0.03f : 1.0f;
                         for (int k = 0; k < 3; k++) {
-                            cam[k] += (want_cam[k] - cam[k]) * ease;
                             look[k] += (want_look[k] - look[k]) * ease;
                         }
                         placed = true;
@@ -1268,10 +1277,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const float length = std::hypot(d[0], d[1], d[2]);
                             const float along = (d[0] * cap_dir[0] + d[1] * cap_dir[1] + d[2] * cap_dir[2]) /
                                                 std::max(length, 0.001f);
-                            if (length > cap && along > 0.9f) {
+                            if (length > cap && along > 0.7f) {
                                 for (int c = 0; c < 3; c++) {
                                     cam[c] = centre[c] + d[c] * (cap / length);
                                 }
+                                // The eased distance and height follow, so it does not push back out.
+                                reach_now = std::hypot(cam[0] - mid[0], cam[2] - mid[2]);
+                                rise_now = cam[1] - mid[1];
                             }
                         }
                         float dir[3]{look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]};
