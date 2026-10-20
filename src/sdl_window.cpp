@@ -160,11 +160,30 @@ struct CvcRays {
     int count = 0;
     std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
     u64 image = 0;
+    // A death motion to play on a knocked-out guest colossus (its host level's death sequence only
+    // plays the level's own boss's): object, then its static MotionKind (e.g. Knight_died_early).
+    std::atomic<u64> motion_object{0};
+    u64 motion = 0;
 };
 static CvcRays g_cvc_rays;
 
 extern "C" PS4_SYSV_ABI void CvcRayWork() {
     auto& r = g_cvc_rays;
+    if (const u64 object = r.motion_object.exchange(0); object && r.image && r.motion) {
+        // As the game's motion start 0x6179f0 does once it has resolved the motion (its callers
+        // first mark the AI workspace's +0x1648): root motion 0x634600 / 0x634560, then 0x635740.
+        const u64 component = object + 0x120;
+        const u64 workspace = reinterpret_cast<u64 PS4_SYSV_ABI (*)(u64)>(r.image + 0x681ce0)(object);
+        if (workspace) {
+            *reinterpret_cast<volatile u8*>(workspace + 0x1648) = 1;
+        }
+        reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, u64, s32, float)>(r.image + 0x634600)(
+            component + 0x10bc, object, r.motion, -1, 0.0f);
+        reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, u64)>(r.image + 0x634560)(component, object, r.motion);
+        reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, float)>(r.image + 0x635740)(component, r.motion, 0.0f);
+        LOG_INFO(Core, "cvc: death motion {:#x} on {:#x} (now {:#x})", r.motion - r.image, object,
+                 *reinterpret_cast<const volatile u64*>(component + 0x260) - r.image);
+    }
     if (r.state.load() != 1 || !r.image) {
         return;
     }
@@ -763,6 +782,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 const u64 table = *reinterpret_cast<const u64*>(image + 0x16d21f8 + 0x20);
                 *reinterpret_cast<u64*>(data + 0x28) = boss_a >= 0 ? table + boss_a * 0x1e8ull : 0;
                 *reinterpret_cast<u64*>(data + 0x30) = boss_b >= 0 ? table + boss_b * 0x1e8ull : 0;
+                *reinterpret_cast<u64*>(data + 0x38) = 0; // no knockout loser yet
+                *reinterpret_cast<u64*>(data + 0x40) = 0;
+                *reinterpret_cast<u64*>(data + 0x48) = 0; // no colossus kept out of the AI
                 LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
                          *reinterpret_cast<u64*>(data + 0x08), na,
                          *reinterpret_cast<u64*>(data + 0x10), nb);
@@ -984,7 +1006,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         static int which = 0;
                         static float cam[3]{}, look[3]{}, angle = 0.0f;
                         static bool placed = false;
-                        const float mid[3]{(pa[0] + pb[0]) / 2, std::max(pa[1], pb[1]), (pa[2] + pb[2]) / 2};
+                        // After a knockout (winner byte 0x1593efb: 1 A, 2 B) the loser's death is the
+                        // picture: the view favours it while the winner walks off.
+                        const u8 winner = *reinterpret_cast<const volatile u8*>(image + 0x1593efb);
+                        const float wa = winner == 1 ? 0.25f : winner == 2 ? 0.75f : 0.5f;
+                        const float mid[3]{pa[0] * wa + pb[0] * (1 - wa), std::max(pa[1], pb[1]),
+                                           pa[2] * wa + pb[2] * (1 - wa)};
                         const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
                         const auto wrap = [](float a) {
                             while (a > 3.14159265f) {
@@ -1007,7 +1034,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // turns toward the nearest clear one and, while its own line is blocked,
                         // comes in in front of the obstacle (as the game's camera does). Hits on
                         // the colossi themselves do not count.
-                        static float clear_part[12]; // of each line, up to the first hit
+                        static float clear_part[13]; // of each line, up to the first hit (12: the overhead view)
                         static float tested_angle = 0.0f;
                         static bool tested = false;
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
@@ -1016,7 +1043,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const float lift = 0.45f * reach - 10.0f; // spot height above the centre
                         auto& rays = g_cvc_rays;
                         if (rays.state.load() == 2) {
-                            for (int k = 0; k < 12; k++) {
+                            for (int k = 0; k < 13; k++) {
                                 const float *f = rays.from[k], *t = rays.to[k], *h = rays.hit[k];
                                 bool on_colossus = false;
                                 for (const float* p : {pa, pb}) {
@@ -1041,6 +1068,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             tested = true;
                             rays.state.store(0);
                         }
+                        const float overhead_radius = radius, overhead_rise = rise;
                         if (tested) {
                             int pick = 0;
                             for (int k = 1; k < 12; k++) {
@@ -1050,8 +1078,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                             }
                             target_angle = tested_angle + offset(pick);
-                            const float part = std::max(clear_part[0] - 0.08f, 0.25f);
-                            radius = reach * part, rise = 20.0f + lift * part;
+                            if (clear_part[0] >= 0.6f) {
+                                // In front of whatever blocks the far end of its own line.
+                                const float part = clear_part[0] - 0.05f;
+                                radius = reach * part, rise = 20.0f + lift * part;
+                            } else {
+                                // Rock close around this angle: the overhead view (on its own
+                                // line, in front of anything above) until a clear angle is reached.
+                                const float part = std::max(clear_part[12] - 0.05f, 0.3f);
+                                radius = overhead_radius * part, rise = 20.0f + (overhead_rise - 20.0f) * part;
+                            }
                         }
                         if (rays.state.load() == 0) {
                             for (int k = 0; k < 12; k++) {
@@ -1061,7 +1097,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 std::memcpy(rays.from[k], centre, 12), rays.from[k][3] = 1.0f;
                                 std::memcpy(rays.to[k], to, 16);
                             }
-                            rays.count = 12, rays.image = image, tested_angle = angle;
+                            const float over[4]{mid[0] + overhead_radius * std::cos(angle), mid[1] + overhead_rise,
+                                                mid[2] + overhead_radius * std::sin(angle), 1.0f};
+                            std::memcpy(rays.from[12], centre, 12), rays.from[12][3] = 1.0f;
+                            std::memcpy(rays.to[12], over, 16);
+                            rays.count = 13, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
@@ -1360,6 +1400,27 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             *reinterpret_cast<volatile u64*>(image + 0x1593f00) = PlayerObject(image);
                             *reinterpret_cast<volatile u64*>(image + 0x1593f40) = PlayerObject(image);
                             *reinterpret_cast<volatile u64*>(image + 0x1593dc0) = 0;
+                            // The loser's own script keeps getting its boss entry once its slot is
+                            // cleared (CUR4, re/cvc/target_patch.py): it plays the death.
+                            *reinterpret_cast<volatile u64*>(image + 0x1593b40) =
+                                *reinterpret_cast<const volatile u64*>(image + (k == 0 ? 0x1593b30 : 0x1593b28));
+                            *reinterpret_cast<volatile u64*>(image + 0x1593b38) = objects[1 - k];
+                            // A guest colossus (not the level's own boss, 0x325e8a8) plays its own death
+                            // motion with its AI no longer run (0x1593b48, contact_patch.py): the
+                            // level's death sequence only collapses the level's own boss.
+                            {
+                                const u64 table = *reinterpret_cast<const u64*>(image + 0x16d21f8 + 0x20);
+                                const u64 entry = *reinterpret_cast<const volatile u64*>(image + 0x1593b40);
+                                const u64 level_boss = *reinterpret_cast<const volatile u64*>(image + 0x325e8a8);
+                                // Static MotionKind records (component +0x260 during the native death).
+                                static const std::unordered_map<u64, u64> deaths{{2, 0x1d39370}}; // Knight_died_early
+                                const auto death = deaths.find(entry >= table ? (entry - table) / 0x1e8 : ~0ull);
+                                if (entry != level_boss && death != deaths.end()) {
+                                    *reinterpret_cast<volatile u64*>(image + 0x1593b48) = objects[1 - k];
+                                    g_cvc_rays.image = image, g_cvc_rays.motion = image + death->second;
+                                    g_cvc_rays.motion_object.store(objects[1 - k]);
+                                }
+                            }
                             const u64 loser_manager = managers[1 - k];
                             for (int step = 0; step < 600; step++) {
                                 const u64 points = *reinterpret_cast<const volatile u64*>(loser_manager + 0x100);
@@ -1371,8 +1432,40 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                             }
                             std::this_thread::sleep_for(std::chrono::milliseconds(900));
+                            // The game's own death (manager update 0x6cb1d0 at health 0): manager
+                            // +0x108 set, 0x82df90 stops the AI, character +0x240 = 1 and +0xb0d bit 2
+                            // (object +0x360 / +0xc2d).
+                            const u64 loser = objects[1 - k];
+                            LOG_INFO(Core, "cvcbrawl: loser {:#x} death state: manager +0x108 {} health {:.0f}, "
+                                     "+0x360 {}, +0xc2d {:#x}", loser,
+                                     *reinterpret_cast<const volatile u8*>(loser_manager + 0x108),
+                                     *reinterpret_cast<const volatile float*>(loser_manager + 0x50),
+                                     *reinterpret_cast<const volatile u32*>(loser + 0x360),
+                                     *reinterpret_cast<const volatile u8*>(loser + 0xc2d));
+                            for (const u64 def : {0x1593b28ull, 0x1593b30ull}) {
+                                const u64 entry = *reinterpret_cast<const volatile u64*>(image + def);
+                                std::string found;
+                                for (u32 at = 0; entry && at < 0x1e8; at += 8) {
+                                    const u64 v = *reinterpret_cast<const volatile u64*>(entry + at);
+                                    for (int m = 0; m < 2; m++) {
+                                        if (v == managers[m] || v == objects[m]) {
+                                            found += fmt::format(" +{:#x}={}{}", at, v == managers[m] ? "mgr" : "obj",
+                                                                 m ? "B" : "A");
+                                        }
+                                    }
+                                }
+                                LOG_INFO(Core, "cvcbrawl: boss entry {} {:#x}:{}", def == 0x1593b28 ? "A" : "B", entry,
+                                         found);
+                            }
                             *reinterpret_cast<volatile u64*>(image + (k == 0 ? 0x1593b10 : 0x1593b08)) = 0;
                             LOG_INFO(Core, "cvcbrawl: loser cleared from the fight");
+                            for (int step = 0; step < 16; step++) {
+                                const auto* at = reinterpret_cast<const volatile float*>(loser + 0x130);
+                                LOG_INFO(Core, "cvcbrawl: loser motion {:#x} at {:.0f} {:.0f} {:.0f}",
+                                         *reinterpret_cast<const volatile u64*>(loser + 0x380) - image, at[0], at[1],
+                                         at[2]);
+                                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                            }
                             return;
                         }
                     }
