@@ -917,12 +917,23 @@ void OnGameFlowStart() {
     }
 }
 
+std::atomic_bool cover_held{false};
+
+void HoldCover(bool hold) {
+    cover_held = hold;
+}
+
 bool StartCovered(bool period_only) {
     static const bool free_play = InFreePlay() && std::getenv("SOTC_NOCOVER") == nullptr;
     if (!free_play) {
         return false;
     }
     const u64 now = SDL_GetTicks();
+    // A battle that sets itself up first (colossus vs colossus: one colossus is brought into the
+    // other's arena) keeps the loading screen until it says so; four minutes at most.
+    if (cover_held && now < 240000) {
+        return true;
+    }
     // Never for longer than a start can take, whatever the game does.
     if (now > 90000) {
         return false;

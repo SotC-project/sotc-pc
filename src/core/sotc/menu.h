@@ -44,6 +44,9 @@ void OnGameFlowStart();
 /// True from the start of a free play battle's process until the warp to the colossus is under
 /// way: the picture is kept black meanwhile, so the starting field and the warp are not seen.
 bool StartCovered(bool period_only = false);
+/// Keeps (true) or lets go of (false) the loading screen of a free play start, for a battle that
+/// sets itself up behind it (the script actions cover=hold / cover=release).
+void HoldCover(bool hold);
 /// While the key bindings page waits for a key: takes the event and returns true.
 bool CaptureInput(const SDL_Event* event);
 /// Draws the menu when open and handles the pad shortcut. Call once per frame.
