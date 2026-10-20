@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <array>
+#include <atomic>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
@@ -147,6 +149,63 @@ static u64 PlayerObject(u64 image) {
     const s32 handle = world ? *reinterpret_cast<const volatile s32*>(world + 0x228) : 0;
     const u64 node = handle ? (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff) : 0;
     return node ? q(node) : 0;
+}
+
+/// Test aid: line tests for the CvC spectator camera with the game's own camera collision
+/// (re/cvc/camera_patch.py). cvccam queues up to 16 lines and sets the state to 1; on the game
+/// thread the camera calls CvcRayThunk, which runs 0x7a7e40 for each (true when nothing is in the
+/// way, else the hit position at +0 of its 0x30-byte result) and sets the state to 2.
+struct CvcRays {
+    float from[16][4], to[16][4], hit[16][4]; // hit: where the line stops (to when clear)
+    int count = 0;
+    std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
+    u64 image = 0;
+};
+static CvcRays g_cvc_rays;
+
+extern "C" PS4_SYSV_ABI void CvcRayWork() {
+    auto& r = g_cvc_rays;
+    if (r.state.load() != 1 || !r.image) {
+        return;
+    }
+    // The camera's collision filter, captured at its own line test (0 until that has run once).
+    const u64 filter = *reinterpret_cast<const volatile u64*>(r.image + 0x1593ed8);
+    // A filter kept on some caller's stack (this one) would be stale here: not used.
+    const u64 stack = reinterpret_cast<u64>(&filter);
+    if (!filter || (filter > stack - 0x40000 && filter < stack + 0x40000)) {
+        return;
+    }
+    using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter,
+                                         u32 single, u64 ignore);
+    const auto test = reinterpret_cast<LineTest>(r.image + 0x7a7e40);
+    for (int i = 0; i < r.count; i++) {
+        alignas(16) float hit[12]{};
+        std::memcpy(r.hit[i], test(hit, r.from[i], r.to[i], filter, 1, 0) ? r.to[i] : hit, 16);
+    }
+    r.state.store(2);
+}
+
+// Called from guest code in the middle of the camera update: keeps every register the SysV call
+// may change (nothing there expects a call), on a 32-byte aligned stack.
+extern "C" __attribute__((naked)) void CvcRayThunk() {
+    asm volatile("pushfq\n push %rax\n push %rcx\n push %rdx\n push %rsi\n push %rdi\n"
+                 "push %r8\n push %r9\n push %r10\n push %r11\n push %rbp\n"
+                 "mov %rsp, %rbp\n and $-32, %rsp\n sub $512, %rsp\n"
+                 "vmovups %ymm0, 0(%rsp)\n vmovups %ymm1, 32(%rsp)\n vmovups %ymm2, 64(%rsp)\n"
+                 "vmovups %ymm3, 96(%rsp)\n vmovups %ymm4, 128(%rsp)\n vmovups %ymm5, 160(%rsp)\n"
+                 "vmovups %ymm6, 192(%rsp)\n vmovups %ymm7, 224(%rsp)\n vmovups %ymm8, 256(%rsp)\n"
+                 "vmovups %ymm9, 288(%rsp)\n vmovups %ymm10, 320(%rsp)\n vmovups %ymm11, 352(%rsp)\n"
+                 "vmovups %ymm12, 384(%rsp)\n vmovups %ymm13, 416(%rsp)\n vmovups %ymm14, 448(%rsp)\n"
+                 "vmovups %ymm15, 480(%rsp)\n"
+                 "call CvcRayWork\n"
+                 "vmovups 0(%rsp), %ymm0\n vmovups 32(%rsp), %ymm1\n vmovups 64(%rsp), %ymm2\n"
+                 "vmovups 96(%rsp), %ymm3\n vmovups 128(%rsp), %ymm4\n vmovups 160(%rsp), %ymm5\n"
+                 "vmovups 192(%rsp), %ymm6\n vmovups 224(%rsp), %ymm7\n vmovups 256(%rsp), %ymm8\n"
+                 "vmovups 288(%rsp), %ymm9\n vmovups 320(%rsp), %ymm10\n vmovups 352(%rsp), %ymm11\n"
+                 "vmovups 384(%rsp), %ymm12\n vmovups 416(%rsp), %ymm13\n vmovups 448(%rsp), %ymm14\n"
+                 "vmovups 480(%rsp), %ymm15\n"
+                 "mov %rbp, %rsp\n pop %rbp\n pop %r11\n pop %r10\n pop %r9\n pop %r8\n"
+                 "pop %rdi\n pop %rsi\n pop %rdx\n pop %rcx\n pop %rax\n popfq\n ret\n");
 }
 
 /// Test aid: moves a game character (an object of type 9) by a world-space delta. Besides the
@@ -812,6 +871,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 const auto end = std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(u64(seconds * 1000));
                 bool waiting[2]{}; // A / B gone with no replacement yet
+                // Ticks each usable object has been listed in a row: a boss object the game has
+                // just created is not set up for the AI yet (crash at 0x839ccd when adopted at once).
+                std::unordered_map<u64, int> age;
                 while (image && std::chrono::steady_clock::now() < end) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
@@ -826,6 +888,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             live.push_back(q(node));
                         }
                     }
+                    std::unordered_map<u64, int> older;
+                    for (const u64 o : live) {
+                        older[o] = age.contains(o) ? age[o] + 1 : 1;
+                    }
+                    age.swap(older);
                     const auto listed = [&](u64 o) {
                         return std::find(live.begin(), live.end(), o) != live.end();
                     };
@@ -838,7 +905,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const u64 other = q(image + (slot == 0x1593b08 ? 0x1593b10 : 0x1593b08));
                         u64 replacement = 0;
                         for (const u64 o : live) {
-                            if (o != other) {
+                            if (o != other && age[o] >= 30) {
                                 replacement = o;
                                 break;
                             }
@@ -912,38 +979,92 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // enough above it for both colossi, eased toward where it should be.
                     if (steer == 2.0f) {
                         static float pose[2][20];
+                        *reinterpret_cast<volatile u64*>(image + 0x1593ee8) =
+                            reinterpret_cast<u64>(&CvcRayThunk); // line tests (camera_patch.py)
                         static int which = 0;
                         static float cam[3]{}, look[3]{}, angle = 0.0f;
                         static bool placed = false;
                         const float mid[3]{(pa[0] + pb[0]) / 2, std::max(pa[1], pb[1]), (pa[2] + pb[2]) / 2};
-                        // High above the fight and close in, looking down on it: cliffs and rock
-                        // pillars around an arena stay below such a camera (one at their height
-                        // ends up inside or behind them).
                         const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
-                        // Steeper the further apart they are: back by half their distance, up by
-                        // most of it (a canyon's walls stay beside and below such a camera).
-                        const float radius = std::max(dist, 0.5f * sep + 20.0f);
-                        const float rise = std::max(height, 0.8f * sep + 40.0f);
-                        // On the arena's open side: from the fight toward where the colossi have
-                        // been on average (the middle of the ground they use), swinging slowly
-                        // around that direction rather than circling into the walls at the edge.
-                        static double sum[2]{}, samples = 0;
-                        sum[0] += mid[0], sum[1] += mid[2], samples += 1;
-                        const float centre[2]{float(sum[0] / samples), float(sum[1] / samples)};
-                        static float sway = 0.0f;
-                        sway += 0.016f * 0.15f;
-                        const float to_centre = std::hypot(centre[0] - mid[0], centre[1] - mid[2]) > 20.0f
-                                                    ? std::atan2(centre[1] - mid[2], centre[0] - mid[0])
-                                                    : std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f;
-                        const float target_angle = to_centre + 0.6f * std::sin(sway);
-                        float turn = target_angle - angle;
-                        while (turn > 3.14159265f) {
-                            turn -= 6.2831853f;
+                        const auto wrap = [](float a) {
+                            while (a > 3.14159265f) {
+                                a -= 6.2831853f;
+                            }
+                            while (a < -3.14159265f) {
+                                a += 6.2831853f;
+                            }
+                            return a;
+                        };
+                        // Fallback: high above the fight and close in, steeper the further apart
+                        // they are, square to the line between them (a canyon's cliffs and rock
+                        // pillars stay beside and below such a camera).
+                        float radius = std::max(dist, 0.5f * sep + 20.0f);
+                        float rise = std::max(height, 0.8f * sep + 40.0f);
+                        float target_angle = std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f;
+                        // Better, a broadcast angle checked with the game's own camera collision:
+                        // lines from just above the fight out to 12 spots around it (every 30
+                        // degrees from the current angle) at that distance and height. The camera
+                        // turns toward the nearest clear one and, while its own line is blocked,
+                        // comes in in front of the obstacle (as the game's camera does). Hits on
+                        // the colossi themselves do not count.
+                        static float clear_part[12]; // of each line, up to the first hit
+                        static float tested_angle = 0.0f;
+                        static bool tested = false;
+                        const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
+                        const float centre[3]{mid[0], mid[1] + 20.0f, mid[2]};
+                        const float reach = std::max(dist, sep + 40.0f);
+                        const float lift = 0.45f * reach - 10.0f; // spot height above the centre
+                        auto& rays = g_cvc_rays;
+                        if (rays.state.load() == 2) {
+                            for (int k = 0; k < 12; k++) {
+                                const float *f = rays.from[k], *t = rays.to[k], *h = rays.hit[k];
+                                bool on_colossus = false;
+                                for (const float* p : {pa, pb}) {
+                                    on_colossus |= std::hypot(h[0] - p[0], h[2] - p[2]) < 25.0f &&
+                                                   h[1] < p[1] + 80.0f;
+                                }
+                                const float part = std::hypot(h[0] - f[0], h[1] - f[1], h[2] - f[2]) /
+                                                   std::max(std::hypot(t[0] - f[0], t[1] - f[1], t[2] - f[2]), 0.001f);
+                                clear_part[k] = on_colossus ? 1.0f : std::clamp(part, 0.0f, 1.0f);
+                            }
+                            static int reports = 0;
+                            if (reports++ % 60 == 0) {
+                                LOG_INFO(Core, "cvccam: lines clear {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} "
+                                         "{:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} (angle {:.2f}, reach {:.0f})",
+                                         clear_part[0], clear_part[1], clear_part[2], clear_part[3],
+                                         clear_part[4], clear_part[5], clear_part[6], clear_part[7],
+                                         clear_part[8], clear_part[9], clear_part[10], clear_part[11],
+                                         tested_angle, reach);
+                                LOG_INFO(Core, "cvccam: line filter {:#x}",
+                                         *reinterpret_cast<const volatile u64*>(image + 0x1593ed8));
+                            }
+                            tested = true;
+                            rays.state.store(0);
                         }
-                        while (turn < -3.14159265f) {
-                            turn += 6.2831853f;
+                        if (tested) {
+                            int pick = 0;
+                            for (int k = 1; k < 12; k++) {
+                                if (clear_part[k] - 0.2f * std::abs(offset(k)) >
+                                    clear_part[pick] - 0.2f * std::abs(offset(pick))) {
+                                    pick = k;
+                                }
+                            }
+                            target_angle = tested_angle + offset(pick);
+                            const float part = std::max(clear_part[0] - 0.08f, 0.25f);
+                            radius = reach * part, rise = 20.0f + lift * part;
                         }
-                        angle = placed ? angle + turn * 0.01f : target_angle;
+                        if (rays.state.load() == 0) {
+                            for (int k = 0; k < 12; k++) {
+                                const float at = angle + offset(k);
+                                const float to[4]{centre[0] + reach * std::cos(at), centre[1] + lift,
+                                                  centre[2] + reach * std::sin(at), 1.0f};
+                                std::memcpy(rays.from[k], centre, 12), rays.from[k][3] = 1.0f;
+                                std::memcpy(rays.to[k], to, 16);
+                            }
+                            rays.count = 12, rays.image = image, tested_angle = angle;
+                            rays.state.store(1);
+                        }
+                        angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
                         const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + rise,
                                                 mid[2] + radius * std::sin(angle)};
                         const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
@@ -1023,9 +1144,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }
                     // Far enough back for both to fit in the picture.
                     const float want_dist = std::max(dist, 0.9f * std::hypot(pa[0] - pb[0], pa[2] - pb[2]));
-                    if (d > 0.5f * want_dist && d < 2.0f * want_dist) {
+                    // With our own camera (2) he is only put out of the way once: moving him again
+                    // later made the game re-create a colossus's object (B gone in runs 26 and 28).
+                    static bool moved_once = false;
+                    if ((d > 0.5f * want_dist && d < 2.0f * want_dist) || (steer == 2.0f && moved_once)) {
                         continue;
                     }
+                    moved_once = true;
                     // Along the line from the fight to where Wander already stands: open ground he
                     // reached himself, where a spot square to the colossi may be inside a cliff.
                     float px = pp[0] - mx, pz = pp[2] - mz;
@@ -1045,6 +1170,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 Input::test_mouse_delta[0] = 0.0f;
                 if (steer == 2.0f) {
                     *reinterpret_cast<volatile u64*>(image + 0x1593ee0) = 0; // camera back to the game
+                    *reinterpret_cast<volatile u64*>(image + 0x1593ee8) = 0; // no more line tests
                 }
             }).detach();
         } else if (action == "cvcbones") {
