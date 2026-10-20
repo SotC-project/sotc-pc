@@ -1545,6 +1545,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 MoveCharacter(objects[0], to_b);
                                 MoveCharacter(objects[1], to_a);
                             }
+                            // Leash, for Basaran's valley (the only arena CvC runs in so far): the open
+                            // geyser field around (950, -860); Gaius heads home under the rock arch,
+                            // where the view is cramped. Their middle drifted over 70 units away: both
+                            // nudged back, 3 units a second.
+                            const float field[2]{950.0f, -860.0f};
+                            const float mx = (pa[0] + pb[0]) / 2 - field[0], mz = (pa[2] + pb[2]) / 2 - field[1];
+                            const float off = std::hypot(mx, mz);
+                            if (off > 70.0f) {
+                                const float step = 3.0f * std::min(dt, 0.1f) / off;
+                                const float back[3]{-mx * step, 0.0f, -mz * step};
+                                MoveCharacter(objects[0], back);
+                                MoveCharacter(objects[1], back);
+                            }
                         }
                     }
                     static int ticks = 0;
