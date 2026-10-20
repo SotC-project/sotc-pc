@@ -799,7 +799,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // pillars around an arena stay below such a camera (one at their height
                         // ends up inside or behind them).
                         const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
-                        const float radius = std::max(dist, sep + 30.0f);
+                        const float radius = std::max(dist, 1.2f * sep + 30.0f);
                         if (!placed) {
                             angle = std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f; // square to them
                         }
@@ -1067,26 +1067,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
                         const float damage = k == 0 ? dmg_a : dmg_b;
                         *health = std::max(0.0f, *health - damage);
-                        // The blow's effect on the victim, for 300 ms: its weak points report damage
-                        // this frame (manager +0x100: 8-byte steps, +0x28 this frame, reset by the
-                        // manager each frame; the AI reacts through 0x6cd010), and it is shoved away
-                        // from the attacker, 9 units in all.
-                        std::thread([victim = objects[1 - k], manager = managers[1 - k], damage,
-                                     from = now[k][hit_bone]] {
+                        // The blow's effect on the victim: shoved away from the attacker, 9 units
+                        // over 300 ms. (Reporting weak-point damage here too made Basaran's script
+                        // run its death early; that is kept for the knockout below.)
+                        std::thread([victim = objects[1 - k], from = now[k][hit_bone]] {
                             const auto* pv = reinterpret_cast<const volatile float*>(victim + 0x130);
                             float push[3]{pv[0] - from[0], 0.0f, pv[2] - from[2]};
                             const float length = std::max(std::hypot(push[0], push[2]), 0.001f);
                             push[0] *= 0.6f / length, push[2] *= 0.6f / length;
-                            for (int step = 0; step < 300; step++) {
-                                const u64 points = *reinterpret_cast<const volatile u64*>(manager + 0x100);
-                                const s32 count = *reinterpret_cast<const volatile s32*>(manager + 0x68);
-                                for (s32 i = 0; points && i < std::min(count, 64); i++) {
-                                    *reinterpret_cast<volatile float*>(points + 0x28 + i * 8ull) = damage;
-                                }
-                                if (step % 20 == 0) {
-                                    MoveCharacter(victim, push);
-                                }
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            for (int step = 0; step < 15; step++) {
+                                MoveCharacter(victim, push);
+                                std::this_thread::sleep_for(std::chrono::milliseconds(20));
                             }
                         }).detach();
                         (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
@@ -1098,6 +1089,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (*health <= 0.0f) {
                             LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
                             *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
+                            // Knockout: nobody targets anybody any more (the one-entry target
+                            // lists emptied; the AI copes with no target), the loser's weak points
+                            // all report damage, which makes its own script play its death, and
+                            // once that has begun its slot is cleared so nothing calls into it while
+                            // the game tears it down (the AI trampoline skips a cleared slot, the
+                            // redirects ignore it, the contact test stops).
+                            *reinterpret_cast<volatile u64*>(image + 0x1593f00) = 0;
+                            *reinterpret_cast<volatile u64*>(image + 0x1593f40) = 0;
+                            *reinterpret_cast<volatile u64*>(image + 0x1593dc0) = 0;
+                            const u64 loser_manager = managers[1 - k];
+                            for (int step = 0; step < 600; step++) {
+                                const u64 points = *reinterpret_cast<const volatile u64*>(loser_manager + 0x100);
+                                const s32 count = *reinterpret_cast<const volatile s32*>(loser_manager + 0x68);
+                                for (s32 i = 0; points && i < std::min(count, 64); i++) {
+                                    *reinterpret_cast<volatile float*>(points + 0x28 + i * 8ull) = 50.0f;
+                                }
+                                *health = 0.0f;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(900));
+                            *reinterpret_cast<volatile u64*>(image + (k == 0 ? 0x1593b10 : 0x1593b08)) = 0;
+                            LOG_INFO(Core, "cvcbrawl: loser cleared from the fight");
                             return;
                         }
                     }
