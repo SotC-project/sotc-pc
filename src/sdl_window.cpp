@@ -270,6 +270,10 @@ extern "C" __attribute__((naked)) void CvcRayThunk() {
 /// Colossus vs colossus: both are where the fight starts (cvcplace), so the spectator camera may
 /// report itself settled.
 static std::atomic<bool> cvc_placed{false};
+/// The guest has been brought beside the host (cvcplace). Until then the spectator camera leaves
+/// Wander where he is: brought between a host and a guest still far away, he leaves the host
+/// behind and the game tears it down.
+static std::atomic<bool> cvc_guest_beside{false};
 
 static u32 MoveCharacter(u64 object, const float delta[3]) {
     // Only copies that hold where it is now: in some characters (Basaran) these offsets hold
@@ -881,15 +885,48 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const float len = std::max(std::hypot(dx, dz), 0.001f);
                         dx /= len, dz /= len;
                         const float to[3]{pb[0] + dx * dist, pb[1] + 3.0f, pb[2] + dz * dist};
-                        const float delta[3]{to[0] - pa[0], to[1] - pa[1], to[2] - pa[2]};
-                        MoveCharacter(a, delta);
+                        // In steps of 10 units a frame: one jump of hundreds of units while the host
+                        // was already awake (its first-sight cutscene played before the setup) crashed
+                        // the game at once in its per-frame list processing (unlink at 0x5fbfcc).
+                        for (int i = 0; i < 200; i++) {
+                            float delta[3]{to[0] - pa[0], to[1] - pa[1], to[2] - pa[2]};
+                            const float left = std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+                            if (left > 10.0f) {
+                                for (float& d : delta) {
+                                    d *= 10.0f / left;
+                                }
+                            }
+                            MoveCharacter(a, delta);
+                            if (left <= 10.0f) {
+                                break;
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                        }
                         auto* centre = reinterpret_cast<volatile float*>(image + 0x1593b78);
                         centre[0] = pb[0] + dx * dist / 2, centre[1] = pb[2] + dz * dist / 2;
                         floor_y = pb[1] - 3.0f;
+                        cvc_guest_beside = true;
                         LOG_INFO(Core, "cvcplace: B at {:.0f} {:.0f} {:.0f}, A to {:.0f} {:.0f} {:.0f} ({:.0f} from B), kept "
                                  "above {:.0f}", pb[0], pb[1], pb[2], to[0], to[1], to[2], dist, floor_y);
                     };
                     place();
+                    // The host walked out toward the open side, one unit a frame (it must be awake:
+                    // moved before or during its first-sight cutscene the game puts it back).
+                    const auto walk_host_out = [&] {
+                        float moved = 0.0f;
+                        while (moved < walk_out && *reinterpret_cast<const volatile u64*>(b) != 0) {
+                            const float dx = open[0] - pb[0], dz = open[1] - pb[2];
+                            const float len = std::max(std::hypot(dx, dz), 0.001f);
+                            const float step[3]{dx / len, 0.0f, dz / len};
+                            MoveCharacter(b, step);
+                            moved += 1.0f;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(33));
+                        }
+                        if (walk_out > 0.0f) {
+                            LOG_INFO(Core, "cvcplace: B slid {:.0f} to {:.0f} {:.0f} {:.0f}, object {}", moved, pb[0], pb[1],
+                                     pb[2], *reinterpret_cast<const volatile u64*>(b) != 0 ? "kept" : "torn down");
+                        }
+                    };
                     // The host's first-sight cutscene can follow (Wander brought near). It puts the
                     // host back where the game has it, so then A is placed beside it again. The fight
                     // counts as placed (cvc_placed) once it is over, or after 10 s without one.
@@ -910,22 +947,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 LOG_INFO(Core, "cvcplace: a cutscene plays");
                             }
                             if (cutscene && !now) {
-                                if (walk_out > 0.0f) {
-                                    float moved = 0.0f;
-                                    while (moved < walk_out && *reinterpret_cast<const volatile u64*>(b) != 0) {
-                                        const float dx = open[0] - pb[0], dz = open[1] - pb[2];
-                                        const float len = std::max(std::hypot(dx, dz), 0.001f);
-                                        const float step[3]{dx / len, 0.0f, dz / len};
-                                        MoveCharacter(b, step);
-                                        moved += 1.0f;
-                                        std::this_thread::sleep_for(std::chrono::milliseconds(33));
-                                    }
-                                    LOG_INFO(Core, "cvcplace: B slid {:.0f} to {:.0f} {:.0f} {:.0f}, object {}", moved, pb[0],
-                                             pb[1], pb[2], *reinterpret_cast<const volatile u64*>(b) != 0 ? "kept" : "torn down");
-                                }
+                                walk_host_out();
                                 place();
                                 cvc_placed = true;
                             } else if (!cutscene && !now && std::chrono::steady_clock::now() > start + std::chrono::seconds(10)) {
+                                // None followed: it played before the setup (the host already awake),
+                                // so the host is walked out now.
+                                walk_host_out();
+                                place();
                                 cvc_placed = true;
                             }
                             cutscene = cutscene || now;
@@ -1037,6 +1066,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(image + 0x1593ae0) = 0; // nobody's AI held for a move (cvcbrawl)
                 *reinterpret_cast<u64*>(image + 0x1593ae8) = 0; // the spectator camera has not settled yet
                 cvc_placed = false;
+                cvc_guest_beside = false;
                 LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
                          *reinterpret_cast<u64*>(data + 0x08), na,
                          *reinterpret_cast<u64*>(data + 0x10), nb);
@@ -1235,7 +1265,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     std::this_thread::sleep_for(std::chrono::milliseconds(16));
                     const u64 a = q(image + 0x1593b08), b = q(image + 0x1593b10);
                     const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
-                    if ((!a && !b) || !world) {
+                    if ((!a && !b) || !world || !cvc_guest_beside) {
                         continue;
                     }
                     // Where A and B are, or were last: after a knockout the loser's slot is cleared
