@@ -9,6 +9,8 @@
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
 #endif
+#include "common/singleton.h"
+#include "core/linker.h"
 #include "core/memory.h"
 #include "core/sotc/mem_trace.h"
 #include "core/sotc/menu.h"
@@ -167,6 +169,23 @@ static LONG SignalHandlerBody(EXCEPTION_POINTERS* pExp) noexcept {
         LOG_CRITICAL(Debug, "access {:#x} rsp {:#x} stack: {}",
                      pExp->ExceptionRecord->ExceptionInformation[1], pExp->ContextRecord->Rsp,
                      trace);
+        // The guest's stack: words pointing into the game image are (mostly) its return
+        // addresses, given as image offsets, the callers of a guest fault.
+        if (const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0)) {
+            const u64 base = module->GetBaseAddress(), size = module->aligned_base_size;
+            std::string guest;
+            for (int i = 0; i < 128; ++i) {
+                u64 word = 0;
+                SIZE_T got = 0;
+                if (ReadProcessMemory(GetCurrentProcess(),
+                                      reinterpret_cast<const void*>(pExp->ContextRecord->Rsp + i * 8),
+                                      &word, sizeof(word), &got) &&
+                    word >= base && word < base + size) {
+                    guest += fmt::format("{:#x} ", word - base);
+                }
+            }
+            LOG_CRITICAL(Debug, "guest stack (image offsets): {}", guest);
+        }
         // What the registers held and what lies around the addresses in them: when the game's
         // allocator trips over a damaged block, the bytes that damaged it are right there and
         // often say who wrote them. Read through the system, so a bad address cannot fault.
