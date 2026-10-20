@@ -795,6 +795,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(data + 0x38) = 0; // no knockout loser yet
                 *reinterpret_cast<u64*>(data + 0x40) = 0;
                 *reinterpret_cast<u64*>(data + 0x48) = 0; // no colossus kept out of the AI
+                // Knockout not shown, not filming (cvc_arena.sh FILM; ifset/ifzero read 8 bytes).
+                *reinterpret_cast<u64*>(data + 0x50) = 0;
+                *reinterpret_cast<u64*>(data + 0x58) = 0;
+                *reinterpret_cast<u64*>(data + 0x60) = 0; // the colossi have not closed in yet (cvccam)
                 LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
                          *reinterpret_cast<u64*>(data + 0x08), na,
                          *reinterpret_cast<u64*>(data + 0x10), nb);
@@ -987,6 +991,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // position far out is an object freed under us (cvckeep replaces it).
                     static float last[2][3];
                     static bool seen[2];
+                    std::vector<std::array<float, 3>> body_points; // both skeletons, this tick
                     for (int k = 0; k < 2; k++) {
                         // A knocked-out colossus is followed through the loser slot (0x1593b38) once
                         // its own is cleared: its body still falls some way.
@@ -1022,6 +1027,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     break;
                                 }
                                 sum[0] += m[0], sum[1] += m[2], bones++;
+                                body_points.push_back({m[0], m[1], m[2]});
                             }
                             if (bones > 0) {
                                 last[k][0] = sum[0] / bones, last[k][2] = sum[1] / bones;
@@ -1097,8 +1103,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
                         const float centre[3]{mid[0], mid[1] + 20.0f, mid[2]};
                         // Close (the arena is foggy): both in view while fighting, the body after.
-                        const float reach = winner == 1 || winner == 2 ? std::max(dist, 60.0f)
-                                                                       : std::max(dist, 0.8f * sep + 30.0f);
+                        const float reach = winner == 1 || winner == 2
+                                                ? std::max(dist, 60.0f)
+                                                : std::clamp(0.8f * sep + 30.0f, dist, 180.0f); // not out of the arena
+                        if (sep < 200.0f) {
+                            // They have closed in: the fight has begun (cvc_arena.sh FILM starts here).
+                            *reinterpret_cast<volatile u8*>(image + 0x1593b60) = 1;
+                        }
                         const float lift = 0.45f * reach - 10.0f; // spot height above the centre
                         auto& rays = g_cvc_rays;
                         if (rays.state.load() == 2) {
@@ -1131,7 +1142,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float full = std::hypot(t[0] - f[0], t[1] - f[1], t[2] - f[2]);
                                 const float part = std::hypot(h[0] - f[0], h[1] - f[1], h[2] - f[2]);
                                 cap = 1e9f;
-                                if (part < full - 1.0f && full > 1.0f) {
+                                bool on_colossus = false; // a colossus between: not a wall
+                                for (const float* p : {pa, pb}) {
+                                    on_colossus |= std::hypot(h[0] - p[0], h[2] - p[2]) < 25.0f &&
+                                                   h[1] < p[1] + 80.0f;
+                                }
+                                if (!on_colossus && part < full - 1.0f && full > 1.0f) {
                                     cap = std::max(part - 8.0f, 0.0f);
                                     for (int c = 0; c < 3; c++) {
                                         cap_dir[c] = (t[c] - f[c]) / full;
@@ -1153,9 +1169,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Clear, near the current angle, and side-on to the line between them
                             // (from along it one colossus hides the other).
                             const float axis = std::atan2(pb[2] - pa[2], pb[0] - pa[0]);
+                            // After a knockout: from the side away from the winner, which would
+                            // otherwise stand between the camera and the body.
+                            const bool after = winner == 1 || winner == 2;
+                            const float* winner_at = winner == 1 ? pa : pb;
+                            const float away = std::atan2(winner_at[2] - mid[2], winner_at[0] - mid[0]);
                             const auto score = [&](int k) {
+                                const float at = tested_angle + offset(k);
                                 return clear_part[k] - 0.2f * std::abs(offset(k)) -
-                                       0.5f * std::abs(std::cos(tested_angle + offset(k) - axis)) -
+                                       (after ? 0.8f * std::cos(at - away) : 0.5f * std::abs(std::cos(at - axis))) -
                                        (visible[k] ? 0.0f : 1.5f);
                             };
                             int pick = 0;
@@ -1220,6 +1242,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             look[k] += (want_look[k] - look[k]) * ease;
                         }
                         placed = true;
+                        // Never inside or against a colossus: at least 22 units from every bone.
+                        for (int pass = 0; pass < 2; pass++) {
+                            for (const auto& b : body_points) {
+                                const float d[3]{cam[0] - b[0], cam[1] - b[1], cam[2] - b[2]};
+                                const float length = std::hypot(d[0], d[1], d[2]);
+                                if (length < 22.0f) {
+                                    const float up = length > 0.001f ? 22.0f / length : 0.0f;
+                                    for (int c = 0; c < 3; c++) {
+                                        cam[c] = length > 0.001f ? b[c] + d[c] * up : cam[c] + (c == 1 ? 22.0f : 0.0f);
+                                    }
+                                }
+                            }
+                        }
                         {
                             const float d[3]{cam[0] - centre[0], cam[1] - centre[1], cam[2] - centre[2]};
                             const float length = std::hypot(d[0], d[1], d[2]);
@@ -1616,6 +1651,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                          high);
                                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                             }
+                            // 30 s after the knockout: the fight has been shown (a script can end the
+                            // recording on this byte).
+                            *reinterpret_cast<volatile u8*>(image + 0x1593b50) = 1;
+                            LOG_INFO(Core, "cvcbrawl: knockout shown");
                             return;
                         }
                     }
