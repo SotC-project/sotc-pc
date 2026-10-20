@@ -273,7 +273,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         std::vector<Step> out;
         // "@<path>": the script is in that file (Windows caps an environment variable at 32 KB).
         std::string text = std::getenv("SOTC_SCRIPT");
-        if (text.starts_with('@')) {
+        if (text.starts_with("@res:")) {
+            // A script built into the program (the Free Play colossus-vs-colossus battle).
+            const auto file = cmrc::res::get_filesystem().open("src/resources/" + text.substr(5));
+            text.assign(file.begin(), file.end());
+        } else if (text.starts_with('@')) {
             std::ifstream file{text.substr(1)};
             text.assign(std::istreambuf_iterator<char>(file), {});
             while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
@@ -400,6 +404,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             held = it->second;
             controller->Button(held, true);
             release_at = now + 250;
+        } else if (action == "leavefreeplay") {
+            // Back to a plain start of the game (the end of a Free Play battle).
+            Sotc::Menu::LeaveFreePlay();
         } else if (action == "rec=start" || action == "rec=stop" || action == "rec=ui") {
             // Footage capture: the game picture, the finished picture with overlays, or off
             // (see SOTC_RECORD in the presenter).
@@ -799,6 +806,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(data + 0x50) = 0;
                 *reinterpret_cast<u64*>(data + 0x58) = 0;
                 *reinterpret_cast<u64*>(data + 0x60) = 0; // the colossi have not closed in yet (cvccam)
+                *reinterpret_cast<u64*>(data + 0x68) = 0; // not yet back to the title (Free Play CvC)
                 LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
                          *reinterpret_cast<u64*>(data + 0x08), na,
                          *reinterpret_cast<u64*>(data + 0x10), nb);

@@ -76,6 +76,7 @@ bool all_items = true;
 bool no_damage = false;
 bool unlimited_grip = false;
 bool max_damage = false;
+bool versus = false; // colossus vs colossus: watch Gaius fight Basaran
 
 constexpr std::array<const char*, 3> Difficulties{"Easy", "Normal", "Hard"};
 constexpr std::array<const char*, 3> DifficultyIds{"easy", "normal", "hard"};
@@ -98,14 +99,15 @@ void SetEnv(const char* name, const std::string& value) {
 }
 
 /// Starts this program again with the given free play options and closes this instance.
-void Relaunch(const std::string& freeplay_args, const std::string& challenge_spec) {
+void Relaunch(const std::string& freeplay_args, const std::string& challenge_spec,
+              const std::string& script = "") {
 #ifdef _WIN32
     SetEnv("SOTC_FREEPLAY", freeplay_args);
     SetEnv("SOTC_CHALLENGE", challenge_spec);
     SetEnv("SOTC_WAIT_PID", std::to_string(GetCurrentProcessId()));
     // Scripted test runs hand the next instance its own script.
     const char* next_script = std::getenv("SOTC_SCRIPT_NEXT");
-    SetEnv("SOTC_SCRIPT", next_script ? next_script : "");
+    SetEnv("SOTC_SCRIPT", next_script && *next_script ? next_script : script);
     SetEnv("SOTC_SCRIPT_NEXT", "");
     // Same program, same arguments, same folder; the environment carries the request.
     std::wstring command_line = GetCommandLineW();
@@ -158,6 +160,15 @@ void Relaunch(const std::string& freeplay_args, const std::string& challenge_spe
 }
 
 void StartBattle() {
+    if (versus) {
+        // Colossus vs colossus: Gaius's arena start, then the battle script built into the program
+        // (re/cvc_arena.sh PRODUCT=): Gaius is brought to Basaran's valley, they fight and the
+        // camera follows; Wander (unhurt) only watches.
+        Relaunch("+nointro +skipSplash=true +boss=2 +shadow_noDamage=true "
+                 "+shadow_disableCameraAutoCenter=true",
+                 "", "@res:cvc_gaius_vs_basaran.txt");
+        return;
+    }
     std::string args = fmt::format("+nointro +skipSplash=true +boss={}", colossus);
     if (difficulty == 2) {
         args += " +shadow_setHardMode=true";
@@ -434,7 +445,10 @@ void ApplyOptions() {
     }
     const char* freeplay = std::getenv("SOTC_FREEPLAY");
     const char* challenge_spec = std::getenv("SOTC_CHALLENGE");
-    Relaunch(freeplay ? freeplay : "", challenge_spec ? challenge_spec : "");
+    // A colossus-vs-colossus battle keeps its script (the only kind started with one).
+    const char* battle = std::getenv("SOTC_SCRIPT");
+    Relaunch(freeplay ? freeplay : "", challenge_spec ? challenge_spec : "",
+             battle && std::string_view{battle}.starts_with("@res:") ? battle : "");
 #else
     apply_error = "Only available on Windows";
 #endif
@@ -628,6 +642,23 @@ std::vector<Row> BuildRows() {
             Challenge::LimitIsEstimate(colossus + 1) ? " " + Lang::Tr("(approximate)") : "");
         const char* helper_note = "Not available in Time Attack";
         const auto step = [](int direction) { return direction == 0 ? 1 : direction; };
+        rows.push_back({"Colossus vs Colossus", OnOff(versus),
+                        "Watch Gaius and Basaran fight each other", true, true,
+                        [](int) { versus = !versus; }});
+        if (versus) {
+            rows.push_back({"Begin Battle", "", "The game restarts and loads the battle", true, false,
+                            [](int d) {
+                                if (d == 0) {
+                                    StartBattle();
+                                }
+                            }});
+            rows.push_back({"Back", "", "Return to the previous menu", true, false, [](int d) {
+                                if (d == 0) {
+                                    Leave();
+                                }
+                            }});
+            return rows;
+        }
         rows.push_back({"Colossus",
                         fmt::format("{}. {}", colossus + 1, Challenge::ColossusName(colossus + 1)),
                         "Choose the colossus to fight", true, true,

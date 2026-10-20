@@ -1502,6 +1502,7 @@ cmrc_add_resource_library(embedded-resources
         src/resources/shadps4.png
         src/resources/silver.png
         src/resources/trophy.wav
+        src/resources/cvc_gaius_vs_basaran.txt
         src/resources/amd_rcp_index_table.bin.zstd
         src/resources/amd_rsqrt_index_table.bin.zstd)
 target_link_libraries(shadps4 PRIVATE res::embedded)
