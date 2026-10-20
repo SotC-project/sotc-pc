@@ -783,12 +783,57 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // its position +0x1740. It is turned through the mouse-look input toward the
                     // fight's midpoint (mouse right lowers the yaw), so it moves as smoothly as
                     // when a player turns it.
+                    // With a fourth value 2 the camera is ours instead (re/cvc/camera_patch.py copies
+                    // the pose at cave 0x1593ee0 over the game's current one each frame): a
+                    // broadcast view slowly circling the fight's midpoint, far enough back and high
+                    // enough above it for both colossi, eased toward where it should be.
+                    if (steer == 2.0f) {
+                        static float pose[2][20];
+                        static int which = 0;
+                        static float cam[3]{}, look[3]{}, angle = 0.0f;
+                        static bool placed = false;
+                        const auto* pa = reinterpret_cast<const float*>(a + 0x130);
+                        const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                        const float mid[3]{(pa[0] + pb[0]) / 2, std::max(pa[1], pb[1]), (pa[2] + pb[2]) / 2};
+                        // High above the fight and close in, looking down on it: cliffs and rock
+                        // pillars around an arena stay below such a camera (one at their height
+                        // ends up inside or behind them).
+                        const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
+                        const float radius = std::max(dist, sep + 30.0f);
+                        if (!placed) {
+                            angle = std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f; // square to them
+                        }
+                        angle += 0.016f * 0.05f; // a slow circle, about 2 minutes a turn
+                        const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + height,
+                                                mid[2] + radius * std::sin(angle)};
+                        const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
+                        const float ease = placed ? 0.04f : 1.0f;
+                        for (int k = 0; k < 3; k++) {
+                            cam[k] += (want_cam[k] - cam[k]) * ease;
+                            look[k] += (want_look[k] - look[k]) * ease;
+                        }
+                        placed = true;
+                        float dir[3]{look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]};
+                        const float length = std::max(std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] +
+                                                                dir[2] * dir[2]), 0.001f);
+                        for (float& c : dir) {
+                            c /= length;
+                        }
+                        float* out = pose[which ^= 1];
+                        const float values[15]{cam[0], cam[1], cam[2], 1.0f, look[0], look[1], look[2], 1.0f,
+                                               dir[0], dir[1], dir[2], 0.0f, std::atan2(dir[0], dir[2]),
+                                               std::asin(dir[1]), length};
+                        std::memcpy(out, values, sizeof(values));
+                        // [16..19]: up, so the picture never rolls with the game's camera shake.
+                        out[16] = 0.0f, out[17] = 1.0f, out[18] = 0.0f, out[19] = 0.0f;
+                        *reinterpret_cast<float* volatile*>(image + 0x1593ee0) = out;
+                    }
                     {
                         const auto* pa = reinterpret_cast<const float*>(a + 0x130);
                         const auto* pb = reinterpret_cast<const float*>(b + 0x130);
                         const s32 slot = *reinterpret_cast<const volatile s32*>(image + 0x3259cf8);
                         const u64 camera = slot >= 0 && slot < 8 ? q(image + 0x3259d00 + slot * 8ull) : 0;
-                        if (camera && steer != 0.0f) {
+                        if (camera && steer == 1.0f) {
                             const auto* cp = reinterpret_cast<const volatile float*>(camera + 0x1740);
                             const float yaw = *reinterpret_cast<const volatile float*>(camera + 0x1770);
                             const float want = std::atan2((pa[0] + pb[0]) / 2 - cp[0],
@@ -862,6 +907,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              "variant {})", target[0], target[1], target[2], d, variant);
                 }
                 Input::test_mouse_delta[0] = 0.0f;
+                if (steer == 2.0f) {
+                    *reinterpret_cast<volatile u64*>(image + 0x1593ee0) = 0; // camera back to the game
+                }
             }).detach();
         } else if (action == "cvcbones") {
             // Test: the segments the contact test (re/cvc/contact_patch.py) tries against the
@@ -1017,13 +1065,41 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         ready[k] = Clock::now() + std::chrono::milliseconds(u64(cooldown));
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
-                        *health = std::max(0.0f, *health - (k == 0 ? dmg_a : dmg_b));
+                        const float damage = k == 0 ? dmg_a : dmg_b;
+                        *health = std::max(0.0f, *health - damage);
+                        // The blow's effect on the victim, for 300 ms: its weak points report damage
+                        // this frame (manager +0x100: 8-byte steps, +0x28 this frame, reset by the
+                        // manager each frame; the AI reacts through 0x6cd010), and it is shoved away
+                        // from the attacker, 9 units in all.
+                        std::thread([victim = objects[1 - k], manager = managers[1 - k], damage,
+                                     from = now[k][hit_bone]] {
+                            const auto* pv = reinterpret_cast<const volatile float*>(victim + 0x130);
+                            float push[3]{pv[0] - from[0], 0.0f, pv[2] - from[2]};
+                            const float length = std::max(std::hypot(push[0], push[2]), 0.001f);
+                            push[0] *= 0.6f / length, push[2] *= 0.6f / length;
+                            for (int step = 0; step < 300; step++) {
+                                const u64 points = *reinterpret_cast<const volatile u64*>(manager + 0x100);
+                                const s32 count = *reinterpret_cast<const volatile s32*>(manager + 0x68);
+                                for (s32 i = 0; points && i < std::min(count, 64); i++) {
+                                    *reinterpret_cast<volatile float*>(points + 0x28 + i * 8ull) = damage;
+                                }
+                                if (step % 20 == 0) {
+                                    MoveCharacter(victim, push);
+                                }
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            }
+                        }).detach();
                         (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
                         LOG_INFO(Core,
                                  "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart), health A {:.0f} B {:.0f}",
                                  k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
                                  *reinterpret_cast<const float*>(managers[0] + 0x50),
                                  *reinterpret_cast<const float*>(managers[1] + 0x50));
+                        if (*health <= 0.0f) {
+                            LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
+                            *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
+                            return;
+                        }
                     }
                 }
             }).detach();
@@ -1131,6 +1207,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             // ReadProcessMemory so pages without backing cannot fault.
             float v[4]{};
             sscanf(action.c_str() + 8, "%f/%f/%f/%f", &v[0], &v[1], &v[2], &v[3]);
+            if (action.starts_with("findvec=cam/")) {
+                // "findvec=cam/0.5": around the gameplay camera's current position (camera+0x1740).
+                const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+                const u64 image = module ? module->GetBaseAddress() : 0;
+                const s32 slot = image ? *reinterpret_cast<const s32*>(image + 0x3259cf8) : -1;
+                const u64 camera =
+                    slot >= 0 && slot < 8 ? *reinterpret_cast<const u64*>(image + 0x3259d00 + slot * 8ull) : 0;
+                if (camera) {
+                    std::memcpy(v, reinterpret_cast<const float*>(camera + 0x1740), 12);
+                }
+                v[3] = std::stof(action.substr(12));
+                LOG_INFO(Core, "findvec: camera at {} {} {}", v[0], v[1], v[2]);
+            }
             std::vector<std::pair<VAddr, u64>> areas;
             Core::Memory::Instance()->ForEachReadable(
                 [&](VAddr base, u64 size) { areas.emplace_back(base, size); });
