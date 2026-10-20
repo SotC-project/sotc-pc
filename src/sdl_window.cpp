@@ -139,6 +139,16 @@ static void AttachVirtualPad() {
     }
 }
 
+/// Test aid: Wander's object (first of list world+0x228), for a colossus left without an opponent:
+/// its one-entry target list must never hold 0 (lock-first-node's callers use the object, 0x578889).
+static u64 PlayerObject(u64 image) {
+    const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+    const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
+    const s32 handle = world ? *reinterpret_cast<const volatile s32*>(world + 0x228) : 0;
+    const u64 node = handle ? (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff) : 0;
+    return node ? q(node) : 0;
+}
+
 /// Test aid: moves a game character (an object of type 9) by a world-space delta. Besides the
 /// world position copies, the character keeps its transform three times (object+0x1e0, the
 /// movement code's copies at +0x13f8 and +0x14b8) and rebuilds world from them each frame
@@ -631,7 +641,32 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
                 return node;
             };
-            const u64 na = world ? node_of(la, ia) : 0, nb = world ? node_of(lb, ib) : 0;
+            // A usable colossus: a live character (type 9, not being torn down) with an AI
+            // workspace (0x746d50). After a boss jump the list briefly holds stand-ins that are not.
+            const auto usable = [&](u64 node) {
+                const u64 object = node ? *reinterpret_cast<const u64*>(node) : 0;
+                if (!object || *reinterpret_cast<const u8*>(object + 0xc) != 9 ||
+                    *reinterpret_cast<const u64*>(object + 0x1690) == 0) {
+                    return false;
+                }
+                const u32 flags = *reinterpret_cast<const u32*>(object + 0xc);
+                return !((flags & 0x10000) && *reinterpret_cast<const u64*>(object) == 0);
+            };
+            u64 na = world ? node_of(la, ia) : 0, nb = world ? node_of(lb, ib) : 0;
+            if (na && !usable(na)) {
+                na = 0;
+            }
+            if (nb && !usable(nb)) {
+                // The first other usable entry of B's list instead.
+                nb = 0;
+                for (u64 node = node_of(lb, 0); node; node = *reinterpret_cast<const u64*>(node + 0x20)) {
+                    if (node != na && usable(node) &&
+                        *reinterpret_cast<const u64*>(node) != (na ? *reinterpret_cast<const u64*>(na) : 0)) {
+                        nb = node;
+                        break;
+                    }
+                }
+            }
             if (!na || !nb) {
                 // Not both loaded yet: keep any earlier setup, so the action can be repeated.
                 LOG_INFO(Core, "cvctarget: not ready (A node {:#x}, B node {:#x})", na, nb);
@@ -754,6 +789,76 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 }
                 LOG_INFO(Core, "awaitmoved: gave up (object {:#x})", first_object);
             }).detach();
+        } else if (action.starts_with("cvckeep=")) {
+            // Test: "cvckeep=400" keeps colossi A and B (cave 0x1593b08/10) pointing at live
+            // characters of list world+0x238 for 400 s: a boss's object can be replaced by another
+            // one (or freed) while the fight runs. When A or B is no longer a usable entry of the
+            // list, the other usable entry takes its place, in its slot and in the one-entry
+            // target list of the other colossus (0x1593f40 holds A, 0x1593f00 holds B), unless the
+            // fight is over (winner byte 0x1593efb).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            const float seconds = std::stof(action.substr(8));
+            std::thread([image, seconds] {
+                const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+                const auto usable = [&](u64 object) {
+                    if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9 ||
+                        q(object + 0x1690) == 0) {
+                        return false;
+                    }
+                    const u32 flags = *reinterpret_cast<const volatile u32*>(object + 0xc);
+                    return !((flags & 0x10000) && q(object) == 0);
+                };
+                const auto end = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(u64(seconds * 1000));
+                bool waiting[2]{}; // A / B gone with no replacement yet
+                while (image && std::chrono::steady_clock::now() < end) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
+                    if (!world) {
+                        continue;
+                    }
+                    std::vector<u64> live;
+                    const s32 handle = *reinterpret_cast<const volatile s32*>(world + 0x238);
+                    for (u64 node = handle ? (handle < 0 ? base : 0) + (u32(handle) & 0x7fffffff) : 0;
+                         node && live.size() < 16; node = q(node + 0x20)) {
+                        if (usable(q(node))) {
+                            live.push_back(q(node));
+                        }
+                    }
+                    const auto listed = [&](u64 o) {
+                        return std::find(live.begin(), live.end(), o) != live.end();
+                    };
+                    for (const u64 slot : {0x1593b08ull, 0x1593b10ull}) {
+                        const u64 current = q(image + slot);
+                        bool& empty = waiting[slot == 0x1593b10];
+                        if (current ? listed(current) : !empty) {
+                            continue; // fine, or cleared on purpose (defeat)
+                        }
+                        const u64 other = q(image + (slot == 0x1593b08 ? 0x1593b10 : 0x1593b08));
+                        u64 replacement = 0;
+                        for (const u64 o : live) {
+                            if (o != other) {
+                                replacement = o;
+                                break;
+                            }
+                        }
+                        if (!current && !replacement) {
+                            continue; // still nobody to take the place
+                        }
+                        empty = !replacement;
+                        *reinterpret_cast<volatile u64*>(image + slot) = replacement;
+                        if (!*reinterpret_cast<const volatile u8*>(image + 0x1593efb)) {
+                            // A's target list holds B and the other way round; meanwhile Wander.
+                            *reinterpret_cast<volatile u64*>(
+                                image + (slot == 0x1593b08 ? 0x1593f40 : 0x1593f00)) =
+                                replacement ? replacement : PlayerObject(image);
+                        }
+                        LOG_INFO(Core, "cvckeep: {} {:#x} gone, now {:#x}", slot == 0x1593b08 ? "A" : "B",
+                                 current, replacement);
+                    }
+                }
+            }).detach();
         } else if (action.starts_with("cvccam=")) {
             // Test: spectator vantage. "cvccam=300:180:40": for 300 s keep Wander (list world+0x228)
             // beside the colossi A/B (cave 0x1593b08/10): when he is not between 0.6 and 1.6 times
@@ -775,9 +880,27 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     std::this_thread::sleep_for(std::chrono::milliseconds(16));
                     const u64 a = q(image + 0x1593b08), b = q(image + 0x1593b10);
                     const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
-                    if (!a || !b || !world) {
+                    if ((!a && !b) || !world) {
                         continue;
                     }
+                    // Where A and B are, or were last: after a knockout the loser's slot is cleared
+                    // and the camera keeps both the winner and where the loser fell in view. A
+                    // position far out is an object freed under us (cvckeep replaces it).
+                    static float last[2][3];
+                    static bool seen[2];
+                    for (int k = 0; k < 2; k++) {
+                        const u64 object = k ? b : a;
+                        const auto* p = object ? reinterpret_cast<const float*>(object + 0x130) : nullptr;
+                        if (p && std::abs(p[0]) < 1e5f && std::abs(p[1]) < 1e5f && std::abs(p[2]) < 1e5f) {
+                            std::memcpy(last[k], p, sizeof(last[k]));
+                            seen[k] = true;
+                        }
+                    }
+                    if (!seen[0] || !seen[1]) {
+                        continue;
+                    }
+                    const float* pa = last[0];
+                    const float* pb = last[1];
                     // Camera: the game's camera (0x79efb0: slot [0x3259cf8] of the table after it)
                     // orbits Wander; its yaw (+0x1770, radians) is atan2(dx, dz) of where it looks,
                     // its position +0x1740. It is turned through the mouse-look input toward the
@@ -792,19 +915,36 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         static int which = 0;
                         static float cam[3]{}, look[3]{}, angle = 0.0f;
                         static bool placed = false;
-                        const auto* pa = reinterpret_cast<const float*>(a + 0x130);
-                        const auto* pb = reinterpret_cast<const float*>(b + 0x130);
                         const float mid[3]{(pa[0] + pb[0]) / 2, std::max(pa[1], pb[1]), (pa[2] + pb[2]) / 2};
                         // High above the fight and close in, looking down on it: cliffs and rock
                         // pillars around an arena stay below such a camera (one at their height
                         // ends up inside or behind them).
                         const float sep = std::hypot(pa[0] - pb[0], pa[2] - pb[2]);
-                        const float radius = std::max(dist, 1.2f * sep + 30.0f);
-                        if (!placed) {
-                            angle = std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f; // square to them
+                        // Steeper the further apart they are: back by half their distance, up by
+                        // most of it (a canyon's walls stay beside and below such a camera).
+                        const float radius = std::max(dist, 0.5f * sep + 20.0f);
+                        const float rise = std::max(height, 0.8f * sep + 40.0f);
+                        // On the arena's open side: from the fight toward where the colossi have
+                        // been on average (the middle of the ground they use), swinging slowly
+                        // around that direction rather than circling into the walls at the edge.
+                        static double sum[2]{}, samples = 0;
+                        sum[0] += mid[0], sum[1] += mid[2], samples += 1;
+                        const float centre[2]{float(sum[0] / samples), float(sum[1] / samples)};
+                        static float sway = 0.0f;
+                        sway += 0.016f * 0.15f;
+                        const float to_centre = std::hypot(centre[0] - mid[0], centre[1] - mid[2]) > 20.0f
+                                                    ? std::atan2(centre[1] - mid[2], centre[0] - mid[0])
+                                                    : std::atan2(pb[2] - pa[2], pb[0] - pa[0]) + 1.5707963f;
+                        const float target_angle = to_centre + 0.6f * std::sin(sway);
+                        float turn = target_angle - angle;
+                        while (turn > 3.14159265f) {
+                            turn -= 6.2831853f;
                         }
-                        angle += 0.016f * 0.05f; // a slow circle, about 2 minutes a turn
-                        const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + height,
+                        while (turn < -3.14159265f) {
+                            turn += 6.2831853f;
+                        }
+                        angle = placed ? angle + turn * 0.01f : target_angle;
+                        const float want_cam[3]{mid[0] + radius * std::cos(angle), mid[1] + rise,
                                                 mid[2] + radius * std::sin(angle)};
                         const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
                         const float ease = placed ? 0.04f : 1.0f;
@@ -829,8 +969,6 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         *reinterpret_cast<float* volatile*>(image + 0x1593ee0) = out;
                     }
                     {
-                        const auto* pa = reinterpret_cast<const float*>(a + 0x130);
-                        const auto* pb = reinterpret_cast<const float*>(b + 0x130);
                         const s32 slot = *reinterpret_cast<const volatile s32*>(image + 0x3259cf8);
                         const u64 camera = slot >= 0 && slot < 8 ? q(image + 0x3259d00 + slot * 8ull) : 0;
                         if (camera && steer == 1.0f) {
@@ -868,8 +1006,6 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     if (!player) {
                         continue;
                     }
-                    const auto* pa = reinterpret_cast<const float*>(a + 0x130);
-                    const auto* pb = reinterpret_cast<const float*>(b + 0x130);
                     auto* pp = reinterpret_cast<float*>(player + 0x130);
                     const float mx = (pa[0] + pb[0]) / 2, my = std::max(pa[1], pb[1]),
                                 mz = (pa[2] + pb[2]) / 2;
@@ -1089,14 +1225,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (*health <= 0.0f) {
                             LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
                             *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
-                            // Knockout: nobody targets anybody any more (the one-entry target
-                            // lists emptied; the AI copes with no target), the loser's weak points
+                            // Knockout: the colossi stop targeting each other (the one-entry target
+                            // lists hold Wander, who takes no damage), the loser's weak points
                             // all report damage, which makes its own script play its death, and
                             // once that has begun its slot is cleared so nothing calls into it while
                             // the game tears it down (the AI trampoline skips a cleared slot, the
                             // redirects ignore it, the contact test stops).
-                            *reinterpret_cast<volatile u64*>(image + 0x1593f00) = 0;
-                            *reinterpret_cast<volatile u64*>(image + 0x1593f40) = 0;
+                            *reinterpret_cast<volatile u64*>(image + 0x1593f00) = PlayerObject(image);
+                            *reinterpret_cast<volatile u64*>(image + 0x1593f40) = PlayerObject(image);
                             *reinterpret_cast<volatile u64*>(image + 0x1593dc0) = 0;
                             const u64 loser_manager = managers[1 - k];
                             for (int step = 0; step < 600; step++) {
