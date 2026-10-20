@@ -3,6 +3,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <imgui.h>
 #include "common/types.h"
 
@@ -47,6 +48,11 @@ void TextCentered(ImDrawList* draw, float size, float center_x, float y, ImU32 c
                   const std::string& text);
 void TextRight(ImDrawList* draw, float size, float right_x, float y, ImU32 color,
                const std::string& text);
+/// A small spaced-out caption, as the game sets its labels: the text in the game's language,
+/// in capitals with a space between the letters. `anchor` is 0 for left, 0.5 for centred, 1 for
+/// right aligned at `x`.
+void Caption(ImDrawList* draw, float size, float x, float y, float anchor, ImU32 color,
+             std::string_view text);
 /// The selection marker (pointing right) or a value arrow (either way).
 void Triangle(ImDrawList* draw, ImVec2 center, float size, bool point_right, ImU32 color);
 /// One "LABEL [icon]" prompt, right aligned at `right_x`, for the device in use. Returns the

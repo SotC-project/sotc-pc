@@ -306,6 +306,24 @@ static u32 MoveCharacter(u64 object, const float delta[3]) {
     return *reinterpret_cast<const u32*>(object + 0x1e0 + 0x30);
 }
 
+/// Turns a character about the vertical by `yaw` radians (positive: counter-clockwise seen from
+/// above). Its heading is a quaternion (x, y, z, w) at object+0x170, kept again at the other
+/// offsets below (found by scanning colossi while they turned); each is turned by the same amount.
+static void RotateCharacter(u64 object, float yaw) {
+    const float s = std::sin(yaw * 0.5f), c = std::cos(yaw * 0.5f);
+    for (const u64 at : {0x170, 0x180, 0x1a0, 0x760, 0x770, 0x8b8, 0xa90, 0x1b10, 0x1b70}) {
+        auto* q = reinterpret_cast<float*>(object + at);
+        const float len = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        if (std::abs(len - 1.0f) > 0.01f) {
+            continue; // not a heading in this character
+        }
+        // (0, s, 0, c) * q
+        const float x = c * q[0] + s * q[2], y = c * q[1] + s * q[3], z = c * q[2] - s * q[0],
+                    w = c * q[3] - s * q[1];
+        q[0] = x, q[1] = y, q[2] = z, q[3] = w;
+    }
+}
+
 static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 interval) {
     using Libraries::Pad::OrbisPadButtonDataOffset;
     struct Step {
@@ -475,17 +493,32 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
-        } else if (action.starts_with("watchdestroy=")) {
-            // Test: "watchdestroy=1593b10": once, who tears down the object in that cave slot.
+        } else if (action == "cvcrot") {
+            // Test: yaw-only unit quaternions inside colossi A and B next to their root bone's
+            // heading, to find where a character's heading is kept (RotateCharacter).
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
             const u64 image = module ? module->GetBaseAddress() : 0;
-            static bool armed = false;
-            const u64 object = image ? *reinterpret_cast<const u64*>(image + std::stoull(action.substr(13), nullptr, 16)) : 0;
-            if (object && !armed) {
-                armed = true;
-                // Its first 8 bytes (the vtable) are cleared when it is torn down.
-                Sotc::Watch::Arm(object, 8, image, 0x1600000, 4);
-                LOG_INFO(Core, "watchdestroy: {:#x}", object);
+            for (const u64 slot : {0x1593b08ull, 0x1593b10ull}) {
+                const u64 object = image ? *reinterpret_cast<const u64*>(image + slot) : 0;
+                if (!object) {
+                    continue;
+                }
+                const auto* bones = reinterpret_cast<const float*>(*reinterpret_cast<const u64*>(object + 0x120 + 0x198));
+                LOG_INFO(Core, "cvcrot: {} root x({:.2f} {:.2f} {:.2f}) y({:.2f} {:.2f} {:.2f}) z({:.2f} {:.2f} {:.2f})",
+                         slot == 0x1593b08 ? "A" : "B", bones[0], bones[1], bones[2], bones[4], bones[5], bones[6],
+                         bones[8], bones[9], bones[10]);
+                const float root_yaw = std::atan2(bones[0], bones[2]); // heading of the root's x axis
+                std::string quats;
+                for (u64 at = 0; at + 16 <= 0x2000; at += 4) {
+                    const auto* f = reinterpret_cast<const float*>(object + at);
+                    const float len = f[0] * f[0] + f[1] * f[1] + f[2] * f[2] + f[3] * f[3];
+                    if (std::abs(len - 1.0f) < 0.005f && std::abs(f[0]) < 0.2f && std::abs(f[2]) < 0.2f &&
+                        std::abs(f[1]) > 0.05f && std::abs(f[3]) > 0.0001f) {
+                        quats += fmt::format(" +{:x}:{:.2f}", at, 2.0f * std::atan2(f[1], f[3]));
+                    }
+                }
+                LOG_INFO(Core, "cvcrot: {} root x yaw {:.2f}; yaw quaternions{}", slot == 0x1593b08 ? "A" : "B",
+                         root_yaw, quats);
             }
         } else if (action.starts_with("objlist=")) {
             // Test: walks a game object list the way the game's GetFirstObj (eboot 0x7c9820) does
@@ -1770,14 +1803,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         u64 walk = 0; // to close in first (its AI stops short of the other's body)
                         float strike = 28.0f; // nearest bones of the two at most this far to strike
                         int forward = 1;      // root bone axis it faces along (0 x, 1 y, 2 z), negative: -axis
-                        u64 turn_right = 0, turn_left = 0; // turning on the spot to face the other
+                        u64 turn_left = 0, turn_right = 0; // its turns on the spot
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},          // Knight_attack_1 (slam), _2
                              {{0x1d3cd40, 1500}, {0x1d3cf90, 1500}}, 250.0f,  // chest / back damage; closes in from anywhere
-                             0x1d38340, 14.0f, 1, 0x1d37a00, 0x1d37c50}},     // Knight_walk; close; +y; Knight_Standing_*_rotation
+                             0x1d38340, 10.0f, 1, 0x1d37c50, 0x1d37a00}},     // Knight_walk; close; +y; Knight_Standing_*_rotation
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}, {0x1d59920, 3000}, {0x1d59dc0, 3000}},
-                             {{0x1d5a4b0, 2500}}, 250.0f, 0x1d553c0, 8.0f, -2, 0x1d54a80, 0x1d54f20}}, // hand attacks; shudder; Turtle_walking_1; -z
+                             {{0x1d5a4b0, 2500}}, 250.0f, 0x1d553c0, 8.0f, -2, 0x1d54f20, 0x1d54a80}}, // hand attacks; shudder; Turtle_walking_1; -z
                     };
                     const u64 table = q(image + 0x16d21f8 + 0x20);
                     const auto kind_of = [&](int k) -> const Moves* {
@@ -1800,51 +1833,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             *held = 0;
                         }
                         attacking = -1;
-                        next_attack = Clock::now() + std::chrono::milliseconds(800 + rng() % 1700);
+                        next_attack = Clock::now() + std::chrono::milliseconds(300 + rng() % 600);
                     }
                     // Bodies apart: the nearest two bones (computed below for the contact check).
                     float closest = 1e9f;
                     for (const auto& p : now[0]) {
                         for (const auto& t : now[1]) {
                             closest = std::min(closest, distance(p, t));
-                        }
-                    }
-                    // Closing in: the attacker walks on (its own walk) until near enough to strike.
-                    static float approach_start[2];
-                    if (approaching >= 0 && (closest < (kind_of(approaching) ? kind_of(approaching)->strike : 28.0f) ||
-                                             Clock::now() > approach_until || over)) {
-                        const int k = approaching;
-                        {
-                            // Facing (test): how the root moved during the walk against the root bone's axes.
-                            const auto* r = reinterpret_cast<const volatile float*>(objects[k] + 0x130);
-                            const u64 mats = q(objects[k] + 0x120 + 0x198);
-                            float m[12]{};
-                            SIZE_T got = 0;
-                            if (mats) {
-                                ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(mats), m, sizeof(m), &got);
-                            }
-                            LOG_INFO(Core, "cvcbrawl: {} walked {:.1f} {:.1f}; root axes x({:.2f} {:.2f} {:.2f}) "
-                                     "y({:.2f} {:.2f} {:.2f}) z({:.2f} {:.2f} {:.2f})", k ? "B" : "A",
-                                     r[0] - approach_start[0], r[2] - approach_start[1], m[0], m[1], m[2], m[4], m[5],
-                                     m[6], m[8], m[9], m[10]);
-                        }
-                        approaching = -1;
-                        const Moves* moves = kind_of(k);
-                        if (!over && moves && closest > moves->strike + 12.0f) {
-                            // Still out of reach: no swing at the air; its AI carries on, try again soon.
-                            if (*held == objects[k]) {
-                                *held = 0;
-                            }
-                            next_attack = Clock::now() + std::chrono::milliseconds(500);
-                        } else if (!over && moves) {
-                            const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
-                            CvcPlayMotion(image, objects[k], motion);
-                            attacking = k, landed = false;
-                            attack_from = Clock::now(), attack_until = attack_from + std::chrono::milliseconds(ms);
-                            LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
-                                     closest);
-                        } else if (*held == objects[k]) {
-                            *held = 0;
                         }
                     }
                     // How squarely k faces the other (cosine) and to which side the other is (cross
@@ -1868,6 +1863,63 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         side = fx * tz - fz * tx;
                         return true;
                     };
+                    // Closing in: the attacker walks on (its own walk) until near enough to strike.
+                    static float approach_start[2];
+                    // Steering: while it walks, turns on the spot or winds up an attack of ours, it is
+                    // turned toward the other a little each tick (its heading, in step with the motion
+                    // it plays), up to `rate` radians a second.
+                    const auto steer = [&](int k, float rate) {
+                        float cosine = 0.0f, side = 0.0f;
+                        if (!face(k, cosine, side) || cosine > 0.995f) {
+                            return;
+                        }
+                        const float step = std::min(rate * dt, std::acos(std::clamp(cosine, -1.0f, 1.0f)));
+                        RotateCharacter(objects[k], side > 0.0f ? step : -step); // side > 0: the other is to its left
+                    };
+                    static int turning = -1;
+                    static Clock::time_point turn_until;
+                    if (approaching >= 0 && !over) {
+                        steer(approaching, 0.7f);
+                    }
+                    if (attacking >= 0 && !over && Clock::now() < attack_from + std::chrono::milliseconds(500)) {
+                        steer(attacking, 0.7f);
+                    }
+                    if (approaching >= 0 && (closest < (kind_of(approaching) ? kind_of(approaching)->strike : 28.0f) ||
+                                             Clock::now() > approach_until || over)) {
+                        const int k = approaching;
+                        {
+                            // Facing (test): how the root moved during the walk against the root bone's axes.
+                            const auto* r = reinterpret_cast<const volatile float*>(objects[k] + 0x130);
+                            const u64 mats = q(objects[k] + 0x120 + 0x198);
+                            float m[12]{};
+                            SIZE_T got = 0;
+                            if (mats) {
+                                ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(mats), m, sizeof(m), &got);
+                            }
+                            LOG_INFO(Core, "cvcbrawl: {} walked {:.1f} {:.1f}; root axes x({:.2f} {:.2f} {:.2f}) "
+                                     "y({:.2f} {:.2f} {:.2f}) z({:.2f} {:.2f} {:.2f})", k ? "B" : "A",
+                                     r[0] - approach_start[0], r[2] - approach_start[1], m[0], m[1], m[2], m[4], m[5],
+                                     m[6], m[8], m[9], m[10]);
+                        }
+                        approaching = -1;
+                        const Moves* moves = kind_of(k);
+                        if (!over && moves && closest > moves->strike + 4.0f) {
+                            // Still out of reach: no swing at the air; its AI carries on, try again soon.
+                            if (*held == objects[k]) {
+                                *held = 0;
+                            }
+                            next_attack = Clock::now() + std::chrono::milliseconds(500);
+                        } else if (!over && moves) {
+                            const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
+                            CvcPlayMotion(image, objects[k], motion);
+                            attacking = k, landed = false;
+                            attack_from = Clock::now(), attack_until = attack_from + std::chrono::milliseconds(ms);
+                            LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
+                                     closest);
+                        } else if (*held == objects[k]) {
+                            *held = 0;
+                        }
+                    }
                     // Facing the other: close in with its own walk, or strike when near enough.
                     const auto engage = [&](int k) {
                         const Moves* moves = kind_of(k);
@@ -1887,33 +1939,26 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                      closest);
                         }
                     };
-                    // Turning to face the other: its own turn on the spot, the other way round if the
-                    // first guess makes it worse.
-                    static int turning = -1;
-                    static bool turned_back = false;
-                    static float turn_from = 0.0f;
-                    static Clock::time_point turn_since;
+                    // Nothing of ours before the fight is placed (cvcplace: behind the loading screen,
+                    // through the host's first-sight cutscene).
                     if (turning >= 0) {
-                        const int k = turning;
                         float cosine = 0.0f, side = 0.0f;
-                        const bool known = face(k, cosine, side);
-                        const Moves* moves = kind_of(k);
-                        if (!known || over || cosine > 0.9f || Clock::now() > turn_since + std::chrono::seconds(8)) {
+                        const int k = turning;
+                        steer(k, 1.2f);
+                        if (over || !face(k, cosine, side) || cosine > 0.9f || Clock::now() > turn_until) {
                             turning = -1;
-                            if (known && !over && cosine > 0.64f) {
-                                engage(k);
+                            LOG_INFO(Core, "cvcbrawl: {} turned to {:.2f}", k ? "B" : "A", cosine);
+                            if (!over && cosine > 0.8f) {
+                                engage(k); // facing it now: straight at it
                             } else if (*held == objects[k]) {
                                 *held = 0;
-                                next_attack = Clock::now() + std::chrono::milliseconds(500);
                             }
-                        } else if (!turned_back && Clock::now() > turn_since + std::chrono::milliseconds(1500) &&
-                                   cosine < turn_from - 0.05f) {
-                            turned_back = true;
-                            CvcPlayMotion(image, objects[k], side > 0.0f ? moves->turn_right : moves->turn_left);
-                            LOG_INFO(Core, "cvcbrawl: {} turns the other way", k ? "B" : "A");
                         }
                     }
-                    if (attacking < 0 && approaching < 0 && turning < 0 && !over && Clock::now() > next_attack) {
+                    // Far off: it walks to the other, steered as it goes. Near but not facing it: its
+                    // own turn on the spot, steered, then the attack.
+                    if (attacking < 0 && approaching < 0 && turning < 0 && !over && cvc_placed &&
+                        Clock::now() > next_attack) {
                         for (int turn = 0; turn < 2 && attacking < 0 && approaching < 0 && turning < 0; turn++) {
                             const int k = (last_attacker + 1 + turn) % 2; // take turns when both can
                             const Moves* moves = kind_of(k);
@@ -1925,22 +1970,23 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             if (!face(k, cosine, side)) {
                                 continue;
                             }
-                            if (cosine > 0.64f) { // within 50 degrees: straight at it
+                            if (cosine > 0.8f || (closest >= moves->strike && moves->walk)) {
                                 engage(k);
-                            } else if (moves->turn_right && moves->turn_left) {
+                            } else if (moves->turn_left && moves->turn_right) {
                                 *held = objects[k];
                                 last_attacker = k;
-                                turning = k, turned_back = false, turn_from = cosine, turn_since = Clock::now();
+                                turning = k, turn_until = Clock::now() + std::chrono::seconds(4);
+                                // The other to its left (side > 0): steering turns it counter-clockwise.
                                 CvcPlayMotion(image, objects[k], side > 0.0f ? moves->turn_left : moves->turn_right);
                                 LOG_INFO(Core, "cvcbrawl: {} turns to face the other ({:.2f})", k ? "B" : "A", cosine);
                             }
                         }
                     }
                     // Bodies do not pass through each other: where bones of the two overlap
-                    // (closer than 8 units), both are moved apart by part of the overlap.
+                    // (closer than 5 units), both are moved apart by part of the overlap.
                     if (!now[0].empty() && !now[1].empty()) {
-                        if (closest < 8.0f && apart > 0.001f) {
-                            const float step = std::min((8.0f - closest) * 0.25f, 0.4f) / apart;
+                        if (closest < 5.0f && apart > 0.001f) {
+                            const float step = std::min((5.0f - closest) * 0.25f, 0.4f) / apart;
                             const float to_a[3]{(ra[0] - rb[0]) * step, 0.0f, (ra[2] - rb[2]) * step};
                             const float to_b[3]{-to_a[0], 0.0f, -to_a[2]};
                             MoveCharacter(objects[0], to_a);
@@ -1997,14 +2043,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // The one hit reels: one of its own hit reactions, its AI held meanwhile.
                             // (Reporting weak-point damage here too made Basaran's script run its death
                             // early; that is kept for the knockout below.)
-                            // Whatever it was doing of ours (turning, closing in) gives way to it.
+                            // Whatever it was doing of ours (closing in, turning) gives way to it.
                             const Moves* victim_moves = kind_of(1 - k);
                             auto* reeling = reinterpret_cast<volatile u64*>(image + 0x1593b48);
-                            if (turning == 1 - k) {
-                                turning = -1;
-                            }
                             if (approaching == 1 - k) {
                                 approaching = -1;
+                            }
+                            if (turning == 1 - k) {
+                                turning = -1;
                             }
                             if (*held == objects[1 - k]) {
                                 *held = 0;

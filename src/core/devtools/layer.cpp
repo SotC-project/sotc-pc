@@ -4,6 +4,7 @@
 #include <atomic>
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/cvc_hud.h"
 #include "core/sotc/first_run.h"
 #include "core/sotc/loading.h"
 #include "core/sotc/perf_hud.h"
@@ -522,6 +523,7 @@ void L::Draw() {
     Sotc::Menu::Draw();
     Sotc::Achievements::Draw();
     Sotc::Challenge::Draw();
+    Sotc::CvcHud::Draw();
     UpdateMenuCursor();
 
     // Free play, the achievements and the PC settings are lines of the game's own menus.

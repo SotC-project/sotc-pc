@@ -359,53 +359,6 @@ void Figures(ImDrawList* draw, float size, float x, float y, float anchor, ImU32
     }
 }
 
-/// A small spaced-out caption, as the game sets its labels.
-void Caption(ImDrawList* draw, float size, float x, float y, float anchor, ImU32 color,
-             std::string_view text) {
-    // In the game's language first; then capitals, a space between the letters. The text is
-    // UTF-8: a letter may be several bytes, which stay together, and the capitals of the
-    // accented Latin, Cyrillic and Greek letters are found by their places in the code charts.
-    const std::string& shown = Lang::Tr(text);
-    if (Lang::RightToLeft()) {
-        // Joined letters cannot be set apart, and these scripts have no capitals.
-        Ui::Text(draw, size, {x - Ui::TextSize(size, shown).x * anchor, y}, color, shown);
-        return;
-    }
-    std::string spaced;
-    for (size_t i = 0; i < shown.size();) {
-        const unsigned char lead = static_cast<unsigned char>(shown[i]);
-        const size_t length = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
-        if (length == 1) {
-            spaced += static_cast<char>(std::toupper(lead));
-        } else if (length == 2 && i + 1 < shown.size()) {
-            u32 cp = ((lead & 0x1f) << 6) | (static_cast<unsigned char>(shown[i + 1]) & 0x3f);
-            if ((cp >= 0xe0 && cp <= 0xfe && cp != 0xf7) || (cp >= 0x430 && cp <= 0x44f) ||
-                (cp >= 0x3b1 && cp <= 0x3c9 && cp != 0x3c2)) {
-                cp -= 0x20;
-            } else if (cp == 0x3c2) {
-                cp = 0x3a3;
-            } else if (cp >= 0x450 && cp <= 0x45f) {
-                cp -= 0x50;
-            } else if ((cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17e)) {
-                cp -= (cp & 1) ? 0 : 1;
-            } else if (cp >= 0x100 && cp <= 0x177 && cp != 0x131 && cp != 0x138) {
-                cp -= cp & 1;
-            }
-            spaced += static_cast<char>(0xc0 | (cp >> 6));
-            spaced += static_cast<char>(0x80 | (cp & 0x3f));
-        } else {
-            spaced.append(shown, i, length);
-        }
-        spaced += ' ';
-        i += length;
-    }
-    if (!spaced.empty()) {
-        spaced.pop_back();
-    }
-    const float width = Ui::TextSize(size, spaced).x;
-    Ui::Text(draw, size, {x - width * anchor, y}, color, spaced);
-}
-
 constexpr ImU32 Warm = IM_COL32(232, 132, 104, 255);
 constexpr ImU32 Gold = IM_COL32(232, 204, 124, 255);
 
@@ -484,16 +437,16 @@ void Draw() {
         }
         panel(104.0f * scale);
         float y = top + 10.0f * scale;
-        Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, "Time Attack");
+        Ui::Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, "Time Attack");
         y += 20.0f * scale;
-        Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextBright, heading);
+        Ui::Caption(draw, 13.0f * scale, inner_left, y, 0.0f, Ui::TextBright, heading);
         y += 22.0f * scale;
         draw->AddLine({inner_left, y}, {inner_right, y}, RuleColor, 1.0f * scale);
         y += 8.0f * scale;
-        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
+        Ui::Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
                 fmt::format("{} {}", Lang::Tr("Target"), FormatMark(state.limit)));
         y += 18.0f * scale;
-        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
+        Ui::Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal,
                 "Starts when you move");
         return;
     }
@@ -504,21 +457,21 @@ void Draw() {
         const bool over = elapsed > state.limit;
         panel(104.0f * scale);
         float y = top + 10.0f * scale;
-        Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, heading);
+        Ui::Caption(draw, 12.0f * scale, inner_left, y, 0.0f, Ui::TextNormal, heading);
         y += 16.0f * scale;
         Figures(draw, 34.0f * scale, inner_left, y, 0.0f, over ? Warm : Ui::TextBright,
                 FormatTime(elapsed));
         y += 42.0f * scale;
         draw->AddLine({inner_left, y}, {inner_right, y}, RuleColor, 1.0f * scale);
         y += 8.0f * scale;
-        Caption(draw, 12.0f * scale, inner_left, y + 3.0f * scale, 0.0f, Ui::TextNormal, "Target");
+        Ui::Caption(draw, 12.0f * scale, inner_left, y + 3.0f * scale, 0.0f, Ui::TextNormal, "Target");
         Figures(draw, 17.0f * scale, inner_left + 62.0f * scale, y, 0.0f, Ui::TextBright,
                 FormatMark(state.limit));
         const int damage = static_cast<int>(state.damage * 100.0f + 0.5f);
         const std::string lost = fmt::format("{}%", damage);
         Figures(draw, 17.0f * scale, inner_right, y, 1.0f,
                 damage == 0 ? Ui::TextNormal : damage > 50 ? Warm : Ui::TextBright, lost);
-        Caption(draw, 12.0f * scale, inner_right - 44.0f * scale, y + 3.0f * scale, 1.0f,
+        Ui::Caption(draw, 12.0f * scale, inner_right - 44.0f * scale, y + 3.0f * scale, 1.0f,
                 Ui::TextNormal, "Lost");
         return;
     }
@@ -544,17 +497,17 @@ void Draw() {
         Ui::Veil(died ? 1.0f : 0.80f);
     }
     float y = display.y * 0.13f;
-    Caption(draw, 26.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
+    Ui::Caption(draw, 26.0f * scale, center, y, 0.5f, Ui::TextNormal, "Time Attack");
     y += 50.0f * scale;
     Ui::TextCentered(draw, 66.0f * scale, center, y, Ui::TextBright, name);
     y += 92.0f * scale;
-    Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal,
+    Ui::Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal,
             fmt::format("{}  -  {}", Lang::Tr(difficulty),
                         Lang::Tr(died ? "Wander has fallen" : "the colossus has fallen")));
     y += 54.0f * scale;
     rule(y, 300.0f * scale, RuleColor);
     y += 34.0f * scale;
-    Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal, "Rank");
+    Ui::Caption(draw, 22.0f * scale, center, y, 0.5f, Ui::TextNormal, "Rank");
     y += 22.0f * scale;
     const char* grade = Grade();
     const ImU32 grade_color = died ? IM_COL32(196, 76, 64, 255)
@@ -570,7 +523,7 @@ void Draw() {
     const float line = 52.0f * scale;
     const float size = 34.0f * scale;
     const auto row = [&](const char* label, const std::string& value, ImU32 color) {
-        Caption(draw, 20.0f * scale, column_left, y + 9.0f * scale, 0.0f, Ui::TextNormal, label);
+        Ui::Caption(draw, 20.0f * scale, column_left, y + 9.0f * scale, 0.0f, Ui::TextNormal, label);
         Figures(draw, size, right, y, 1.0f, color, value);
         y += line;
     };
