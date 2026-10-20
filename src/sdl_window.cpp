@@ -1664,6 +1664,50 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // +0x108 set, 0x82df90 stops the AI, character +0x240 = 1 and +0xb0d bit 2
                             // (object +0x360 / +0xc2d).
                             const u64 loser = objects[1 - k];
+                            // Colossi do not collide with each other: the winner (now after Wander)
+                            // would walk through the body. Kept 30 units from its nearest bone.
+                            std::thread([winner = objects[k], loser] {
+                                const auto until = Clock::now() + std::chrono::seconds(40);
+                                while (Clock::now() < until) {
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                                    u8 type = 0;
+                                    SIZE_T got = 0;
+                                    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(loser + 0xc),
+                                                           &type, 1, &got) || type != 9) {
+                                        return;
+                                    }
+                                    // Its skeleton's middle (bone world matrices, translation at +0x30).
+                                    u64 matrices = 0;
+                                    ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(loser + 0x120 + 0x198),
+                                                      &matrices, 8, &got);
+                                    const auto* w = reinterpret_cast<const volatile float*>(winner + 0x130);
+                                    float c[2]{}, nearest = 1e9f;
+                                    int count = 0;
+                                    for (int i = 0; matrices && i < 256; i++) {
+                                        float m[4]{};
+                                        if (!ReadProcessMemory(GetCurrentProcess(),
+                                                               reinterpret_cast<const void*>(matrices + i * 64 + 0x30), m,
+                                                               sizeof(m), &got) ||
+                                            m[3] != 1.0f) {
+                                            break;
+                                        }
+                                        const float d = std::hypot(w[0] - m[0], w[2] - m[2]);
+                                        if (d < nearest) {
+                                            nearest = d, c[0] = m[0], c[1] = m[2];
+                                        }
+                                        count++;
+                                    }
+                                    if (count == 0) {
+                                        continue;
+                                    }
+                                    const float dx = w[0] - c[0], dz = w[2] - c[1], gap = std::hypot(dx, dz);
+                                    if (gap < 30.0f && gap > 0.001f) {
+                                        const float push = std::min(30.0f - gap, 0.5f) / gap;
+                                        const float delta[3]{dx * push, 0.0f, dz * push};
+                                        MoveCharacter(winner, delta);
+                                    }
+                                }
+                            }).detach();
                             LOG_INFO(Core, "cvcbrawl: loser {:#x} death state: manager +0x108 {} health {:.0f}, "
                                      "+0x360 {}, +0xc2d {:#x}", loser,
                                      *reinterpret_cast<const volatile u8*>(loser_manager + 0x108),
