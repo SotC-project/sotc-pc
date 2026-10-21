@@ -473,8 +473,21 @@ static void CvcBodyWork(u64 image) {
 /// Asks for a motion to be started on a colossus at the next camera update (game thread).
 /// `blend`: seconds it crossfades from the pose it had (the game's own blend, component +0x980..;
 /// 0: it snaps to the new motion's first frame).
+// Guards the motion requests: one waiting per colossus, the newest (two started in the same
+// frame, the second blending over the first's first frame, crashed the game's object update at
+// 0x61af2f).
+static std::mutex g_cvc_motion_lock;
+
 static void CvcPlayMotion(u64 image, u64 object, u64 motion, float blend = 0.0f) {
+    std::scoped_lock guard{g_cvc_motion_lock};
     g_cvc_rays.image = image;
+    for (auto& slot : g_cvc_rays.motions) {
+        if (slot.object.load() == object) {
+            slot.motion = image + motion;
+            slot.blend = blend;
+            return;
+        }
+    }
     for (auto& slot : g_cvc_rays.motions) {
         u64 expected = 0;
         if (slot.object.load() == 0) {
@@ -506,6 +519,9 @@ static void CvcStartMotion(CvcRays& r, CvcRays::MotionRequest& request, u64 obje
         // pose it had (0x635210 sets the blend +0x980, 0x63b7b0 runs it while +0x6ff is set).
         reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, float)>(r.image + 0x635740)(component, motion,
                                                                                  request.blend * 30.0f);
+        // As 0x6179f0 then does (0x617b73): +0x52c cleared. Left set, the object update reads a
+        // motion at +0x268 that can be null (0x64bf50, crashes seen after Basaran's idle or walk).
+        *reinterpret_cast<volatile u8*>(component + 0x52c) = 0;
         LOG_INFO(Core, "cvc: motion {:#x} on {:#x} (now {:#x}), blend {:.2f} s over {:.1f} frames (+0x6ff {})",
                  motion - r.image, object, *reinterpret_cast<const volatile u64*>(component + 0x260) - r.image,
                  request.blend, *reinterpret_cast<const volatile float*>(component + 0x980),
@@ -518,6 +534,7 @@ static void CvcStartMotion(CvcRays& r, CvcRays::MotionRequest& request, u64 obje
 /// (started at the camera update, after it, the next picture showed a broken pose).
 extern "C" PS4_SYSV_ABI void CvcAiWork(u64 object) {
     auto& r = g_cvc_rays;
+    std::scoped_lock guard{g_cvc_motion_lock};
     for (auto& request : r.motions) {
         if (request.object.load() == object && r.image && request.motion) {
             CvcStartMotion(r, request, object);
@@ -591,6 +608,7 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
     }
     // Motions on a colossus whose AI is held start at its AI's turn (CvcAiWork); any other, or
     // one still waiting after a few frames (its AI not reached), here.
+    std::unique_lock motion_guard{g_cvc_motion_lock};
     for (auto& request : r.motions) {
         const u64 object = request.object.load();
         if (!object || !r.image || !request.motion) {
@@ -608,6 +626,7 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
         request.waited = 0;
         CvcStartMotion(r, request, object);
     }
+    motion_guard.unlock();
     for (auto& request : r.sounds) {
         const char* name = request.name.load();
         if (name && r.image) {
@@ -2272,7 +2291,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     const float dt = std::chrono::duration<float>(Clock::now() - last).count();
                     last = Clock::now();
                     static int ticks = 0;
-                    if (++ticks % 600 == 0) {
+                    if (++ticks % 120 == 0) {
+                        const auto* pa = reinterpret_cast<const volatile float*>(objects[0] + 0x130);
+                        const auto* pb = reinterpret_cast<const volatile float*>(objects[1] + 0x130);
+                        LOG_INFO(Core, "cvcbrawl: A frame {:.1f} at {:.0f} {:.0f}, B frame {:.1f} at {:.0f} {:.0f}, holds {:#x} {:#x} "
+                                 "(scale {:.2f} {:.2f})",
+                                 g_cvc_body[0].frame.load(), pa[0], pa[2], g_cvc_body[1].frame.load(), pb[0], pb[2],
+                                 g_cvc_hold_obj[0], g_cvc_hold_obj[1], g_cvc_hold_scale[0], g_cvc_hold_scale[1]);
+                    }
+                    if (ticks % 600 == 0) {
                         LOG_INFO(Core, "cvcbrawl: motions A {:#x} B {:#x}, health A {:.0f} B {:.0f}",
                                  q(objects[0] + 0x380) - image, q(objects[1] + 0x380) - image,
                                  *reinterpret_cast<const float*>(managers[0] + 0x50),
@@ -2301,6 +2328,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         u64 retreat = 0;      // stepping back
                         float mass = 1.0f;    // how hard blows push it (more: less)
                         float aim = 0.95f;    // how squarely (cosine) it faces the other to strike
+                        // Holds its ground: out of reach, it waits for the other to come to it (Basaran,
+                        // once brought out into the field, cannot walk far from where it was put).
+                        bool holds = false;
+                        u64 strike_left = 0, strike_right = 0; // attacks to one side (the rest straight ahead)
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -2308,12 +2339,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Knight_retreat.
                         {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
-                             250.0f, 0x1d38340, 6.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f}}, // a wide sword sweep
+                             250.0f, 0x1d38340, 8.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f}}, // a wide sword sweep
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; Turtle_retreat_1.
-                        {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}, {0x1d59920, 3000}, {0x1d59dc0, 3000}},
+                        {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}},
                              {0x1d5a4b0}, {0x1d5a4b0}, {0x1d5a4b0},
-                             250.0f, 0x1d553c0, 5.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0x1d561a0, 1.7f, 0.9f}}, // slams land in front
+                             250.0f, 0x1d553c0, 9.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0x1d561a0, 1.7f, 0.9f, true, 0x1d59dc0, 0x1d59920}},
+                        // (straight: both_hands_attack_1 / hands_attack_2 (middle); to the left / right:
+                        // hands_attack_2 (left) / (right))
                     };
                     const u64 table = q(image + 0x16d21f8 + 0x20);
                     const auto kind_of = [&](int k) -> const Moves* {
@@ -2327,11 +2360,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         u64 motion = 0;
                         Clock::time_point since, until;
                         bool heavy = false; // a flinch followed by stepping back
+                        bool bait = false;  // walking up to be struck (the other holds its ground)
                     };
                     static Fighter fighter[2];
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
+                    static float nearest_swing = 1e9f, nearest_any = 1e9f; // closest a moving / any bone came (misses in the log)
                     static Clock::time_point attack_from, next_attack = Clock::now();
                     static std::mt19937 rng{std::random_device{}()};
                     const bool over = *reinterpret_cast<const volatile u8*>(image + 0x1593efb) != 0;
@@ -2407,21 +2442,32 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     };
                     const auto stand = [&](int k) {
                         const Moves* moves = kind_of(k);
+                        const bool was_attacking = fighter[k].act == Act::Attack;
                         if (moves && moves->idle) {
                             play(k, moves->idle, Act::Idle, 0);
                         } else {
                             fighter[k].act = Act::Idle;
                         }
                         if (attacking == k) {
+                            if (was_attacking && !landed) {
+                                LOG_INFO(Core, "cvcbrawl: {} missed (a moving bone came within {:.1f}, any bone {:.1f})",
+                                         k ? "B" : "A", nearest_swing, nearest_any);
+                            }
                             attacking = -1;
                             next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
                         }
                     };
                     const auto attack = [&](int k) {
                         const Moves* moves = kind_of(k);
-                        const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
+                        auto [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
+                        // The other off to one side: the attack to that side, if it has one.
+                        float cosine = 1.0f, side = 0.0f;
+                        if (moves->strike_left && face(k, cosine, side) && cosine < 0.97f) {
+                            motion = side > 0.0f ? moves->strike_left : moves->strike_right, ms = 3000;
+                        }
                         play(k, motion, Act::Attack, ms);
                         attacking = k, landed = false, attack_from = Clock::now();
+                        nearest_swing = nearest_any = 1e9f;
                         LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
                                  closest);
                     };
@@ -2434,8 +2480,21 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             moves->turn_left && moves->turn_right) {
                             // Near but not square to it (a slam lands in front): round first.
                             play(k, side > 0.0f ? moves->turn_left : moves->turn_right, Act::Turn, 4000);
+                            LOG_INFO(Core, "cvcbrawl: {} squares up ({:.2f})", k ? "B" : "A", cosine);
+                        } else if (closest >= moves->strike && moves->holds) {
+                            // It waits; the other comes on into its reach (then it strikes).
+                            const int j = 1 - k;
+                            const Moves* other = kind_of(j);
+                            if (other && other->walk && fighter[j].act == Act::Idle) {
+                                play(j, other->walk, Act::Walk, 8000);
+                                fighter[j].bait = true;
+                                LOG_INFO(Core, "cvcbrawl: {} holds its ground, {} comes on ({:.0f} apart)", k ? "B" : "A",
+                                         j ? "B" : "A", closest);
+                            } else {
+                                attacking = -1; // again shortly
+                            }
                         } else if (closest >= moves->strike && moves->walk) {
-                            play(k, moves->walk, Act::Walk, 10000);
+                            play(k, moves->walk, Act::Walk, 7000);
                             LOG_INFO(Core, "cvcbrawl: {} closes in (bodies {:.0f} apart)", k ? "B" : "A", closest);
                         } else {
                             attack(k);
@@ -2477,9 +2536,23 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 break;
                             case Act::Walk:
                                 steer(k, 0.45f);
-                                if (closest < moves->strike) {
+                                if (f.bait) {
+                                    // Into the other's reach, then it is the other's move.
+                                    const Moves* other = kind_of(1 - k);
+                                    if (other && closest < other->strike - 6.0f) { // right up to it (it rears back to slam)
+                                        stand(k);
+                                        engage(1 - k);
+                                    } else if (Clock::now() > f.until) {
+                                        stand(k);
+                                        attacking = -1;
+                                    }
+                                } else if (closest < moves->strike) {
                                     engage(k); // square to it: the attack; else round first
+                                } else if (closest < moves->strike + 2.0f && known && cosine > moves->aim - 0.1f) {
+                                    attack(k); // as good as there, roughly facing it
                                 } else if (Clock::now() > f.until) {
+                                    LOG_INFO(Core, "cvcbrawl: {} stops short ({:.0f} apart, facing {:.2f})", k ? "B" : "A",
+                                             closest, cosine);
                                     stand(k);
                                 }
                                 break;
@@ -2489,6 +2562,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     LOG_INFO(Core, "cvcbrawl: {} turned to {:.2f}", k ? "B" : "A", cosine);
                                     engage(k);
                                 } else if (!known || Clock::now() > f.since + std::chrono::seconds(6)) {
+                                    LOG_INFO(Core, "cvcbrawl: {} gave up turning ({:.2f})", k ? "B" : "A", cosine);
                                     stand(k);
                                 } else if (played(k)) {
                                     // Still round the other way: the turn again, on from where it is.
@@ -2564,7 +2638,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                           motion == 0x1d39370 || motion == 0x1d395c0; // Knight_died_early, _loop
                         // A blow: k is attacking, past the wind-up, not landed yet, and one of its
                         // bones, moving fast and toward the other's body, reaches it.
-                        const bool swinging = attacking == k && !landed &&
+                        // (Not while it walks up or turns: its feet are not a blow.)
+                        const bool swinging = attacking == k && fighter[k].act == Act::Attack && !landed &&
                                               Clock::now() > attack_from + std::chrono::milliseconds(400);
                         if (!fell && (!swinging || now[k].size() != before[k].size() || now[1 - k].empty() ||
                                       dt <= 0.0f)) {
@@ -2576,18 +2651,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const float v = distance(now[k][i], before[k][i]) / dt;
                             const Moves* striker = kind_of(k);
                             const float least = striker && striker->swing > 0.0f ? striker->swing : speed;
+                            for (const auto& t : now[1 - k]) {
+                                nearest_any = std::min(nearest_any, distance(now[k][i], t));
+                            }
                             if (v < least || v > 2000.0f) { // over 2000: a teleport, not a blow
                                 continue;
                             }
                             for (const auto& t : now[1 - k]) {
                                 const float gap = distance(now[k][i], t);
+                                nearest_swing = std::min(nearest_swing, gap);
                                 float toward = 0.0f;
                                 for (int c = 0; c < 3; c++) {
                                     toward += (now[k][i][c] - before[k][i][c]) * (t[c] - now[k][i][c]);
                                 }
-                                // A slow blow (below the set speed: Basaran's slams) has to come closer.
-                                const float within = v < speed ? radius * 0.65f : radius;
-                                if (gap < within && toward > 0.3f * v * dt * gap) { // within ~70 degrees of it
+                                // A slow blow (Basaran's slams, coming down rather than at it) only must not
+                                // be drawing away; a fast one must be heading at it (within ~70 degrees).
+                                const float within = radius;
+                                const float heading = v < speed ? 0.0f : 0.3f;
+                                if (gap < within && toward > heading * v * dt * gap) {
                                     hit_bone = int(i), hit_speed = v, hit_gap = gap;
                                     break;
                                 }
