@@ -1101,17 +1101,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             float seconds = 0;
             int pick = 0;
             const bool picked = action.find('#') != std::string::npos;
+            // An optional last field: how many 200 ms checks in a row without a cinematic (15).
+            int calm_needed = 15;
             if (picked) {
-                sscanf(action.c_str() + 11, "%llx#%d:%f:%llx", &field, &pick, &seconds, &flag);
+                sscanf(action.c_str() + 11, "%llx#%d:%f:%llx:%d", &field, &pick, &seconds, &flag, &calm_needed);
             } else {
-                sscanf(action.c_str() + 11, "%llx:%f:%llx", &field, &seconds, &flag);
+                sscanf(action.c_str() + 11, "%llx:%f:%llx:%d", &field, &seconds, &flag, &calm_needed);
             }
             if (image) {
                 DWORD old = 0;
                 VirtualProtect(reinterpret_cast<void*>((image + flag) & ~u64(0xfff)), 0x1000,
                                PAGE_EXECUTE_READWRITE, &old);
             }
-            std::thread([image, field, pick, seconds, flag] {
+            std::thread([image, field, pick, seconds, flag, calm_needed] {
                 const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
                 const auto end = std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(u64(seconds * 1000));
@@ -1148,7 +1150,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         LOG_INFO(Core, "awaitmoved: cinematic {} (at {} ms)", cinematic == 0.0f ? "off" : "on", SDL_GetTicks());
                     }
                     calm = cinematic == 0.0f ? calm + 1 : 0;
-                    if (std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f && calm >= 15) {
+                    if (std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f && calm >= calm_needed) {
                         *reinterpret_cast<volatile u8*>(image + flag) = 1;
                         LOG_INFO(Core, "awaitmoved: object {:#x} moved, flag {:#x} set (at {} ms)", object, flag, SDL_GetTicks());
                         return;
