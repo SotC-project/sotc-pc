@@ -2910,10 +2910,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         float fx = sign * m[axis * 4], fz = sign * m[axis * 4 + 2];
                         const float n = std::max(std::hypot(fx, fz), 0.001f);
                         fx /= n, fz /= n;
-                        // (Its hands come down about 20 ahead of its root, measured; the other's
-                        // body, 8 around its root, reaches back over that from 30 ahead.)
+                        // (Its hands come down 19-23 ahead of its root, measured; from 30 ahead they
+                        // fell 9-10 short of the other's bones, so it stands at 25.)
                         const float* me = k ? (const float*)rb : (const float*)ra;
-                        spot[0] = me[0] + fx * 30.0f, spot[1] = me[1], spot[2] = me[2] + fz * 30.0f;
+                        spot[0] = me[0] + fx * 25.0f, spot[1] = me[1], spot[2] = me[2] + fz * 25.0f;
                         return true;
                     };
                     // k's mouth: its frontmost bone along its facing (the head), 2 further on.
@@ -3385,10 +3385,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (hit_bone >= 0) {
                             landed = true;
                             // The blow's impulse: the striking bone's speed and the mass behind it (1: a
-                            // full blow); its pulse lands as a full blow. Damage goes with it: a graze
+                            // full blow); its pulse lands as a heavy blow (1.4). Damage goes with it: a graze
                             // does little, the heaviest blow twice a full one.
                             const Moves* striker_kind = kind_of(k);
-                            const float force = pulsed ? 1.2f
+                            const float force = pulsed ? 1.4f
                                                        : std::clamp(hit_speed / 300.0f * (striker_kind ? striker_kind->heft : 1.0f),
                                                                     0.05f, 3.0f);
                             // Below 1: a share of the victim's full health for a full blow.
