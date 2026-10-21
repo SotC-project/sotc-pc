@@ -646,6 +646,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/sotc/challenge.h
             src/core/sotc/cvc_hud.cpp
             src/core/sotc/cvc_hud.h
+            src/core/sotc/cvc_physics.cpp
+            src/core/sotc/cvc_physics.h
             src/core/sotc/loading.cpp
             src/core/sotc/loading.h
             src/core/sotc/menu.cpp
@@ -1505,6 +1507,7 @@ cmrc_add_resource_library(embedded-resources
         src/resources/silver.png
         src/resources/trophy.wav
         src/resources/cvc_gaius_vs_basaran.txt
+        src/resources/cvc_hulls.txt
         src/resources/amd_rcp_index_table.bin.zstd
         src/resources/amd_rsqrt_index_table.bin.zstd)
 target_link_libraries(shadps4 PRIVATE res::embedded)

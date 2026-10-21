@@ -31,6 +31,7 @@
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/cvc_hud.h"
+#include "core/sotc/cvc_physics.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/watch.h"
 #include "core/sotc/wheel.h"
@@ -223,6 +224,16 @@ static CvcBody g_cvc_body[2];
 /// swings (cvcbrawl sets `attacker`), each of its bones moving faster than `least` is swept from
 /// where it was the frame before to where it is (0x7a7e40, the camera's filter), and a sweep that
 /// meets something on the other colossus's body (near its bones, not the attacker's) is the blow.
+/// A blow found by the physics (CvcPhysicsWork, game thread) for cvcbrawl: the strongest first
+/// meeting of the two bodies since cvcbrawl last took one.
+struct CvcBlow {
+    std::mutex lock;
+    bool ready = false;
+    int striker = 0, bone = -1;
+    float point[3]{}, normal[3]{}, impulse = 0.0f, closing = 0.0f;
+};
+static CvcBlow g_cvc_blow;
+
 struct CvcContact {
     std::atomic<int> attacker{-1};
     std::atomic<float> least{60.0f};
@@ -245,14 +256,29 @@ static CvcContact g_cvc_contact;
 /// the bones around the contact are driven in along the blow (a dent); both swing back and settle.
 struct CvcReact {
     std::mutex lock;
-    float axis[3]{1.0f, 0.0f, 0.0f}; // horizontal tilt axis (the blow's direction turned 90 degrees)
-    float tilt = 0.0f, tilt_v = 0.0f; // radians, rad/s
+    // The lean: a rotation about a horizontal axis through the feet, as a vector (x, z: its axis
+    // times its angle; radians) and its rate (rad/s), so blows from any side add up.
+    float tilt[2]{}, tilt_v[2]{};
     float dir[3]{};                   // the blow's direction (unit)
     float point[3]{};                 // where it landed
     float dent = 0.0f, dent_v = 0.0f; // units, units/s
     float sway = 0.0f, sway_v = 0.0f; // the whole body's mass shifted along the blow (units, units/s)
 };
 static CvcReact g_cvc_react[2];
+
+/// The physics' answer to a blow on colossus k (Sotc::CvcPhysics): `spin` its change of angular
+/// velocity (rad/s; its horizontal part leans it), `give` how fast the struck part yields at
+/// `point` along `dir` (x, z; units/s), `sway` how fast its upper body is carried along (units/s).
+static void CvcReactSpin(int k, const float* spin, const float* point, const float* dir, float give, float sway) {
+    auto& r = g_cvc_react[k];
+    std::scoped_lock guard{r.lock};
+    const float n = std::max(std::hypot(dir[0], dir[1]), 0.001f);
+    r.dir[0] = dir[0] / n, r.dir[1] = 0.0f, r.dir[2] = dir[1] / n;
+    std::memcpy(r.point, point, 12);
+    r.tilt_v[0] += spin[0], r.tilt_v[1] += spin[2];
+    r.dent_v += give;
+    r.sway_v += sway;
+}
 
 /// A blow on colossus k at `point` along `dir` (x, z) with impulse `force` (1: a full blow; a graze
 /// 0.1, the heaviest 3); `share` scales it (the striker rocks back a little the other way).
@@ -262,9 +288,8 @@ static void CvcReactImpulse(int k, const float* dir, const float* point, float f
     const float n = std::max(std::hypot(dir[0], dir[1]), 0.001f);
     r.dir[0] = dir[0] / n, r.dir[1] = 0.0f, r.dir[2] = dir[1] / n;
     // Tilting away from the blow: about the horizontal axis up x dir.
-    r.axis[0] = r.dir[2], r.axis[1] = 0.0f, r.axis[2] = -r.dir[0];
     std::memcpy(r.point, point, 12);
-    r.tilt_v += 1.5f * force * share;
+    r.tilt_v[0] += r.dir[2] * 1.5f * force * share, r.tilt_v[1] -= r.dir[0] * 1.5f * force * share;
     r.dent_v += 30.0f * force * share;
     r.sway_v += 26.0f * force * share;
 }
@@ -273,7 +298,7 @@ static void CvcReactWork(u64 image, float dt) {
     for (int k = 0; k < 2; k++) {
         auto& r = g_cvc_react[k];
         const u64 object = g_cvc_body[k].object.load();
-        float tilt, dent, sway, axis[3], dir[3], point[3];
+        float tilt, dent, sway, axis[3]{}, dir[3], point[3];
         {
             std::scoped_lock guard{r.lock};
             // Damped springs (the tilt slower, about 1.1 a second; the dent quicker).
@@ -286,13 +311,19 @@ static void CvcReactWork(u64 image, float dt) {
                 }
             };
             if (dt > 0.0f) {
-                spring(r.tilt, r.tilt_v, 6.0f, 0.32f);
+                spring(r.tilt[0], r.tilt_v[0], 6.0f, 0.32f);
+                spring(r.tilt[1], r.tilt_v[1], 6.0f, 0.32f);
                 spring(r.dent, r.dent_v, 12.0f, 0.45f);
                 spring(r.sway, r.sway_v, 5.0f, 0.4f);
-                r.tilt = std::clamp(r.tilt, -0.5f, 0.5f); // (a body does not fold over)
+                if (const float lean = std::hypot(r.tilt[0], r.tilt[1]); lean > 0.5f) { // (a body does not fold over)
+                    r.tilt[0] *= 0.5f / lean, r.tilt[1] *= 0.5f / lean;
+                }
             }
-            tilt = r.tilt, dent = r.dent, sway = r.sway;
-            std::memcpy(axis, r.axis, 12), std::memcpy(dir, r.dir, 12), std::memcpy(point, r.point, 12);
+            tilt = std::hypot(r.tilt[0], r.tilt[1]), dent = r.dent, sway = r.sway;
+            if (tilt > 0.0f) {
+                axis[0] = r.tilt[0] / tilt, axis[2] = r.tilt[1] / tilt;
+            }
+            std::memcpy(dir, r.dir, 12), std::memcpy(point, r.point, 12);
         }
         if (!object || (tilt == 0.0f && dent == 0.0f && sway == 0.0f) ||
             *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
@@ -571,106 +602,79 @@ static void CvcImpact(u64 image, u64 victim, bool armoured, const float* point, 
     CvcSound(armoured ? growl_knight[rng() % 3] : growl_kame[rng() % 3], point);
 }
 
-static void CvcContactWork(u64 image, float dt) {
-    auto& c = g_cvc_contact;
-    std::vector<std::array<float, 3>> now[2];
+/// The two colossi as physical bodies (Sotc::CvcPhysics): their own collision hulls riding their
+/// animated bones; where they meet they are pushed out of each other, exchange momentum by their
+/// masses (their roots pushed, their bodies leaned by the angular impulse), and a meeting that
+/// strikes hard enough is a blow for cvcbrawl, there and then.
+static void CvcPhysicsWork(u64 image, float dt) {
+    const auto copy = [](u64 at, void* to, size_t size) {
+        SIZE_T got = 0;
+        return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(at), to, size, &got) && got == size;
+    };
+    const u64 table = *reinterpret_cast<const volatile u64*>(image + 0x16d21f8 + 0x20);
+    int kinds[2]{-1, -1};
+    static float bones[2][35 * 16];
+    float roots[2][3]{};
+    u64 objects[2]{};
     for (int k = 0; k < 2; k++) {
-        const u64 object = g_cvc_body[k].object.load();
-        if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
-            c.before[k].clear();
+        objects[k] = g_cvc_body[k].object.load();
+        const u64 entry = *reinterpret_cast<const volatile u64*>(image + (k ? 0x1593b30 : 0x1593b28));
+        u64 matrices = 0;
+        if (!objects[k] || *reinterpret_cast<const volatile u8*>(objects[k] + 0xc) != 9 || entry < table ||
+            !copy(objects[k] + 0x120 + 0x198, &matrices, 8) || !copy(matrices, bones[k], sizeof(bones[k])) ||
+            !copy(objects[k] + 0x130, roots[k], 12)) {
+            return;
+        }
+        kinds[k] = int((entry - table) / 0x1e8);
+    }
+    const float* bone_sets[2]{bones[0], bones[1]};
+    const float* root_sets[2]{roots[0], roots[1]};
+    Sotc::CvcPhysics::Result result;
+    if (!Sotc::CvcPhysics::Step(kinds, bone_sets, root_sets, dt, result)) {
+        return;
+    }
+    for (int k = 0; k < 2; k++) {
+        if (result.shift[k][0] != 0.0f || result.shift[k][2] != 0.0f) {
+            MoveCharacter(objects[k], result.shift[k].data());
+        }
+        std::scoped_lock guard{g_cvc_body[k].lock};
+        g_cvc_body[k].push[0] += result.kick[k][0], g_cvc_body[k].push[1] += result.kick[k][2];
+    }
+    const Sotc::CvcPhysics::Hit* strongest = nullptr;
+    for (const auto& hit : result.hits) {
+        if (!strongest || hit.impulse > strongest->impulse) {
+            strongest = &hit;
+        }
+        if (hit.first) {
+            LOG_INFO(Core, "cvcphys: {} bone {} met {} at {:.0f} {:.0f} {:.0f}, closing {:.0f}, impulse {:.0f}",
+                     hit.striker ? "B" : "A", hit.bone, hit.striker ? "A" : "B", hit.point[0], hit.point[1], hit.point[2],
+                     hit.closing, hit.impulse);
+        }
+    }
+    if (strongest && strongest->impulse > 0.0f) {
+        // Each body gives: the struck leans away and yields where it was met, the striker a little
+        // back through its arm (the angular impulse; the yield as fast as its root was kicked).
+        for (int k = 0; k < 2; k++) {
+            const float sign = k == strongest->striker ? -1.0f : 1.0f;
+            const float dir[2]{strongest->normal[0] * sign, strongest->normal[2] * sign};
+            const float kicked = std::hypot(result.kick[k][0], result.kick[k][2]);
+            CvcReactSpin(k, result.spin[k].data(), strongest->point.data(), dir, std::min(kicked * 6.0f, 40.0f),
+                         std::min(kicked * 1.5f, 20.0f));
+        }
+    }
+    // A blow for cvcbrawl: the strongest new meeting with some weight behind it.
+    constexpr float least = 2000.0f; // (bodies settling against each other are not blows)
+    for (const auto& hit : result.hits) {
+        if (!hit.first || hit.impulse < least) {
             continue;
         }
-        const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
-        const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
-        for (int i = 0; matrices && i < 128 && Core::Memory::Instance()->IsValidMapping(matrices + i * 64, 64); i++) {
-            const auto* m = reinterpret_cast<const volatile float*>(matrices + i * 64 + 0x30);
-            if (m[3] != 1.0f || std::hypot(m[0] - at[0], m[2] - at[2]) > 400.0f) {
-                break;
-            }
-            now[k].push_back({m[0], m[1], m[2]});
+        std::scoped_lock guard{g_cvc_blow.lock};
+        if (!g_cvc_blow.ready || hit.impulse > g_cvc_blow.impulse) {
+            g_cvc_blow.ready = true, g_cvc_blow.striker = hit.striker, g_cvc_blow.bone = hit.bone;
+            std::memcpy(g_cvc_blow.point, hit.point.data(), 12), std::memcpy(g_cvc_blow.normal, hit.normal.data(), 12);
+            g_cvc_blow.impulse = hit.impulse, g_cvc_blow.closing = hit.closing;
         }
     }
-    const int k = c.attacker.load();
-    const u64 filter = *reinterpret_cast<const volatile u64*>(image + 0x1593ed8);
-    if (k >= 0 && !c.found.load() && filter && dt > 0.0f && now[k].size() == c.before[k].size() && !now[1 - k].empty()) {
-        using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter, u32 single,
-                                             u64 ignore);
-        const auto test = reinterpret_cast<LineTest>(image + 0x7a7e40);
-        const auto nearest = [](const std::vector<std::array<float, 3>>& bones, const float* p) {
-            float best = 1e9f;
-            for (const auto& b : bones) {
-                best = std::min(best, std::hypot(b[0] - p[0], b[1] - p[1], b[2] - p[2]));
-            }
-            return best;
-        };
-        // Not its root and spine (0-5): a lunging body is not a blow; limbs, head and weapon are.
-        for (size_t i = 6; i < now[k].size() && !c.found.load(); i++) {
-            const auto& a = c.before[k][i];
-            const auto& b = now[k][i];
-            const float travel = std::hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-            if (travel / dt < c.least.load() || travel / dt > 2000.0f) {
-                continue;
-            }
-            {
-                float best = 1e9f;
-                for (const auto& v : now[1 - k]) {
-                    best = std::min(best, std::hypot(b[0] - v[0], b[1] - v[1], b[2] - v[2]));
-                }
-                if (best < c.closest.load()) {
-                    c.closest = best, c.closest_bone = int(i);
-                }
-            }
-            // Against its body: the sweep's nearest approach to any of its bones.
-            {
-                const float d[3]{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-                const float len2 = std::max(d[0] * d[0] + d[1] * d[1] + d[2] * d[2], 1e-6f);
-                for (const auto& v : now[1 - k]) {
-                    const float t = std::clamp(((v[0] - a[0]) * d[0] + (v[1] - a[1]) * d[1] + (v[2] - a[2]) * d[2]) / len2,
-                                               0.0f, 1.0f);
-                    const float p[3]{a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t};
-                    if (std::hypot(p[0] - v[0], p[1] - v[1], p[2] - v[2]) < c.body.load()) {
-                        // Where it meets the body's surface, from that bone toward the sweep.
-                        const float n = std::max(std::hypot(p[0] - v[0], p[1] - v[1], p[2] - v[2]), 0.001f);
-                        for (int q = 0; q < 3; q++) {
-                            c.point[q] = v[q] + (p[q] - v[q]) / n * std::min(n, c.body.load());
-                        }
-                        c.speed = travel / dt, c.bone = int(i);
-                        c.found = true;
-                        LOG_INFO(Core, "cvccontact: {} bone {} touched {}'s body at {:.0f} {:.0f} {:.0f}", k ? "B" : "A", i,
-                                 k ? "A" : "B", c.point[0], c.point[1], c.point[2]);
-                        break;
-                    }
-                }
-                if (c.found.load()) {
-                    break;
-                }
-            }
-            alignas(16) const float from[4]{a[0], a[1], a[2], 1.0f};
-            alignas(16) const float to[4]{b[0], b[1], b[2], 1.0f};
-            for (const u32 single : {1u, 0u}) {
-                alignas(16) float hit[12]{};
-                // The attacker's own body left out (the test's last value); the hit names the object
-                // it met (hit +0x20), which must be the other colossus.
-                if (test(hit, from, to, filter, single, g_cvc_body[k].object.load())) {
-                    continue; // clear
-                }
-                const u64 met = *reinterpret_cast<const u64*>(hit + 8);
-                const float on_victim = nearest(now[1 - k], hit);
-                if (met == g_cvc_body[1 - k].object.load()) {
-                    std::memcpy(c.point, hit, 12);
-                    c.speed = travel / dt, c.bone = int(i);
-                    c.found = true;
-                    LOG_INFO(Core, "cvccontact: {} bone {} met {} at {:.0f} {:.0f} {:.0f} ({:.1f} from its bones), hit words "
-                             "{:#x} {:#x} {:#x} {:#x}", k ? "B" : "A", i, k ? "A" : "B", hit[0], hit[1], hit[2], on_victim,
-                             *reinterpret_cast<const u32*>(hit + 4), *reinterpret_cast<const u32*>(hit + 8),
-                             *reinterpret_cast<const u64*>(hit + 8), *reinterpret_cast<const u64*>(hit + 10));
-                    break;
-                }
-            }
-        }
-    }
-    c.before[0].swap(now[0]);
-    c.before[1].swap(now[1]);
 }
 
 /// Research probe (CVC_PROBE_SKEL set): every 3rd frame, up to 900 samples, appends colossus k's
@@ -857,7 +861,7 @@ static void CvcBodyWork(u64 image) {
         body.last[0] = at[0], body.last[1] = at[1], body.last[2] = at[2];
         body.last_motion = body.motion.load() ? body.motion.load() : 1;
     }
-    CvcContactWork(image, dt);
+    CvcPhysicsWork(image, dt);
     CvcReactWork(image, dt);
 }
 
@@ -3432,39 +3436,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const bool fell = (*reinterpret_cast<const volatile float*>(managers[1 - k] + 0x50) <= 0.0f &&
                                            *reinterpret_cast<const volatile float*>(managers[1 - k] + 0x4c) > 0.0f) ||
                                           motion == 0x1d39370 || motion == 0x1d395c0; // Knight_died_early, _loop
-                        // A blow: k is attacking, past the wind-up, not landed yet, and one of its
-                        // bones, moving fast and toward the other's body, reaches it.
-                        // (Not while it walks up or turns: its feet are not a blow.)
-                        const bool swinging = attacking == k && fighter[k].act == Act::Attack && !landed &&
-                                              Clock::now() > attack_from + std::chrono::milliseconds(400);
-                        if (!swinging && g_cvc_contact.attacker.load() == k) {
-                            g_cvc_contact.attacker = -1;
-                            g_cvc_contact.found = false;
+                        // A blow: the physics found k's body striking the other's, hard enough (any
+                        // part, any move: a body driven into the other hurts it as hard as it lands).
+                        int hit_bone = -1;
+                        float hit_speed = 0.0f, impulse = 0.0f;
+                        std::array<float, 3> contact{};
+                        {
+                            std::scoped_lock guard{g_cvc_blow.lock};
+                            // (One swing through several of the other's parts is one blow: 0.5 s apart.)
+                            static Clock::time_point last_blow[2]{};
+                            if (g_cvc_blow.ready && g_cvc_blow.striker == k && Clock::now() < last_blow[k] + std::chrono::milliseconds(500)) {
+                                g_cvc_blow.ready = false;
+                            } else if (g_cvc_blow.ready && g_cvc_blow.striker == k) {
+                                last_blow[k] = Clock::now();
+                                g_cvc_blow.ready = false;
+                                hit_bone = g_cvc_blow.bone, hit_speed = g_cvc_blow.closing, impulse = g_cvc_blow.impulse;
+                                std::memcpy(contact.data(), g_cvc_blow.point, 12);
+                            }
                         }
                         const bool pulsed = pulse_hit_for == k;
-                        if (!fell && !pulsed && (!swinging || now[k].size() != before[k].size() || now[1 - k].empty() ||
-                                                 dt <= 0.0f)) {
-                            continue;
-                        }
-                        // The blow: its swing meets the other's body in the game's own collision
-                        // (CvcContactWork sweeps the moving bones on the game thread).
-                        int hit_bone = -1;
-                        float hit_speed = 0.0f, hit_gap = 0.0f;
-                        std::array<float, 3> contact{};
                         if (pulsed) {
                             hit_bone = 0, hit_speed = 300.0f, contact = pulse_point; // its pulse struck
                             pulse_hit_for = -1;
-                        } else if (swinging) {
-                            const Moves* striker = kind_of(k);
-                            g_cvc_contact.least = striker && striker->swing > 0.0f ? striker->swing : speed;
-                            g_cvc_contact.body = kind_of(1 - k) ? kind_of(1 - k)->body : 8.0f;
-                            g_cvc_contact.attacker = k;
-                            if (g_cvc_contact.found.load()) {
-                                hit_bone = g_cvc_contact.bone, hit_speed = g_cvc_contact.speed;
-                                std::memcpy(contact.data(), g_cvc_contact.point, 12);
-                                g_cvc_contact.attacker = -1;
-                                g_cvc_contact.found = false;
-                            }
                         }
                         if (hit_bone < 0 && !fell) {
                             continue;
@@ -3472,13 +3465,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
                         if (hit_bone >= 0) {
                             landed = true;
-                            // The blow's impulse: the striking bone's speed and the mass behind it (1: a
-                            // full blow); its pulse lands as a heavy blow (1.4). Damage goes with it: a graze
-                            // does little, the heaviest blow twice a full one.
-                            const Moves* striker_kind = kind_of(k);
-                            const float force = pulsed ? 1.4f
-                                                       : std::clamp(hit_speed / 300.0f * (striker_kind ? striker_kind->heft : 1.0f),
-                                                                    0.05f, 3.0f);
+                            // The blow's impulse from the physics, against a full blow's (1); its pulse lands
+                            // as a heavy blow (1.4). Damage goes with it: a graze does little, the heaviest
+                            // blow twice a full one.
+                            constexpr float full_blow = 40000.0f;
+                            const float force = pulsed ? 1.4f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
                             const float damage = (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
@@ -3515,16 +3506,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Its body gives under the blow, as much as the blow carries (and the striker's
                             // rocks back a little); losing its footing without a fall of its own (Gaius),
                             // it staggers far.
+                            // (A body blow's lean and push came from the physics, there and then; the pulse
+                            // meets no body there, so its push is given here: a heavy blow's impulse.)
                             const Moves* victim_kind = kind_of(1 - k);
                             const bool stagger = *health > 0.0f && balance[1 - k] > 1.8f && victim_kind && victim_kind->down.empty();
-                            CvcReactImpulse(1 - k, dir, point.data(), force * (stagger ? 2.2f : 1.0f));
-                            if (stagger) {
+                            if (pulsed) {
+                                CvcReactImpulse(1 - k, dir, point.data(), force);
+                                const u64 entry = q(image + (k ? 0x1593b28 : 0x1593b30));
+                                const float mass = Sotc::CvcPhysics::Mass(entry >= table ? int((entry - table) / 0x1e8) : -1);
+                                if (mass > 0.0f) {
+                                    std::scoped_lock guard{g_cvc_body[1 - k].lock};
+                                    g_cvc_body[1 - k].push[0] += dir[0] * force * full_blow / mass;
+                                    g_cvc_body[1 - k].push[1] += dir[1] * force * full_blow / mass;
+                                }
+                            }
+                            if (stagger) { // past its balance: the blow carries it much further
+                                CvcReactImpulse(1 - k, dir, point.data(), force * 1.5f);
                                 balance[1 - k] = 0.0f;
                                 LOG_INFO(Core, "cvcbrawl: {} loses its footing", k ? "A" : "B");
-                            }
-                            {
-                                const float back[2]{-dir[0], -dir[1]};
-                                CvcReactImpulse(k, back, point.data(), force, 0.25f);
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;
@@ -3559,8 +3558,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }).detach();
                             (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
                             LOG_INFO(Core,
-                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, force {:.2f}, balance {:.1f}, roots {:.0f}), health A {:.0f} B {:.0f} at {} ms",
-                                     k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, force, balance[1 - k],
+                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, impulse {:.0f}, force {:.2f}, balance {:.1f}, roots {:.0f}), health A {:.0f} B {:.0f} at {} ms",
+                                     k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, impulse, force, balance[1 - k],
                                      std::hypot(ra[0] - rb[0], ra[2] - rb[2]),
                                      *reinterpret_cast<const float*>(managers[0] + 0x50),
                                      *reinterpret_cast<const float*>(managers[1] + 0x50),
