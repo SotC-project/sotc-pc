@@ -790,6 +790,29 @@ static void CvcBodyWork(u64 image) {
         if (std::getenv("CVC_PROBE_SKEL")) {
             CvcProbeSkeleton(image, k, object);
         }
+        // Research probe (CVC_PROBE_LEASH): Basaran shoved along x by 5, 10, 20 and 40 units, 10 s
+        // apart, its root logged every 6 frames: how far it may go and how the game brings it back.
+        if (k == 1 && std::getenv("CVC_PROBE_LEASH")) {
+            static int frames = 0;
+            static float home[3]{};
+            const auto* p = reinterpret_cast<const volatile float*>(object + 0x130);
+            if (frames == 300) {
+                home[0] = p[0], home[1] = p[1], home[2] = p[2];
+            }
+            for (const auto& [at, by] : {std::pair{600, 5.0f}, std::pair{1200, 10.0f}, std::pair{1800, 20.0f},
+                                         std::pair{2400, 40.0f}}) {
+                if (frames == at) {
+                    const float shove[3]{by, 0.0f, 0.0f};
+                    MoveCharacter(object, shove);
+                    LOG_INFO(Core, "cvcleash: shoved {:.0f}", by);
+                }
+            }
+            if (frames > 300 && frames % 6 == 0 && frames < 3000) {
+                LOG_INFO(Core, "cvcleash: frame {} off home {:.1f} {:.1f} {:.1f}", frames, p[0] - home[0], p[1] - home[1],
+                         p[2] - home[2]);
+            }
+            frames++;
+        }
         // A pop in the log: the root jumped more than a walk does in a frame.
         const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
         const float moved = std::hypot(at[0] - body.last[0], at[2] - body.last[2]);
