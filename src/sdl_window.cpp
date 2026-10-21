@@ -676,7 +676,7 @@ static void CvcContactWork(u64 image, float dt) {
 /// Research probe (CVC_PROBE_SKEL set): every 3rd frame, up to 900 samples, appends colossus k's
 /// bone matrices (its count, then count x 64 bytes) to testrun/pose_<A|B>.bin; the skeleton's
 /// parents are then found offline (re/cvc/skeleton.py: a bone keeps a fixed offset in its parent).
-static void CvcProbeSkeleton(int k, u64 object) {
+static void CvcProbeSkeleton(u64 image, int k, u64 object) {
     static int frame[2]{}, samples[2]{};
     if (samples[k] >= 900 || frame[k]++ % 3) {
         return;
@@ -700,6 +700,37 @@ static void CvcProbeSkeleton(int k, u64 object) {
     const u32 count = u32(pose.size() / 16);
     out.write(reinterpret_cast<const char*>(&count), 4);
     out.write(reinterpret_cast<const char*>(pose.data()), std::streamsize(pose.size() * 4));
+    // Its collision as the game's line test sees it: 48 rays in from random directions at random
+    // bones; each hit on it (sample, point, the hit's word +0x28) to testrun/rays_<A|B>.bin.
+    const u64 filter = *reinterpret_cast<const volatile u64*>(image + 0x1593ed8);
+    const u64 other = g_cvc_body[1 - k].object.load();
+    if (filter && count >= 35) {
+        using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter, u32 single,
+                                             u64 ignore);
+        const auto test = reinterpret_cast<LineTest>(image + 0x7a7e40);
+        static std::mt19937 rng{11};
+        std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+        std::ofstream rays(fmt::format("D:/sotc-pc/testrun/rays_{}.bin", k ? "B" : "A"),
+                           std::ios::binary | (samples[k] ? std::ios::app : std::ios::trunc));
+        for (int r = 0; r < 48; r++) {
+            const float* b = &pose[(rng() % 35) * 16 + 12];
+            float d[3];
+            do {
+                d[0] = unit(rng), d[1] = unit(rng), d[2] = unit(rng);
+            } while (std::hypot(d[0], d[1], d[2]) > 1.0f || std::hypot(d[0], d[1], d[2]) < 0.1f);
+            const float n = std::hypot(d[0], d[1], d[2]);
+            alignas(16) const float from[4]{b[0] + d[0] / n * 30.0f, b[1] + d[1] / n * 30.0f, b[2] + d[2] / n * 30.0f, 1.0f};
+            alignas(16) const float to[4]{b[0] - d[0] / n * 2.0f, b[1] - d[1] / n * 2.0f, b[2] - d[2] / n * 2.0f, 1.0f};
+            alignas(16) float hit[12]{};
+            if (test(hit, from, to, filter, 1, other) || *reinterpret_cast<const u64*>(hit + 8) != object) {
+                continue; // clear, or met something else first
+            }
+            const u32 sample = u32(samples[k]);
+            rays.write(reinterpret_cast<const char*>(&sample), 4);
+            rays.write(reinterpret_cast<const char*>(hit), 12);
+            rays.write(reinterpret_cast<const char*>(hit + 10), 8);
+        }
+    }
     samples[k]++;
 }
 
@@ -757,7 +788,7 @@ static void CvcBodyWork(u64 image) {
             RotateCharacter(object, body.turning * dt);
         }
         if (std::getenv("CVC_PROBE_SKEL")) {
-            CvcProbeSkeleton(k, object);
+            CvcProbeSkeleton(image, k, object);
         }
         // A pop in the log: the root jumped more than a walk does in a frame.
         const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
