@@ -1834,13 +1834,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         float strike = 28.0f; // nearest bones of the two at most this far to strike
                         int forward = 1;      // root bone axis it faces along (0 x, 1 y, 2 z), negative: -axis
                         u64 turn_left = 0, turn_right = 0; // its turns on the spot
+                        float swing = 0.0f; // a striking bone at least this fast (units/s); 0: the set speed
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},          // Knight_attack_1 (slam), _2
                              {{0x1d3cd40, 1500}, {0x1d3cf90, 1500}}, 250.0f,  // chest / back damage; closes in from anywhere
-                             0x1d38340, 10.0f, 1, 0x1d37c50, 0x1d37a00}},     // Knight_walk; close; +y; Knight_Standing_*_rotation
+                             0x1d38340, 10.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f}},     // Knight_walk; close; +y; Knight_Standing_*_rotation
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}, {0x1d59920, 3000}, {0x1d59dc0, 3000}},
-                             {{0x1d5a4b0, 2500}}, 250.0f, 0x1d553c0, 8.0f, -2, 0x1d54f20, 0x1d54a80}}, // hand attacks; shudder; Turtle_walking_1; -z
+                             {{0x1d5a4b0, 2500}}, 250.0f, 0x1d553c0, 8.0f, -2, 0x1d54f20, 0x1d54a80,
+                             30.0f}} // its hand slams are slow, // hand attacks; shudder; Turtle_walking_1; -z
                     };
                     const u64 table = q(image + 0x16d21f8 + 0x20);
                     const auto kind_of = [&](int k) -> const Moves* {
@@ -1848,7 +1850,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto it = kinds.find(entry >= table ? int((entry - table) / 0x1e8) : -1);
                         return it == kinds.end() ? nullptr : &it->second;
                     };
-                    static int attacking = -1, last_attacker = 1, approaching = -1;
+                    static int attacking = -1, approaching = -1;
+                    static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static Clock::time_point approach_until;
                     static bool landed = false;
                     static Clock::time_point attack_from, attack_until, next_attack = Clock::now();
@@ -2044,7 +2047,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         float hit_speed = 0.0f, hit_gap = 0.0f;
                         for (size_t i = 0; swinging && i < now[k].size() && hit_bone < 0; i++) {
                             const float v = distance(now[k][i], before[k][i]) / dt;
-                            if (v < speed || v > 2000.0f) { // over 2000: a teleport, not a blow
+                            const Moves* striker = kind_of(k);
+                            const float least = striker && striker->swing > 0.0f ? striker->swing : speed;
+                            if (v < least || v > 2000.0f) { // over 2000: a teleport, not a blow
                                 continue;
                             }
                             for (const auto& t : now[1 - k]) {
@@ -2053,7 +2058,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 for (int c = 0; c < 3; c++) {
                                     toward += (now[k][i][c] - before[k][i][c]) * (t[c] - now[k][i][c]);
                                 }
-                                if (gap < radius && toward > 0.3f * v * dt * gap) { // within ~70 degrees of it
+                                // A slow blow (below the set speed: Basaran's slams) has to come closer.
+                                const float within = v < speed ? radius * 0.65f : radius;
+                                if (gap < within && toward > 0.3f * v * dt * gap) { // within ~70 degrees of it
                                     hit_bone = int(i), hit_speed = v, hit_gap = gap;
                                     break;
                                 }
