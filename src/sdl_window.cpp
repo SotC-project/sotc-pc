@@ -2815,7 +2815,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
-                    // Balance lost to blows (impulses add up, it drains back 0.35 a second); past 2.2
+                    // Balance lost to blows (impulses add up, it drains back slowly, 0.04 a second); past 2.2
                     // the colossus loses its footing (Basaran overturns, Gaius staggers far).
                     static float balance[2]{};
                     static Clock::time_point balance_at = Clock::now();
@@ -2823,7 +2823,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const float elapsed = std::chrono::duration<float>(Clock::now() - balance_at).count();
                         balance_at = Clock::now();
                         for (float& b : balance) {
-                            b = std::max(0.0f, b - 0.35f * elapsed);
+                            b = std::max(0.0f, b - 0.04f * elapsed);
                         }
                     }
                     // Basaran's pulse: its phase (0 charging, 1 fired, 2 done), when it fired, where it
@@ -3010,7 +3010,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Near but not square to it (a slam lands in front): round first.
                             play(k, side > 0.0f ? moves->turn_left : moves->turn_right, Act::Turn, 4000);
                             LOG_INFO(Core, "cvcbrawl: {} squares up ({:.2f})", k ? "B" : "A", cosine);
-                        } else if (closest >= moves->strike && moves->holds && [&] {
+                        } else if (moves->holds && [&] { // (slams only on the spot in front of its head)
                                        // (The other already on the spot in front of its head: in reach.)
                                        float spot[3]{};
                                        const float* other = k ? (const float*)ra : (const float*)rb;
@@ -3020,7 +3020,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // where it is, it fires its pulse at it.
                             const int j = 1 - k;
                             const Moves* other = kind_of(j);
-                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 45)) {
+                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 75)) { // its main weapon at range
                                 play(k, moves->idle, Act::Pulse, 6000);
                                 pulse_phase = 0, landed = false, attack_from = Clock::now();
                                 float mouth[3]{};
@@ -3235,7 +3235,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     CvcEffect("npe/arrow_hit_spark.npe", mouth, yaw);
                                     std::memcpy(pulse_from.data(), mouth, 12);
                                     pulse_drawn = 0.0f;
-                                    std::memcpy(g_cvc_rays.pulse_target, pulse_point.data(), 12);
+                                    // Its own projectile meets only the ground (not another colossus): aimed
+                                    // at the ground under the other's chest, it bursts against its legs there.
+                                    {
+                                        float ground = pulse_point[1];
+                                        for (const auto& bone : now[1 - k]) {
+                                            ground = std::min(ground, bone[1]);
+                                        }
+                                        const float aim[3]{pulse_point[0], pulse_on_target ? ground - 2.0f : pulse_point[1], pulse_point[2]};
+                                        std::memcpy(g_cvc_rays.pulse_target, aim, 12);
+                                    }
                                     g_cvc_rays.pulse_object = objects[k];
                                     g_cvc_rays.pulse = 2; // its own shot
                                     CvcSound(rng() % 2 ? "kame_pulse_fire1" : "kame_pulse_fire2", mouth);
