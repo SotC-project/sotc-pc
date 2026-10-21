@@ -920,6 +920,9 @@ void OnGameFlowStart() {
 std::atomic_bool cover_held{false};
 
 void HoldCover(bool hold) {
+    if (cover_held != hold) {
+        LOG_INFO(Lib_SystemService, "Loading cover {} at {} ms", hold ? "held" : "released", SDL_GetTicks());
+    }
     cover_held = hold;
 }
 

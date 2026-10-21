@@ -923,8 +923,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             std::this_thread::sleep_for(std::chrono::milliseconds(33));
                         }
                         if (walk_out > 0.0f) {
-                            LOG_INFO(Core, "cvcplace: B slid {:.0f} to {:.0f} {:.0f} {:.0f}, object {}", moved, pb[0], pb[1],
-                                     pb[2], *reinterpret_cast<const volatile u64*>(b) != 0 ? "kept" : "torn down");
+                            LOG_INFO(Core, "cvcplace: B slid {:.0f} to {:.0f} {:.0f} {:.0f}, object {} (at {} ms)", moved, pb[0], pb[1],
+                                     pb[2], *reinterpret_cast<const volatile u64*>(b) != 0 ? "kept" : "torn down", SDL_GetTicks());
                         }
                     };
                     // The host's first-sight cutscene can follow (Wander brought near). It puts the
@@ -944,7 +944,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (!cvc_placed) {
                             const bool now = Sotc::Screens::Letterboxed();
                             if (now && !cutscene) {
-                                LOG_INFO(Core, "cvcplace: a cutscene plays");
+                                LOG_INFO(Core, "cvcplace: a cutscene plays (at {} ms)", SDL_GetTicks());
                             }
                             if (cutscene && !now) {
                                 walk_host_out();
@@ -1067,9 +1067,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 *reinterpret_cast<u64*>(image + 0x1593ae8) = 0; // the spectator camera has not settled yet
                 cvc_placed = false;
                 cvc_guest_beside = false;
-                LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x})",
+                LOG_INFO(Core, "cvctarget: A {:#x} (node {:#x}) <-> B {:#x} (node {:#x}) (at {} ms)",
                          *reinterpret_cast<u64*>(data + 0x08), na,
-                         *reinterpret_cast<u64*>(data + 0x10), nb);
+                         *reinterpret_cast<u64*>(data + 0x10), nb, SDL_GetTicks());
             }
         } else if (action == "sampcur") {
             // Test: how often the update wrapper's current object (image 0x1593b00) is colossus
@@ -1136,6 +1136,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     if (object != first_object) {
                         first_object = object;
                         first[0] = p[0], first[1] = p[1], first[2] = p[2];
+                        LOG_INFO(Core, "awaitmoved: object {:#x} found (at {} ms)", object, SDL_GetTicks());
                         continue;
                     }
                     // It moves during its intro cinematic already, and a boss jump started then
@@ -1143,10 +1144,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // letterbox amount, image 0x2dcdf04, see Screens::Letterboxed).
                     thread_local int calm = 0;
                     const float cinematic = *reinterpret_cast<const volatile float*>(image + 0x2dcdf04);
+                    if ((cinematic == 0.0f) != (calm > 0)) {
+                        LOG_INFO(Core, "awaitmoved: cinematic {} (at {} ms)", cinematic == 0.0f ? "off" : "on", SDL_GetTicks());
+                    }
                     calm = cinematic == 0.0f ? calm + 1 : 0;
                     if (std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f && calm >= 15) {
                         *reinterpret_cast<volatile u8*>(image + flag) = 1;
-                        LOG_INFO(Core, "awaitmoved: object {:#x} moved, flag {:#x} set", object, flag);
+                        LOG_INFO(Core, "awaitmoved: object {:#x} moved, flag {:#x} set (at {} ms)", object, flag, SDL_GetTicks());
                         return;
                     }
                 }
@@ -1541,12 +1545,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             look[k] += (want_look[k] - look[k]) * ease;
                         }
                         placed = true;
-                        // Three seconds on: the picture has settled (cvc_arena.sh lifts the loading
+                        // One second on: the picture has settled (cvc_arena.sh lifts the loading
                         // screen then).
                         // Counted only once the fight is placed and while no cutscene plays.
                         static int settled = 0;
                         settled = cvc_placed && !Sotc::Screens::Letterboxed() ? settled + 1 : 0;
-                        if (settled == 180) {
+                        if (settled == 60) {
                             *reinterpret_cast<volatile u64*>(image + 0x1593ae8) = 1;
                         }
                         // Never inside or against a colossus: at least 22 units from every bone.
