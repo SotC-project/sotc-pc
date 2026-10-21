@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <set>
 #include <vector>
 #include <array>
 #include <random>
@@ -672,6 +673,36 @@ static void CvcContactWork(u64 image, float dt) {
     c.before[1].swap(now[1]);
 }
 
+/// Research probe (CVC_PROBE_SKEL set): every 3rd frame, up to 900 samples, appends colossus k's
+/// bone matrices (its count, then count x 64 bytes) to testrun/pose_<A|B>.bin; the skeleton's
+/// parents are then found offline (re/cvc/skeleton.py: a bone keeps a fixed offset in its parent).
+static void CvcProbeSkeleton(int k, u64 object) {
+    static int frame[2]{}, samples[2]{};
+    if (samples[k] >= 900 || frame[k]++ % 3) {
+        return;
+    }
+    const auto copy = [](u64 at, void* to, size_t size) {
+        SIZE_T got = 0;
+        return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(at), to, size, &got) && got == size;
+    };
+    u64 matrices = 0;
+    float root[4]{};
+    if (!copy(object + 0x120 + 0x198, &matrices, 8) || !copy(object + 0x130, root, 16)) {
+        return;
+    }
+    std::vector<float> pose;
+    for (float m[16]; pose.size() < 256 * 16 && copy(matrices + pose.size() * 4, m, 64) && m[15] == 1.0f &&
+                      std::hypot(m[12] - root[0], m[14] - root[2]) < 400.0f;) {
+        pose.insert(pose.end(), m, m + 16);
+    }
+    std::ofstream out(fmt::format("D:/sotc-pc/testrun/pose_{}.bin", k ? "B" : "A"),
+                      std::ios::binary | (samples[k] ? std::ios::app : std::ios::trunc));
+    const u32 count = u32(pose.size() / 16);
+    out.write(reinterpret_cast<const char*>(&count), 4);
+    out.write(reinterpret_cast<const char*>(pose.data()), std::streamsize(pose.size() * 4));
+    samples[k]++;
+}
+
 static void CvcBodyWork(u64 image) {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point before = Clock::now();
@@ -724,6 +755,9 @@ static void CvcBodyWork(u64 image) {
         body.turning += std::clamp(want - body.turning, -2.0f * dt, 2.0f * dt);
         if (std::abs(body.turning) > 0.001f) {
             RotateCharacter(object, body.turning * dt);
+        }
+        if (std::getenv("CVC_PROBE_SKEL")) {
+            CvcProbeSkeleton(k, object);
         }
         // A pop in the log: the root jumped more than a walk does in a frame.
         const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
