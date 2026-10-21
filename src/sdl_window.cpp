@@ -229,6 +229,116 @@ struct CvcContact {
     std::vector<std::array<float, 3>> before[2]; // bones (world) the frame before
 };
 static CvcContact g_cvc_contact;
+/// A colossus's physical reaction to a blow, laid over its animated pose: the game rebuilds the
+/// final bone matrices (component +0x198) every frame before the camera update, and a change made
+/// to them there is what gets drawn (tested), so each frame the pose is bent anew from the
+/// game's own and nothing accumulates. Two springs: the body tilts away from the blow about a
+/// point on the ground under it (bones weighted by their height, so the feet stay planted), and
+/// the bones around the contact are driven in along the blow (a dent); both swing back and settle.
+struct CvcReact {
+    std::mutex lock;
+    float axis[3]{1.0f, 0.0f, 0.0f}; // horizontal tilt axis (the blow's direction turned 90 degrees)
+    float tilt = 0.0f, tilt_v = 0.0f; // radians, rad/s
+    float dir[3]{};                   // the blow's direction (unit)
+    float point[3]{};                 // where it landed
+    float dent = 0.0f, dent_v = 0.0f; // units, units/s
+};
+static CvcReact g_cvc_react[2];
+
+/// A blow on colossus k at `point` along `dir` (x, z), strength 0.5-1.6; `share` scales it (the
+/// striker rocks back a little the other way).
+static void CvcReactImpulse(int k, const float* dir, const float* point, float strength, float share = 1.0f) {
+    auto& r = g_cvc_react[k];
+    std::scoped_lock guard{r.lock};
+    const float n = std::max(std::hypot(dir[0], dir[1]), 0.001f);
+    r.dir[0] = dir[0] / n, r.dir[1] = 0.0f, r.dir[2] = dir[1] / n;
+    // Tilting away from the blow: about the horizontal axis up x dir.
+    r.axis[0] = r.dir[2], r.axis[1] = 0.0f, r.axis[2] = -r.dir[0];
+    std::memcpy(r.point, point, 12);
+    r.tilt_v += 0.9f * strength * share;
+    r.dent_v += 28.0f * strength * share;
+}
+
+static void CvcReactWork(u64 image, float dt) {
+    for (int k = 0; k < 2; k++) {
+        auto& r = g_cvc_react[k];
+        const u64 object = g_cvc_body[k].object.load();
+        float tilt, dent, axis[3], dir[3], point[3];
+        {
+            std::scoped_lock guard{r.lock};
+            // Damped springs (the tilt slower, about 1.1 a second; the dent quicker).
+            const auto spring = [&](float& x, float& v, float w0, float zeta) {
+                const float a = -w0 * w0 * x - 2.0f * zeta * w0 * v;
+                v += a * dt;
+                x += v * dt;
+                if (std::abs(x) < 1e-4f && std::abs(v) < 1e-3f) {
+                    x = v = 0.0f;
+                }
+            };
+            if (dt > 0.0f) {
+                spring(r.tilt, r.tilt_v, 7.0f, 0.35f);
+                spring(r.dent, r.dent_v, 12.0f, 0.45f);
+            }
+            tilt = r.tilt, dent = r.dent;
+            std::memcpy(axis, r.axis, 12), std::memcpy(dir, r.dir, 12), std::memcpy(point, r.point, 12);
+        }
+        if (!object || (tilt == 0.0f && dent == 0.0f) || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
+            continue;
+        }
+        const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
+        const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
+        int count = 0;
+        float low = 1e9f, high = -1e9f;
+        for (; matrices && count < 128 && Core::Memory::Instance()->IsValidMapping(matrices + count * 64, 64); count++) {
+            const auto* m = reinterpret_cast<const volatile float*>(matrices + count * 64 + 0x30);
+            if (m[3] != 1.0f || std::hypot(m[0] - at[0], m[2] - at[2]) > 400.0f) {
+                break;
+            }
+            low = std::min(low, float(m[1])), high = std::max(high, float(m[1]));
+        }
+        if (count == 0 || high - low < 1.0f) {
+            continue;
+        }
+        const float pivot[3]{at[0], low, at[2]};
+        float moved = 0.0f;
+        for (int i = 0; i < count; i++) {
+            auto* m = reinterpret_cast<volatile float*>(matrices + i * 64);
+            const float w = std::clamp((m[13] - low) / (high - low), 0.0f, 1.0f);
+            // Rodrigues: rotate by tilt * w about `axis` through `pivot`.
+            const float angle = tilt * w, c = std::cos(angle), s = std::sin(angle);
+            const auto rotate = [&](float* v) {
+                const float dot = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2];
+                const float cr[3]{axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2],
+                                  axis[0] * v[1] - axis[1] * v[0]};
+                for (int q = 0; q < 3; q++) {
+                    v[q] = v[q] * c + cr[q] * s + axis[q] * dot * (1.0f - c);
+                }
+            };
+            for (int row = 0; row < 3; row++) { // the bone's own axes turn with it
+                float v[3]{m[row * 4], m[row * 4 + 1], m[row * 4 + 2]};
+                rotate(v);
+                m[row * 4] = v[0], m[row * 4 + 1] = v[1], m[row * 4 + 2] = v[2];
+            }
+            float p[3]{m[12] - pivot[0], m[13] - pivot[1], m[14] - pivot[2]};
+            rotate(p);
+            // The dent: bones near the contact driven in along the blow (falling off over 25).
+            const float off = std::hypot(m[12] - point[0], m[13] - point[1], m[14] - point[2]);
+            const float give = dent * std::max(0.0f, 1.0f - off / 25.0f);
+            float shift = 0.0f;
+            for (int q = 0; q < 3; q++) {
+                const float to = pivot[q] + p[q] + dir[q] * give;
+                shift += (to - m[12 + q]) * (to - m[12 + q]);
+                m[12 + q] = to;
+            }
+            moved = std::max(moved, std::sqrt(shift));
+        }
+        static int logged[2]{};
+        if (++logged[k] % 60 == 0) {
+            LOG_INFO(Core, "cvcreact: {} tilt {:.3f} dent {:.1f}: bones moved up to {:.1f} ({} bones, {:.0f}..{:.0f} high)",
+                     k ? "B" : "A", tilt, dent, moved, count, low, high);
+        }
+    }
+}
 // Test aid (cvcfree=B:40): a colossus left to its own AI (not held, no moves of ours) until then.
 static std::atomic<s64> g_cvc_free_until[2]{};
 // Camera shake of the spectator camera (cvccam): how far it throws the view (units) and when it
@@ -627,6 +737,7 @@ static void CvcBodyWork(u64 image) {
         body.last_motion = body.motion.load() ? body.motion.load() : 1;
     }
     CvcContactWork(image, dt);
+    CvcReactWork(image, dt);
 }
 
 /// Asks for a motion to be started on a colossus at the next camera update (game thread).
@@ -3177,6 +3288,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const u64 entry = q(image + (k ? 0x1593b28 : 0x1593b30));
                                 const bool armoured = entry >= table && (entry - table) / 0x1e8 == 2; // Gaius
                                 CvcImpact(image, objects[1 - k], armoured, point.data(), ground.data(), strength, heavy);
+                            }
+                            // Its body gives under the blow (and the striker's rocks back a little).
+                            CvcReactImpulse(1 - k, dir, point.data(), strength);
+                            {
+                                const float back[2]{-dir[0], -dir[1]};
+                                CvcReactImpulse(k, back, point.data(), strength, 0.25f);
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;
