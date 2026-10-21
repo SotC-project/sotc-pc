@@ -29,6 +29,7 @@
 #include "core/memory.h"
 #include "core/sotc/achievements.h"
 #include "core/sotc/challenge.h"
+#include "core/sotc/cvc_hud.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/watch.h"
 #include "core/sotc/wheel.h"
@@ -2842,6 +2843,30 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         spot[0] = me[0] + fx * 30.0f, spot[1] = me[1], spot[2] = me[2] + fz * 30.0f;
                         return true;
                     };
+                    // k's mouth: its frontmost bone along its facing (the head), 2 further on.
+                    const auto mouth_of = [&](int k, float* at) {
+                        const Moves* moves = kind_of(k);
+                        const u64 mats = moves ? q(objects[k] + 0x120 + 0x198) : 0;
+                        float m[12]{};
+                        SIZE_T got = 0;
+                        if (!mats || now[k].empty() ||
+                            !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(mats), m, sizeof(m), &got)) {
+                            return false;
+                        }
+                        const int axis = std::abs(moves->forward);
+                        const float sign = moves->forward < 0 ? -1.0f : 1.0f;
+                        float fx = sign * m[axis * 4], fz = sign * m[axis * 4 + 2];
+                        const float n = std::max(std::hypot(fx, fz), 0.001f);
+                        fx /= n, fz /= n;
+                        float best = -1e9f;
+                        for (const auto& b : now[k]) {
+                            const float along = b[0] * fx + b[2] * fz;
+                            if (along > best) {
+                                best = along, at[0] = b[0] + fx * 2.0f, at[1] = b[1], at[2] = b[2] + fz * 2.0f;
+                            }
+                        }
+                        return true;
+                    };
                     // Crossfade per move: standing, walking and turning ease in; an attack and a
                     // flinch come in quicker.
                     const auto play = [&](int k, u64 motion, Act act, int ms) {
@@ -2931,16 +2956,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             if (moves->pulse && (closest > 20.0f || rng() % 100 < 45)) {
                                 play(k, moves->idle, Act::Pulse, 6000);
                                 pulse_phase = 0, landed = false, attack_from = Clock::now();
-                                float head[3]{};
-                                front(k, head);
-                                const float* me = k ? (const float*)rb : (const float*)ra;
-                                const float mouth[3]{(head[0] + me[0] * 2.0f) / 3.0f, me[1] + 14.0f, (head[2] + me[2] * 2.0f) / 3.0f};
+                                float mouth[3]{};
+                                mouth_of(k, mouth);
                                 // (Its own tts_pls_* charge and bolt effects are not resident in this arena, and
                                 // Wander's sword effects s_* crash outside his hands: general sparks stand in.)
                                 CvcEffect("npe/torch_spark.npe", mouth);
                                 CvcEffect("npe/player_spark.npe", mouth);
                                 CvcSound(rng() % 2 ? "kmvo_pulse_c2" : "kmvo_pulse_c4", mouth);
                                 CvcSound("kame_pulse_c1", mouth);
+                                Sotc::CvcHud::Charge(mouth, 1.4f);
                                 LOG_INFO(Core, "cvcbrawl: {} charges its pulse ({:.0f} apart)", k ? "B" : "A", closest);
                             } else if (other && other->walk && fighter[j].act == Act::Idle) {
                                 play(j, other->walk, Act::Walk, 8000);
@@ -3115,11 +3139,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             case Act::Pulse: {
                                 // Charge 1.4 s, fire from its mouth along its facing at the other's chest
                                 // (it hits when squarely aimed), the strike 0.25 s later, done after 1.5 s.
-                                float head[3]{};
+                                float mouth[3]{}, head[3]{};
+                                mouth_of(k, mouth);
                                 front(k, head);
                                 const float* me = k ? (const float*)rb : (const float*)ra;
-                                const float mouth[3]{(head[0] + me[0] * 2.0f) / 3.0f, me[1] + 14.0f,
-                                                     (head[2] + me[2] * 2.0f) / 3.0f};
                                 if (pulse_phase == 0 && Clock::now() < f.since + std::chrono::milliseconds(1400)) {
                                     steer(k, 0.4f);
                                 } else if (pulse_phase == 0) {
@@ -3142,6 +3165,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     CvcEffect("npe/arrow_hit_spark.npe", mouth, yaw);
                                     std::memcpy(pulse_from.data(), mouth, 12);
                                     pulse_drawn = 0.0f;
+                                    Sotc::CvcHud::Bolt(mouth, pulse_point.data(), 0.45f);
                                     CvcSound(rng() % 2 ? "kame_pulse_fire1" : "kame_pulse_fire2", mouth);
                                     CvcSound("kame_pulse_line1", pulse_point.data());
                                     CvcSound("kame_pulse_line2", mouth);

@@ -10,4 +10,10 @@ namespace Sotc::CvcHud {
 
 void Draw();
 
+/// Basaran's pulse, drawn into the picture (its own tts_pls_* effects are not loaded in the arena
+/// the fight is in): a glow gathering at its mouth for `seconds`, then a bolt from its mouth to
+/// where it struck, flickering out over `seconds`. World positions.
+void Charge(const float* at, float seconds);
+void Bolt(const float* from, const float* to, float seconds);
+
 } // namespace Sotc::CvcHud

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
+#include <random>
 #include <SDL3/SDL_timer.h>
 #include <imgui.h>
 
@@ -64,7 +67,114 @@ Side ReadSide(u64 image, u64 entry_slot, u64 manager_slot) {
     return side;
 }
 
+// The pulse: what to draw and until when (SDL ticks).
+struct Pulse {
+    std::mutex lock;
+    float charge_at[3]{};
+    u64 charge_from = 0, charge_until = 0;
+    float from[3]{}, to[3]{};
+    u64 bolt_from = 0, bolt_until = 0;
+};
+Pulse g_pulse;
+
+// World to screen through the render camera's view-projection (camera_patch.py leaves the
+// render camera component at cave 0x1593d48; its +0x380 holds view, projection and, at +0xc0,
+// their product, row-vector form). False behind the camera.
+bool Project(u64 image, const float* p, const ImVec2& display, ImVec2& out) {
+    u64 camera = 0, matrices = 0;
+    if (!Read(image + 0x1593d48, camera) || !Read(camera + 0x380, matrices) ||
+        !Core::Memory::Instance()->IsValidMapping(matrices + 0xc0, 64)) {
+        return false;
+    }
+    const auto* m = reinterpret_cast<const volatile float*>(matrices + 0xc0);
+    float clip[4];
+    for (int j = 0; j < 4; j++) {
+        clip[j] = p[0] * m[j] + p[1] * m[4 + j] + p[2] * m[8 + j] + m[12 + j];
+    }
+    if (clip[3] <= 0.01f) {
+        return false;
+    }
+    out.x = (clip[0] / clip[3] * 0.5f + 0.5f) * display.x;
+    out.y = (0.5f - clip[1] / clip[3] * 0.5f) * display.y;
+    return true;
+}
+
+void DrawPulse(u64 image, ImDrawList* draw, const ImVec2& display, float scale, u64 now) {
+    float charge_at[3], from[3], to[3];
+    u64 charge_from, charge_until, bolt_from, bolt_until;
+    {
+        std::scoped_lock guard{g_pulse.lock};
+        std::copy_n(g_pulse.charge_at, 3, charge_at), std::copy_n(g_pulse.from, 3, from), std::copy_n(g_pulse.to, 3, to);
+        charge_from = g_pulse.charge_from, charge_until = g_pulse.charge_until;
+        bolt_from = g_pulse.bolt_from, bolt_until = g_pulse.bolt_until;
+    }
+    static std::mt19937 rng{7};
+    std::uniform_real_distribution<float> jitter(-1.0f, 1.0f);
+    // Charging: a pale blue glow at its mouth, growing and throbbing.
+    if (now < charge_until) {
+        ImVec2 at;
+        if (Project(image, charge_at, display, at)) {
+            const float t = float(now - charge_from) / float(std::max<u64>(charge_until - charge_from, 1));
+            const float throb = 0.75f + 0.25f * std::sin(float(now) * 0.03f);
+            const float r = (6.0f + 18.0f * t) * throb * scale;
+            draw->AddCircleFilled(at, r * 2.2f, IM_COL32(120, 190, 255, int(40 * t)), 24);
+            draw->AddCircleFilled(at, r * 1.3f, IM_COL32(160, 215, 255, int(90 * t)), 24);
+            draw->AddCircleFilled(at, r * 0.6f, IM_COL32(235, 245, 255, int(200 * t)), 16);
+        }
+    }
+    // The bolt: a jagged line, new each frame (it flickers), bright core and pale halo, fading.
+    if (now < bolt_until) {
+        ImVec2 a, b;
+        if (Project(image, from, display, a) && Project(image, to, display, b)) {
+            const float life = 1.0f - float(now - bolt_from) / float(std::max<u64>(bolt_until - bolt_from, 1));
+            const ImVec2 d{b.x - a.x, b.y - a.y};
+            const float length = std::max(std::hypot(d.x, d.y), 1.0f);
+            const ImVec2 n{-d.y / length, d.x / length};
+            const int parts = std::clamp(int(length / (14.0f * scale)), 6, 40);
+            std::vector<ImVec2> path;
+            for (int i = 0; i <= parts; i++) {
+                const float t = float(i) / float(parts);
+                const float sway = (i == 0 || i == parts) ? 0.0f : jitter(rng) * 9.0f * scale;
+                path.push_back({a.x + d.x * t + n.x * sway, a.y + d.y * t + n.y * sway});
+            }
+            const int alpha = int(255 * life);
+            draw->AddPolyline(path.data(), int(path.size()), IM_COL32(110, 170, 255, alpha / 4), 0, 22.0f * scale);
+            draw->AddPolyline(path.data(), int(path.size()), IM_COL32(150, 205, 255, alpha / 2), 0, 9.0f * scale);
+            draw->AddPolyline(path.data(), int(path.size()), IM_COL32(240, 248, 255, alpha), 0, 3.0f * scale);
+            // A fork or two off the main bolt.
+            for (int f = 0; f < 2; f++) {
+                const int from_part = 2 + int(rng() % std::max(parts - 4, 1));
+                ImVec2 p = path[from_part];
+                for (int s = 0; s < 4; s++) {
+                    const ImVec2 q{p.x + (d.x / parts) * 0.8f + n.x * jitter(rng) * 14.0f * scale,
+                                   p.y + (d.y / parts) * 0.8f + n.y * jitter(rng) * 14.0f * scale};
+                    draw->AddLine(p, q, IM_COL32(190, 225, 255, alpha / 2), 1.5f * scale);
+                    p = q;
+                }
+            }
+            draw->AddCircleFilled(a, 16.0f * scale * life, IM_COL32(170, 215, 255, alpha / 2), 20);
+            draw->AddCircleFilled(b, 26.0f * scale * life, IM_COL32(200, 230, 255, alpha / 2), 24);
+            draw->AddCircleFilled(b, 10.0f * scale * life, IM_COL32(250, 252, 255, alpha), 16);
+        }
+    }
+}
+
 } // namespace
+
+void Charge(const float* at, float seconds) {
+    std::scoped_lock guard{g_pulse.lock};
+    std::copy_n(at, 3, g_pulse.charge_at);
+    g_pulse.charge_from = SDL_GetTicks();
+    g_pulse.charge_until = g_pulse.charge_from + u64(seconds * 1000.0f);
+}
+
+void Bolt(const float* from, const float* to, float seconds) {
+    std::scoped_lock guard{g_pulse.lock};
+    std::copy_n(from, 3, g_pulse.from), std::copy_n(to, 3, g_pulse.to);
+    g_pulse.bolt_from = SDL_GetTicks();
+    g_pulse.bolt_until = g_pulse.bolt_from + u64(seconds * 1000.0f);
+    g_pulse.charge_until = 0;
+}
 
 void Draw() {
     const u64 image = ImageBase();
@@ -93,6 +203,10 @@ void Draw() {
     static u64 last_ms = now;
     const float dt = std::clamp(float(now - last_ms) / 1000.0f, 0.0f, 0.1f);
     last_ms = now;
+
+    if (!Screens::Letterboxed()) {
+        DrawPulse(image, draw, display, scale, now);
+    }
 
     // Names and bars along the top, A on the left and B on the right, each bar full toward its
     // own edge of the screen and emptying toward the middle. Not over a cutscene.
