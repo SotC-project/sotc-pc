@@ -417,7 +417,7 @@ static void CvcEffect(const char* name, const float* at, float yaw = 0.0f) {
 /// image+0x30157d0: node +0 left, +0x10 right, +0x19 end marker, +0x20 the descriptor, whose
 /// first word is its name, +0x28 its effect record), walked without changing it: the game's own
 /// lookup 0x68f580 adds an empty record for a name it lacks, which the game later trips on.
-static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false) {
+static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false, u64* found_record = nullptr) {
     const u64 head = *reinterpret_cast<const volatile u64*>(image + 0x30157d0);
     auto* memory = Core::Memory::Instance();
     if (!head || !memory->IsValidMapping(head, 0x30)) {
@@ -441,6 +441,9 @@ static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false) {
         if (!list && record && text && memory->IsValidMapping(text, name.size() + 1) &&
             std::memcmp(reinterpret_cast<const char*>(text), name.data(), name.size()) == 0 &&
             reinterpret_cast<const char*>(text)[name.size()] == 0) {
+            if (found_record) {
+                *found_record = record;
+            }
             return descriptor;
         }
         stack.push_back(u64(*reinterpret_cast<const volatile u64*>(node)));
@@ -452,7 +455,8 @@ static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false) {
 /// Starts a requested effect through the game's effect bridge (re/cvc/fx/SHAKE_PARTICLES.md):
 /// 0x5f5930 builds its transform, 0x690950 starts it; the game ends it itself.
 static void CvcEffectWork(u64 image, const char* name, const float* at, float yaw) {
-    const u64 live = CvcFindEffect(image, name);
+    u64 record = 0;
+    const u64 live = CvcFindEffect(image, name, false, &record);
     if (!live) {
         LOG_INFO(Core, "cvc: effect {} not loaded", name);
         return;
@@ -465,6 +469,18 @@ static void CvcEffectWork(u64 image, const char* name, const float* at, float ya
     const u64 effect = reinterpret_cast<u64(PS4_SYSV_ABI*)(u64, const void*, u64, u64)>(image + 0x690950)(
         live, transform, 0, 0);
     LOG_INFO(Core, "cvc: effect {} at {:.0f} {:.0f} {:.0f}: {:#x}", name, at[0], at[1], at[2], effect);
+    // (Its particle resource, record +0x60: state +0x98 (0xb loaded), resolved +0x20, +0x60, its
+    // loader +0x68; and the game-object resource +0x98 the same way.)
+    static std::unordered_map<std::string, int> told;
+    if (told[name]++ == 0 && record) {
+        const auto q = [](u64 a) { return Core::Memory::Instance()->IsValidMapping(a, 8) ? *reinterpret_cast<const volatile u64*>(a) : 0ull; };
+        for (const u64 at_res : {0x60ull, 0x98ull}) {
+            const u64 res = q(record + at_res);
+            LOG_INFO(Core, "cvc: effect {} resource +{:#x} {:#x}: state {:#x} resolved {:#x} +0x60 {:#x} loader {:#x} +0 {:#x} +8 {:#x} +0x10 {:#x}",
+                     name, at_res, res, res ? u32(q(res + 0x98)) : 0u, res ? q(res + 0x20) : 0, res ? u32(q(res + 0x60)) : 0u,
+                     res ? q(res + 0x68) : 0, res ? q(res) : 0, res ? q(res + 8) : 0, res ? q(res + 0x10) : 0);
+        }
+    }
 }
 
 /// Plays one of the game's sounds by name at a world point (game thread), as its own sound
