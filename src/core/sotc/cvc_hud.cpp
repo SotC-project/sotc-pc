@@ -68,9 +68,13 @@ Side ReadSide(u64 image, u64 entry_slot, u64 manager_slot) {
 
 void Draw() {
     const u64 image = ImageBase();
+    // Frames in a row without the loading cover: the first uncovered frame can still be the
+    // cover's last, so the readout waits for three.
+    static int uncovered = 0;
+    uncovered = Menu::FrameCovered() ? 0 : std::min(uncovered + 1, 3);
     u8 set_up = 0, settled = 0, winner = 0;
     if (!image || !Read(image + SetUp, set_up) || !set_up || !Read(image + CameraSettled, settled) || !settled ||
-        Menu::FrameCovered() || Screens::PauseMenu()) {
+        uncovered < 3 || Screens::PauseMenu()) {
         return;
     }
     Read(image + Winner, winner);
