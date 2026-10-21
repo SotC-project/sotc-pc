@@ -6,11 +6,13 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <array>
 #include <random>
 #include <atomic>
+#include <mutex>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
@@ -167,17 +169,317 @@ struct CvcRays {
     struct MotionRequest {
         std::atomic<u64> object{0};
         u64 motion = 0;
+        float blend = 0.0f; // seconds of crossfade from the pose it had (0x635740's float)
+        int waited = 0; // camera updates it has waited for its colossus's AI turn
     } motions[4];
+    // Effects to start (game thread): an effect's name (static text) at a point.
+    struct EffectRequest {
+        std::atomic<const char*> name{nullptr};
+        float at[4]{};
+    } effects[8];
+    // Sounds to play (game thread): a sound's name (static text) at a point.
+    struct SoundRequest {
+        std::atomic<const char*> name{nullptr};
+        float at[3]{};
+    } sounds[8];
 };
 static CvcRays g_cvc_rays;
 
+static u32 MoveCharacter(u64 object, const float delta[3]);
+static void RotateCharacter(u64 object, float yaw);
+
+/// Colossus vs colossus bodies, moved on the game thread once a frame (CvcRayWork, from the
+/// camera update) so nothing a fight adds to their own animation lands between two frames:
+/// the push of a blow (a velocity that dies away), turning toward the other while it walks or
+/// turns (eased in and out), and two bodies that touch easing apart. cvcbrawl asks for these and
+/// reads back what each one is playing.
+struct CvcBody {
+    std::atomic<u64> object{0};
+    std::mutex lock;
+    float push[2]{};            // knockback velocity, units/s in x and z (lock)
+    float apart[2]{};           // easing apart from the other body, units/s (lock)
+    std::atomic<float> turn{0}; // yaw rate asked for (rad/s, + counter-clockwise from above)
+    float turning = 0.0f;       // yaw rate now, eased toward `turn`
+    // Read back: the motion it plays (static MotionKind record), its frame and last frame.
+    std::atomic<u64> motion{0};
+    std::atomic<float> frame{0}, frames{0};
+    float last[3]{};            // root position the frame before (pops in the log)
+    u64 last_motion = 0;
+};
+static CvcBody g_cvc_body[2];
+// Camera shake of the spectator camera (cvccam): how far it throws the view (units) and when it
+// started (steady clock, seconds).
+static std::atomic<float> g_cvc_shake{0.0f}, g_cvc_shake_at{-10.0f};
+
+// Hit-stop: the game's motion update 0x636650 (rdi the character, xmm0 the frame's time step)
+// runs through CvcMotionThunk, which slows the clock of these two characters by these factors
+// (1: as normal), so a blow freezes both for a moment.
+extern "C" {
+u64 g_cvc_hold_obj[2]{};
+float g_cvc_hold_scale[2]{1.0f, 1.0f};
+u64 g_cvc_motion_back = 0; // image + 0x63665d: the motion update after its replaced prologue
+}
+static std::atomic<s64> g_cvc_hold_until[2]{}; // steady clock ticks the hit-stop lasts until
+
+extern "C" __attribute__((naked)) void CvcMotionThunk() {
+    asm volatile("cmpq g_cvc_hold_obj(%rip), %rdi\n jne 1f\n"
+                 "vmulss g_cvc_hold_scale(%rip), %xmm0, %xmm0\n jmp 2f\n"
+                 "1: cmpq g_cvc_hold_obj+8(%rip), %rdi\n jne 2f\n"
+                 "vmulss g_cvc_hold_scale+4(%rip), %xmm0, %xmm0\n"
+                 // The replaced prologue of 0x636650, then on into it.
+                 "2: push %rbp\n mov %rsp, %rbp\n push %r15\n push %r14\n push %r13\n push %r12\n"
+                 "push %rbx\n jmp *g_cvc_motion_back(%rip)\n");
+}
+
+/// Routes the game's motion update through CvcMotionThunk (once; false if the code there is not
+/// the expected prologue).
+static bool CvcInstallMotionHook(u64 image) {
+    static const u8 prologue[13]{0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53};
+    auto* code = reinterpret_cast<u8*>(image + 0x636650);
+    if (g_cvc_motion_back == image + 0x63665d) {
+        return true;
+    }
+    if (std::memcmp(code, prologue, sizeof(prologue)) != 0) {
+        return false;
+    }
+    g_cvc_motion_back = image + 0x63665d;
+    u8 jump[13]{0x48, 0xb8}; // mov rax, CvcMotionThunk; jmp rax; nop
+    const u64 thunk = reinterpret_cast<u64>(&CvcMotionThunk);
+    std::memcpy(jump + 2, &thunk, 8);
+    jump[10] = 0xff, jump[11] = 0xe0, jump[12] = 0x90;
+    DWORD old = 0;
+    VirtualProtect(code, sizeof(jump), PAGE_EXECUTE_READWRITE, &old);
+    std::memcpy(code, jump, sizeof(jump));
+    VirtualProtect(code, sizeof(jump), old, &old);
+    FlushInstructionCache(GetCurrentProcess(), code, sizeof(jump));
+    return true;
+}
+
+/// Freezes both colossi's animation (factor `scale`) for `ms` milliseconds: the impact of a blow.
+static void CvcHitStop(u64 a, u64 b, int ms, float scale) {
+    const s64 until = (std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)).time_since_epoch().count();
+    g_cvc_hold_scale[0] = scale, g_cvc_hold_scale[1] = scale;
+    g_cvc_hold_obj[0] = a, g_cvc_hold_obj[1] = b;
+    g_cvc_hold_until[0] = until, g_cvc_hold_until[1] = until;
+}
+
+/// Asks for one of the game's effects (by its file name, e.g. "npe/knight_metal_react.npe";
+/// static text) at a point.
+static void CvcEffect(const char* name, const float* at) {
+    for (auto& slot : g_cvc_rays.effects) {
+        if (slot.name.load() == nullptr) {
+            std::memcpy(slot.at, at, 12);
+            slot.at[3] = 1.0f;
+            const char* expected = nullptr;
+            if (slot.name.compare_exchange_strong(expected, name)) {
+                return;
+            }
+        }
+    }
+}
+
+/// The live effect descriptor registered under `name` (the game's effect map, a tree at
+/// image+0x30157d0: node +0 left, +0x10 right, +0x19 end marker, +0x20 the descriptor, whose
+/// first word is its name, +0x28 its effect record), walked without changing it: the game's own
+/// lookup 0x68f580 adds an empty record for a name it lacks, which the game later trips on.
+static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false) {
+    const u64 head = *reinterpret_cast<const volatile u64*>(image + 0x30157d0);
+    auto* memory = Core::Memory::Instance();
+    if (!head || !memory->IsValidMapping(head, 0x30)) {
+        return 0;
+    }
+    std::vector<u64> stack{*reinterpret_cast<const volatile u64*>(head + 8)};
+    for (int seen = 0; !stack.empty() && seen < 8192; seen++) {
+        const u64 node = stack.back();
+        stack.pop_back();
+        if (!node || node == head || !memory->IsValidMapping(node, 0x30) ||
+            *reinterpret_cast<const volatile u8*>(node + 0x19)) {
+            continue;
+        }
+        const u64 descriptor = *reinterpret_cast<const volatile u64*>(node + 0x20);
+        const u64 record = *reinterpret_cast<const volatile u64*>(node + 0x28);
+        const u64 text = descriptor && memory->IsValidMapping(descriptor, 8)
+                             ? *reinterpret_cast<const volatile u64*>(descriptor) : 0;
+        if (list && text && memory->IsValidMapping(text, 8)) {
+            LOG_INFO(Core, "cvc: effect loaded: {} ({:#x})", reinterpret_cast<const char*>(text), record);
+        }
+        if (!list && record && text && memory->IsValidMapping(text, name.size() + 1) &&
+            std::memcmp(reinterpret_cast<const char*>(text), name.data(), name.size()) == 0 &&
+            reinterpret_cast<const char*>(text)[name.size()] == 0) {
+            return descriptor;
+        }
+        stack.push_back(u64(*reinterpret_cast<const volatile u64*>(node)));
+        stack.push_back(u64(*reinterpret_cast<const volatile u64*>(node + 0x10)));
+    }
+    return 0;
+}
+
+/// Starts a requested effect through the game's effect bridge (re/cvc/fx/SHAKE_PARTICLES.md):
+/// 0x5f5930 builds its transform, 0x690950 starts it; the game ends it itself.
+static void CvcEffectWork(u64 image, const char* name, const float* at) {
+    const u64 live = CvcFindEffect(image, name);
+    if (!live) {
+        LOG_INFO(Core, "cvc: effect {} not loaded", name);
+        return;
+    }
+    alignas(16) u8 transform[0x40]{};
+    alignas(16) const float rotation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    alignas(16) const float position[4]{at[0], at[1], at[2], 1.0f};
+    reinterpret_cast<void(PS4_SYSV_ABI*)(void*, const float*, const float*)>(image + 0x5f5930)(transform, rotation,
+                                                                                              position);
+    const u64 effect = reinterpret_cast<u64(PS4_SYSV_ABI*)(u64, const void*, u64, u64)>(image + 0x690950)(
+        live, transform, 0, 0);
+    LOG_INFO(Core, "cvc: effect {} at {:.0f} {:.0f} {:.0f}: {:#x}", name, at[0], at[1], at[2], effect);
+}
+
+/// Plays one of the game's sounds by name at a world point (game thread), as its own sound
+/// emitters do (re/cvc/fx/SOUND.md): PlayNamedSound 0xa5fb70 paused, the point through the sound
+/// space matrix at image+0x160430c (3x4, as 0x6b383a applies it), SetPosition 0xa5fc70, then
+/// SetPaused 0xa5fb10 off. The names are the game's own (logged with soundlog): knight_body*,
+/// kame_stone_*, ktvo_growl*, ...; an unknown one plays nothing.
+static void CvcSoundWork(u64 image, const char* name, const float* at) {
+    const u64 system = *reinterpret_cast<const volatile u64*>(image + 0x32f8ff0);
+    if (!system) {
+        return;
+    }
+    const u32 handle = reinterpret_cast<u32(PS4_SYSV_ABI*)(u64, const char*, bool)>(image + 0xa5fb70)(system, name, true);
+    if (handle == 0xffffffffu) {
+        LOG_INFO(Core, "cvc: sound {} not found", name);
+        return;
+    }
+    const auto* m = reinterpret_cast<const float*>(image + 0x160430c);
+    alignas(16) float position[4]{}, velocity[4]{};
+    for (int c = 0; c < 3; c++) {
+        position[c] = at[0] * m[c] + at[1] * m[3 + c] + at[2] * m[6 + c] + m[9 + c];
+    }
+    reinterpret_cast<void(PS4_SYSV_ABI*)(u64, u32, const float*, const float*)>(image + 0xa5fc70)(system, handle, position,
+                                                                                                velocity);
+    reinterpret_cast<void(PS4_SYSV_ABI*)(u64, u32, bool)>(image + 0xa5fb10)(system, handle, false);
+    LOG_INFO(Core, "cvc: sound {} at {:.0f} {:.0f} {:.0f}: {:#x}", name, at[0], at[1], at[2], handle);
+}
+
+static void CvcSound(const char* name, const float* at) {
+    for (auto& slot : g_cvc_rays.sounds) {
+        if (slot.name.load() == nullptr) {
+            std::memcpy(slot.at, at, 12);
+            const char* expected = nullptr;
+            if (slot.name.compare_exchange_strong(expected, name)) {
+                return;
+            }
+        }
+    }
+}
+
+/// The effects of a blow landing at `point` on `victim` (its strength 0.5-1.6), the game's own:
+/// at the contact, Gaius's armour struck (metal and chips) or Basaran's stone shell (chips), and
+/// smoke; dust thrown up from the ground below.
+static void CvcImpact(u64 image, u64 victim, bool armoured, const float* point, const float* ground,
+                      float strength, bool heavy) {
+    LOG_INFO(Core, "cvcbrawl: impact at {:.0f} {:.0f} {:.0f}, strength {:.2f}{}", point[0], point[1], point[2],
+             strength, heavy ? ", heavy" : "");
+    if (armoured) {
+        CvcEffect("npe/knight_metal_react.npe", point);
+        CvcEffect("npe/knight_impact_smoke.npe", point);
+        if (heavy) {
+            CvcEffect("npe/knight_metal_chip.npe", point);
+        }
+    } else {
+        CvcEffect("npe/tts_add_chip.npe", point);
+        CvcEffect("npe/tts_impact_smoke.npe", point);
+        if (heavy) {
+            CvcEffect("npe/knight_broken_chip2.npe", point);
+        }
+    }
+    if (heavy) {
+        CvcEffect("npe/knight_smoke.npe", ground);
+    }
+    // The crash of it (on Gaius's armour or Basaran's stone), stones falling, and the one hit
+    // crying out (their own voices: ktvo Gaius, kmvo Basaran).
+    static std::mt19937 rng{std::random_device{}()};
+    static const char* const armour[]{"knight_body1", "knight_body3", "knight_body5", "knight_body8"};
+    static const char* const stone[]{"kame_stone_2", "kame_stone_4", "kame_stone_6"};
+    static const char* const pebbles[]{"kame_stone_s1", "kame_stone_s3", "kame_stone_s5"};
+    static const char* const growl_knight[]{"ktvo_growl1", "ktvo_growl2", "ktvo_growl3"};
+    static const char* const growl_kame[]{"kmvo_growl4", "kmvo_growl5", "kmvo_growl6"};
+    CvcSound(armoured ? armour[rng() % 4] : stone[rng() % 3], point);
+    CvcSound(pebbles[rng() % 3], ground);
+    if (heavy) {
+        CvcSound(armoured ? growl_knight[rng() % 3] : growl_kame[rng() % 3], point);
+    }
+}
+
+static void CvcBodyWork(u64 image) {
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point before = Clock::now();
+    const float dt = std::clamp(std::chrono::duration<float>(Clock::now() - before).count(), 0.0f, 0.05f);
+    before = Clock::now();
+    const s64 now = Clock::now().time_since_epoch().count();
+    for (int k = 0; k < 2; k++) {
+        if (g_cvc_hold_obj[k] && now > g_cvc_hold_until[k].load()) {
+            g_cvc_hold_obj[k] = 0, g_cvc_hold_scale[k] = 1.0f;
+        }
+    }
+    for (int k = 0; k < 2; k++) {
+        CvcBody& body = g_cvc_body[k];
+        const u64 object = body.object.load();
+        if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
+            continue;
+        }
+        // What it plays: component +0x260 the motion, +0x274 its frame; 0x6049e0 its last frame.
+        const u64 component = object + 0x120;
+        const u64 motion = *reinterpret_cast<const volatile u64*>(component + 0x260);
+        body.motion = motion ? motion - image : 0;
+        body.frame = *reinterpret_cast<const volatile float*>(component + 0x274);
+        body.frames = motion ? float(reinterpret_cast<s32 PS4_SYSV_ABI (*)(u64)>(image + 0x6049e0)(motion + 0x128))
+                             : 0.0f;
+        if (dt <= 0.0f) {
+            continue;
+        }
+        float delta[3]{};
+        {
+            std::scoped_lock guard{body.lock};
+            // A blow's push dies away over about a third of a second (friction on the ground).
+            const float keep = std::exp(-dt / 0.3f);
+            for (int c = 0; c < 2; c++) {
+                delta[c * 2] = (body.push[c] + body.apart[c]) * dt;
+                body.push[c] *= keep;
+                if (std::abs(body.push[c]) < 0.05f) {
+                    body.push[c] = 0.0f;
+                }
+            }
+        }
+        if (delta[0] != 0.0f || delta[2] != 0.0f) {
+            MoveCharacter(object, delta);
+        }
+        // Turning eased toward the rate asked for (up to 2 rad/s² either way): no sudden swing.
+        const float want = body.turn.load();
+        body.turning += std::clamp(want - body.turning, -2.0f * dt, 2.0f * dt);
+        if (std::abs(body.turning) > 0.001f) {
+            RotateCharacter(object, body.turning * dt);
+        }
+        // A pop in the log: the root jumped more than a walk does in a frame.
+        const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
+        const float moved = std::hypot(at[0] - body.last[0], at[2] - body.last[2]);
+        if (body.last_motion && moved > 2.0f && moved < 400.0f) {
+            LOG_INFO(Core, "cvcbody: {} root jumped {:.1f} in a frame (motion {:#x}, was {:#x}, ours {:.1f})",
+                     k ? "B" : "A", moved, body.motion.load(), body.last_motion,
+                     std::hypot(delta[0], delta[2]));
+        }
+        body.last[0] = at[0], body.last[1] = at[1], body.last[2] = at[2];
+        body.last_motion = body.motion.load() ? body.motion.load() : 1;
+    }
+}
+
 /// Asks for a motion to be started on a colossus at the next camera update (game thread).
-static void CvcPlayMotion(u64 image, u64 object, u64 motion) {
+/// `blend`: seconds it crossfades from the pose it had (the game's own blend, component +0x980..;
+/// 0: it snaps to the new motion's first frame).
+static void CvcPlayMotion(u64 image, u64 object, u64 motion, float blend = 0.0f) {
     g_cvc_rays.image = image;
     for (auto& slot : g_cvc_rays.motions) {
         u64 expected = 0;
         if (slot.object.load() == 0) {
             slot.motion = image + motion;
+            slot.blend = blend;
             if (slot.object.compare_exchange_strong(expected, object)) {
                 return;
             }
@@ -185,28 +487,140 @@ static void CvcPlayMotion(u64 image, u64 object, u64 motion) {
     }
 }
 
-extern "C" PS4_SYSV_ABI void CvcRayWork() {
-    auto& r = g_cvc_rays;
-    for (auto& request : r.motions) {
-        const u64 object = request.object.load();
-        if (!object || !r.image || !request.motion) {
-            continue;
-        }
-        // As the game's motion start 0x6179f0 does once it has resolved the motion (its callers
-        // first mark the AI workspace's +0x1648): root motion 0x634600 / 0x634560, then 0x635740.
+/// Starts a requested motion on a colossus (game thread).
+static void CvcStartMotion(CvcRays& r, CvcRays::MotionRequest& request, u64 object) {
         const u64 component = object + 0x120;
+        const u64 motion = request.motion;
         const u64 workspace = reinterpret_cast<u64 PS4_SYSV_ABI (*)(u64)>(r.image + 0x681ce0)(object);
         if (workspace) {
             *reinterpret_cast<volatile u8*>(workspace + 0x1648) = 1;
         }
-        const u64 motion = request.motion;
+        // As the game's motion start 0x6179f0 does once it has resolved the motion (its callers
+        // first mark the AI workspace's +0x1648): root motion 0x634600 / 0x634560, then 0x635740.
+        // (Its mode-0 path instead, 0x63c2d0 and 0x62ea70 with the motion put in, crashed later
+        // in the object update, 0x61af2f.)
         reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, u64, s32, float)>(r.image + 0x634600)(
             component + 0x10bc, object, motion, -1, 0.0f);
         reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, u64)>(r.image + 0x634560)(component, object, motion);
-        reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, float)>(r.image + 0x635740)(component, motion, 0.0f);
-        LOG_INFO(Core, "cvc: motion {:#x} on {:#x} (now {:#x})", motion - r.image, object,
-                 *reinterpret_cast<const volatile u64*>(component + 0x260) - r.image);
+        // Its float: over how many of the new motion's frames (30 a second) it fades in over the
+        // pose it had (0x635210 sets the blend +0x980, 0x63b7b0 runs it while +0x6ff is set).
+        reinterpret_cast<void PS4_SYSV_ABI (*)(u64, u64, float)>(r.image + 0x635740)(component, motion,
+                                                                                 request.blend * 30.0f);
+        LOG_INFO(Core, "cvc: motion {:#x} on {:#x} (now {:#x}), blend {:.2f} s over {:.1f} frames (+0x6ff {})",
+                 motion - r.image, object, *reinterpret_cast<const volatile u64*>(component + 0x260) - r.image,
+                 request.blend, *reinterpret_cast<const volatile float*>(component + 0x980),
+                 *reinterpret_cast<const volatile u8*>(component + 0x6ff));
         request.object.store(0);
+}
+
+/// A colossus kept out of its AI, at the moment its AI would have run (contact_patch.py HELD,
+/// through CvcAiThunk): motions asked for it start here, before the frame's animation update
+/// (started at the camera update, after it, the next picture showed a broken pose).
+extern "C" PS4_SYSV_ABI void CvcAiWork(u64 object) {
+    auto& r = g_cvc_rays;
+    for (auto& request : r.motions) {
+        if (request.object.load() == object && r.image && request.motion) {
+            CvcStartMotion(r, request, object);
+        }
+    }
+}
+
+extern "C" __attribute__((naked)) void CvcAiThunk() {
+    asm volatile("pushfq\n push %rax\n push %rcx\n push %rdx\n push %rsi\n push %rdi\n"
+                 "push %r8\n push %r9\n push %r10\n push %r11\n push %rbp\n"
+                 "mov %rsp, %rbp\n and $-32, %rsp\n sub $512, %rsp\n"
+                 "vmovups %ymm0, 0(%rsp)\n vmovups %ymm1, 32(%rsp)\n vmovups %ymm2, 64(%rsp)\n"
+                 "vmovups %ymm3, 96(%rsp)\n vmovups %ymm4, 128(%rsp)\n vmovups %ymm5, 160(%rsp)\n"
+                 "vmovups %ymm6, 192(%rsp)\n vmovups %ymm7, 224(%rsp)\n vmovups %ymm8, 256(%rsp)\n"
+                 "vmovups %ymm9, 288(%rsp)\n vmovups %ymm10, 320(%rsp)\n vmovups %ymm11, 352(%rsp)\n"
+                 "vmovups %ymm12, 384(%rsp)\n vmovups %ymm13, 416(%rsp)\n vmovups %ymm14, 448(%rsp)\n"
+                 "vmovups %ymm15, 480(%rsp)\n"
+                 "call CvcAiWork\n"
+                 "vmovups 0(%rsp), %ymm0\n vmovups 32(%rsp), %ymm1\n vmovups 64(%rsp), %ymm2\n"
+                 "vmovups 96(%rsp), %ymm3\n vmovups 128(%rsp), %ymm4\n vmovups 160(%rsp), %ymm5\n"
+                 "vmovups 192(%rsp), %ymm6\n vmovups 224(%rsp), %ymm7\n vmovups 256(%rsp), %ymm8\n"
+                 "vmovups 288(%rsp), %ymm9\n vmovups 320(%rsp), %ymm10\n vmovups 352(%rsp), %ymm11\n"
+                 "vmovups 384(%rsp), %ymm12\n vmovups 416(%rsp), %ymm13\n vmovups 448(%rsp), %ymm14\n"
+                 "vmovups 480(%rsp), %ymm15\n"
+                 "mov %rbp, %rsp\n pop %rbp\n pop %r11\n pop %r10\n pop %r9\n pop %r8\n"
+                 "pop %rdi\n pop %rsi\n pop %rdx\n pop %rcx\n pop %rax\n popfq\n ret\n");
+}
+
+// Test aid (soundlog): the names the game asks its sound system for (PlayNamedSound 0xa5fb70,
+// rsi the name), logged once each, to find a colossus's own impact and voice sounds by name.
+extern "C" {
+u64 g_cvc_sound_back = 0; // image + 0xa5fb7d: past the replaced prologue
+}
+extern "C" PS4_SYSV_ABI void CvcSoundName(u64, const char* name) {
+    static std::mutex lock;
+    static std::unordered_map<std::string, int> seen;
+    if (!name || !Core::Memory::Instance()->IsValidMapping(reinterpret_cast<u64>(name), 1)) {
+        return;
+    }
+    std::scoped_lock guard{lock};
+    if (seen.size() < 4000 && seen[name]++ == 0) {
+        LOG_INFO(Core, "soundlog: {}", name);
+    }
+}
+
+extern "C" __attribute__((naked)) void CvcSoundNameThunk() {
+    asm volatile("pushfq\n push %rax\n push %rcx\n push %rdx\n push %rsi\n push %rdi\n"
+                 "push %r8\n push %r9\n push %r10\n push %r11\n push %rbp\n"
+                 "mov %rsp, %rbp\n and $-32, %rsp\n sub $512, %rsp\n"
+                 "vmovups %ymm0, 0(%rsp)\n vmovups %ymm1, 32(%rsp)\n vmovups %ymm2, 64(%rsp)\n"
+                 "vmovups %ymm3, 96(%rsp)\n vmovups %ymm4, 128(%rsp)\n vmovups %ymm5, 160(%rsp)\n"
+                 "vmovups %ymm6, 192(%rsp)\n vmovups %ymm7, 224(%rsp)\n vmovups %ymm8, 256(%rsp)\n"
+                 "vmovups %ymm9, 288(%rsp)\n vmovups %ymm10, 320(%rsp)\n vmovups %ymm11, 352(%rsp)\n"
+                 "vmovups %ymm12, 384(%rsp)\n vmovups %ymm13, 416(%rsp)\n vmovups %ymm14, 448(%rsp)\n"
+                 "vmovups %ymm15, 480(%rsp)\n"
+                 "call CvcSoundName\n"
+                 "vmovups 0(%rsp), %ymm0\n vmovups 32(%rsp), %ymm1\n vmovups 64(%rsp), %ymm2\n"
+                 "vmovups 96(%rsp), %ymm3\n vmovups 128(%rsp), %ymm4\n vmovups 160(%rsp), %ymm5\n"
+                 "vmovups 192(%rsp), %ymm6\n vmovups 224(%rsp), %ymm7\n vmovups 256(%rsp), %ymm8\n"
+                 "vmovups 288(%rsp), %ymm9\n vmovups 320(%rsp), %ymm10\n vmovups 352(%rsp), %ymm11\n"
+                 "vmovups 384(%rsp), %ymm12\n vmovups 416(%rsp), %ymm13\n vmovups 448(%rsp), %ymm14\n"
+                 "vmovups 480(%rsp), %ymm15\n"
+                 "mov %rbp, %rsp\n pop %rbp\n pop %r11\n pop %r10\n pop %r9\n pop %r8\n"
+                 "pop %rdi\n pop %rsi\n pop %rdx\n pop %rcx\n pop %rax\n popfq\n push %rbp\n mov %rsp, %rbp\n push %r15\n push %r14\n push %rbx\n push %rax\n mov %rsi, %rbx\n jmp *g_cvc_sound_back(%rip)\n");
+}
+
+extern "C" PS4_SYSV_ABI void CvcRayWork() {
+    auto& r = g_cvc_rays;
+    if (r.image) {
+        CvcBodyWork(r.image);
+    }
+    // Motions on a colossus whose AI is held start at its AI's turn (CvcAiWork); any other, or
+    // one still waiting after a few frames (its AI not reached), here.
+    for (auto& request : r.motions) {
+        const u64 object = request.object.load();
+        if (!object || !r.image || !request.motion) {
+            request.waited = 0;
+            continue;
+        }
+        const bool held = object == *reinterpret_cast<const volatile u64*>(r.image + 0x1593ae0) ||
+                          object == *reinterpret_cast<const volatile u64*>(r.image + 0x1593b48);
+        if (held && ++request.waited < 4) {
+            continue;
+        }
+        if (held) {
+            LOG_INFO(Core, "cvc: motion {:#x} on {:#x} started late (no AI turn)", request.motion - r.image, object);
+        }
+        request.waited = 0;
+        CvcStartMotion(r, request, object);
+    }
+    for (auto& request : r.sounds) {
+        const char* name = request.name.load();
+        if (name && r.image) {
+            CvcSoundWork(r.image, name, request.at);
+            request.name.store(nullptr);
+        }
+    }
+    for (auto& request : r.effects) {
+        const char* name = request.name.load();
+        if (name && r.image) {
+            CvcEffectWork(r.image, name, request.at);
+            request.name.store(nullptr);
+        }
     }
     if (r.state.load() != 1 || !r.image) {
         return;
@@ -497,6 +911,25 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         } else if (action == "chal=win" || action == "chal=dead") {
             // Test: end a challenge run.
             Sotc::Challenge::DebugFinish(action == "chal=dead");
+        } else if (action == "soundlog") {
+            // Test: log the name of every sound the game plays (CvcSoundName), once each.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            static const u8 prologue[13]{0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x50, 0x48, 0x89, 0xf3};
+            auto* code = reinterpret_cast<u8*>(image + 0xa5fb70);
+            if (image && std::memcmp(code, prologue, sizeof(prologue)) == 0) {
+                g_cvc_sound_back = image + 0xa5fb7d;
+                u8 jump[13]{0x48, 0xb8};
+                const u64 thunk = reinterpret_cast<u64>(&CvcSoundNameThunk);
+                std::memcpy(jump + 2, &thunk, 8);
+                jump[10] = 0xff, jump[11] = 0xe0, jump[12] = 0x90;
+                DWORD old = 0;
+                VirtualProtect(code, sizeof(jump), PAGE_EXECUTE_READWRITE, &old);
+                std::memcpy(code, jump, sizeof(jump));
+                VirtualProtect(code, sizeof(jump), old, &old);
+                FlushInstructionCache(GetCurrentProcess(), code, sizeof(jump));
+                LOG_INFO(Core, "soundlog: on");
+            }
         } else if (action == "cvcrot") {
             // Test: yaw-only unit quaternions inside colossi A and B next to their root bone's
             // heading, to find where a character's heading is kept (RotateCharacter).
@@ -1393,7 +1826,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Close (the arena is foggy): both in view while fighting, the body after.
                         const float reach = winner == 1 || winner == 2
                                                 ? std::max(dist, 60.0f)
-                                                : std::clamp(0.9f * sep + 35.0f, dist, 160.0f); // both in the picture, not out of the arena
+                                                : std::clamp(1.3f * sep + 50.0f, dist, 170.0f); // both whole in the picture, not out of the arena
                         if (sep < 200.0f) {
                             // They have closed in: the fight has begun (cvc_arena.sh FILM starts here).
                             *reinterpret_cast<volatile u8*>(image + 0x1593b60) = 1;
@@ -1458,7 +1891,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const float overhead_radius = radius, overhead_rise = rise;
                         if (tested) {
                             // Clear, near the current angle, and side-on to the line between them
-                            // (from along it one colossus hides the other).
+                            // (from along it one colossus hides the other, and a blow that lands
+                            // reads as a gap).
                             const float axis = std::atan2(pb[2] - pa[2], pb[0] - pa[0]);
                             // After a knockout: from the side away from the winner, which would
                             // otherwise stand between the camera and the body.
@@ -1470,7 +1904,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // A fully clear line counts double: a spot parked in front of rock
                                 // shows that rock in the corner of the picture.
                                 return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
-                                       (after ? 0.8f * std::cos(at - away) : 0.5f * std::abs(std::cos(at - axis))) -
+                                       (after ? 0.8f * std::cos(at - away) : 1.5f * std::abs(std::cos(at - axis))) -
                                        (visible[k] ? 0.0f : 1.5f);
                             };
                             int pick = 0;
@@ -1543,7 +1977,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         cam[0] = mid[0] + reach_now * std::cos(angle), cam[1] = mid[1] + rise_now;
                         cam[2] = mid[2] + reach_now * std::sin(angle);
-                        const float want_look[3]{mid[0], mid[1] + 12.0f, mid[2]};
+                        const float want_look[3]{mid[0], mid[1] + 6.0f, mid[2]};
                         const float ease = placed ? 0.03f : 1.0f;
                         for (int k = 0; k < 3; k++) {
                             look[k] += (want_look[k] - look[k]) * ease;
@@ -1584,14 +2018,32 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 rise_now = cam[1] - mid[1];
                             }
                         }
-                        float dir[3]{look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]};
+                        // A heavy blow shakes the view: the eye and, less, the point looked at move
+                        // by a few overlapping wobbles that die away in about half a second.
+                        float eye[3]{cam[0], cam[1], cam[2]}, at[3]{look[0], look[1], look[2]};
+                        {
+                            const float t = std::chrono::duration<float>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count() -
+                                g_cvc_shake_at.load();
+                            const float amount = t >= 0.0f && t < 1.5f ? g_cvc_shake.load() * std::exp(-t / 0.22f) : 0.0f;
+                            if (amount > 0.01f) {
+                                const float w[3]{std::sin(t * 61.0f) + 0.5f * std::sin(t * 97.0f + 1.3f),
+                                                 std::sin(t * 73.0f + 0.7f) + 0.5f * std::sin(t * 113.0f),
+                                                 std::sin(t * 67.0f + 2.1f) + 0.5f * std::sin(t * 89.0f + 0.4f)};
+                                for (int c = 0; c < 3; c++) {
+                                    eye[c] += amount * w[c];
+                                    at[c] += amount * 0.4f * w[(c + 1) % 3];
+                                }
+                            }
+                        }
+                        float dir[3]{at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
                         const float length = std::max(std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] +
                                                                 dir[2] * dir[2]), 0.001f);
                         for (float& c : dir) {
                             c /= length;
                         }
                         float* out = pose[which ^= 1];
-                        const float values[15]{cam[0], cam[1], cam[2], 1.0f, look[0], look[1], look[2], 1.0f,
+                        const float values[15]{eye[0], eye[1], eye[2], 1.0f, at[0], at[1], at[2], 1.0f,
                                                dir[0], dir[1], dir[2], 0.0f, std::atan2(dir[0], dir[2]),
                                                std::asin(dir[1]), length};
                         std::memcpy(out, values, sizeof(values));
@@ -1830,27 +2282,38 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         before[k].swap(now[k]);
                         bones(objects[k], now[k]);
                     }
-                    // Their own moves (per colossus: attack motions with how long each lasts, hit
-                    // reactions, reach). One attack at a time: a colossus within its reach of the
-                    // other plays one of its attacks with its AI held (cave 0x1593ae0), and only
-                    // that attack's blow, landing on the other's body, counts; the one hit plays
-                    // one of its own hit reactions (AI held in 0x1593b48, free until a knockout).
+                    // Their own moves, per colossus (static MotionKind records; ms: the longest one
+                    // lasts). Once the fight is placed both are kept out of their AI (caves
+                    // 0x1593ae0 A, 0x1593b48 B; contact_patch.py), so all they do is these, each one
+                    // of their own animations: standing, turning on the spot, walking up, an attack;
+                    // hit, a flinch chosen by where the blow landed and, from a heavy blow, stepping
+                    // back, with a push that dies away (CvcBodyWork).
                     struct Moves {
-                        std::vector<std::pair<u64, int>> attacks, reactions; // motion, ms
-                        float reach = 0.0f;
-                        u64 walk = 0; // to close in first (its AI stops short of the other's body)
+                        std::vector<std::pair<u64, int>> attacks;
+                        std::vector<u64> front, high, back; // flinches: hit from the front, on the head, from behind
+                        float reach = 0.0f;   // closes in on the other from at most this far
+                        u64 walk = 0;         // to close in
                         float strike = 28.0f; // nearest bones of the two at most this far to strike
                         int forward = 1;      // root bone axis it faces along (0 x, 1 y, 2 z), negative: -axis
                         u64 turn_left = 0, turn_right = 0; // its turns on the spot
-                        float swing = 0.0f; // a striking bone at least this fast (units/s); 0: the set speed
+                        float swing = 0.0f;   // a striking bone at least this fast (units/s); 0: the set speed
+                        u64 idle = 0;         // standing
+                        u64 retreat = 0;      // stepping back
+                        float mass = 1.0f;    // how hard blows push it (more: less)
+                        float aim = 0.95f;    // how squarely (cosine) it faces the other to strike
                     };
                     static const std::unordered_map<int, Moves> kinds{
-                        {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},          // Knight_attack_1 (slam), _2
-                             {{0x1d3cd40, 1500}, {0x1d3cf90, 1500}}, 250.0f,  // chest / back damage; closes in from anywhere
-                             0x1d38340, 10.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f}},     // Knight_walk; close; +y; Knight_Standing_*_rotation
+                        // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
+                        // damage; Knight_walk; Knight_Standing_left/right_rotation; Knight_Standing;
+                        // Knight_retreat.
+                        {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
+                             {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
+                             250.0f, 0x1d38340, 6.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f}}, // a wide sword sweep
+                        // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
+                        // Turtle_Standing_left/right_rotation_1; Turtle_Standing; Turtle_retreat_1.
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}, {0x1d59920, 3000}, {0x1d59dc0, 3000}},
-                             {{0x1d5a4b0, 2500}}, 250.0f, 0x1d553c0, 8.0f, -2, 0x1d54f20, 0x1d54a80,
-                             30.0f}} // its hand slams are slow, // hand attacks; shudder; Turtle_walking_1; -z
+                             {0x1d5a4b0}, {0x1d5a4b0}, {0x1d5a4b0},
+                             250.0f, 0x1d553c0, 5.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0x1d561a0, 1.7f, 0.9f}}, // slams land in front
                     };
                     const u64 table = q(image + 0x16d21f8 + 0x20);
                     const auto kind_of = [&](int k) -> const Moves* {
@@ -1858,25 +2321,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto it = kinds.find(entry >= table ? int((entry - table) / 0x1e8) : -1);
                         return it == kinds.end() ? nullptr : &it->second;
                     };
-                    static int attacking = -1, approaching = -1;
+                    enum class Act { Idle, Turn, Walk, Attack, Flinch, Retreat };
+                    struct Fighter {
+                        Act act = Act::Idle;
+                        u64 motion = 0;
+                        Clock::time_point since, until;
+                        bool heavy = false; // a flinch followed by stepping back
+                    };
+                    static Fighter fighter[2];
+                    static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
-                    static Clock::time_point approach_until;
                     static bool landed = false;
-                    static Clock::time_point attack_from, attack_until, next_attack = Clock::now();
+                    static Clock::time_point attack_from, next_attack = Clock::now();
                     static std::mt19937 rng{std::random_device{}()};
                     const bool over = *reinterpret_cast<const volatile u8*>(image + 0x1593efb) != 0;
                     const auto* ra = reinterpret_cast<const volatile float*>(objects[0] + 0x130);
                     const auto* rb = reinterpret_cast<const volatile float*>(objects[1] + 0x130);
-                    const float apart = std::hypot(ra[0] - rb[0], ra[2] - rb[2]);
-                    auto* held = reinterpret_cast<volatile u64*>(image + 0x1593ae0);
-                    if (attacking >= 0 && Clock::now() > attack_until) {
-                        if (*held == objects[attacking]) {
-                            *held = 0;
-                        }
-                        attacking = -1;
-                        next_attack = Clock::now() + std::chrono::milliseconds(300 + rng() % 600);
+                    // The bodies' frame work only once the fight is placed (before, B can be a stand-in
+                    // the game is tearing down).
+                    for (int k = 0; k < 2; k++) {
+                        g_cvc_body[k].object = over || !cvc_placed ? g_cvc_body[k].object.load() : objects[k];
                     }
-                    // Bodies apart: the nearest two bones (computed below for the contact check).
+                    // Bodies apart: the nearest two bones.
                     float closest = 1e9f;
                     for (const auto& p : now[0]) {
                         for (const auto& t : now[1]) {
@@ -1884,7 +2350,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                     }
                     // How squarely k faces the other (cosine) and to which side the other is (cross
-                    // product sign), from its root bone's forward axis.
+                    // product sign, > 0: to its left), from its root bone's forward axis.
                     const auto face = [&](int k, float& cosine, float& side) {
                         const Moves* moves = kind_of(k);
                         const u64 mats = moves ? q(objects[k] + 0x120 + 0x198) : 0;
@@ -1904,134 +2370,187 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         side = fx * tz - fz * tx;
                         return true;
                     };
-                    // Closing in: the attacker walks on (its own walk) until near enough to strike.
-                    static float approach_start[2];
-                    // Steering: while it walks, turns on the spot or winds up an attack of ours, it is
-                    // turned toward the other a little each tick (its heading, in step with the motion
-                    // it plays), up to `rate` radians a second.
+                    // Turning toward the other while it turns, walks or winds up (eased on the game
+                    // thread), at most `rate` rad/s, slower as it comes round.
                     const auto steer = [&](int k, float rate) {
                         float cosine = 0.0f, side = 0.0f;
-                        if (!face(k, cosine, side) || cosine > 0.995f) {
+                        if (!face(k, cosine, side)) {
+                            g_cvc_body[k].turn = 0.0f;
                             return;
                         }
-                        const float step = std::min(rate * dt, std::acos(std::clamp(cosine, -1.0f, 1.0f)));
-                        RotateCharacter(objects[k], side > 0.0f ? step : -step); // side > 0: the other is to its left
+                        const float angle = std::acos(std::clamp(cosine, -1.0f, 1.0f));
+                        const float speed = std::min(rate, angle * 1.5f);
+                        g_cvc_body[k].turn = side > 0.0f ? speed : -speed;
                     };
-                    static int turning = -1;
-                    static Clock::time_point turn_until;
-                    if (approaching >= 0 && !over) {
-                        steer(approaching, 0.7f);
-                    }
-                    if (attacking >= 0 && !over && Clock::now() < attack_from + std::chrono::milliseconds(500)) {
-                        steer(attacking, 0.7f);
-                    }
-                    if (approaching >= 0 && (closest < (kind_of(approaching) ? kind_of(approaching)->strike : 28.0f) ||
-                                             Clock::now() > approach_until || over)) {
-                        const int k = approaching;
-                        {
-                            // Facing (test): how the root moved during the walk against the root bone's axes.
-                            const auto* r = reinterpret_cast<const volatile float*>(objects[k] + 0x130);
-                            const u64 mats = q(objects[k] + 0x120 + 0x198);
-                            float m[12]{};
-                            SIZE_T got = 0;
-                            if (mats) {
-                                ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(mats), m, sizeof(m), &got);
-                            }
-                            LOG_INFO(Core, "cvcbrawl: {} walked {:.1f} {:.1f}; root axes x({:.2f} {:.2f} {:.2f}) "
-                                     "y({:.2f} {:.2f} {:.2f}) z({:.2f} {:.2f} {:.2f})", k ? "B" : "A",
-                                     r[0] - approach_start[0], r[2] - approach_start[1], m[0], m[1], m[2], m[4], m[5],
-                                     m[6], m[8], m[9], m[10]);
+                    // Crossfade per move: standing, walking and turning ease in; an attack and a
+                    // flinch come in quicker.
+                    const auto play = [&](int k, u64 motion, Act act, int ms) {
+                        const float blend = act == Act::Attack ? 0.2f : act == Act::Flinch ? 0.12f
+                                          : act == Act::Idle ? 0.4f : 0.3f;
+                        CvcPlayMotion(image, objects[k], motion, blend);
+                        fighter[k] = {act, motion, Clock::now(), Clock::now() + std::chrono::milliseconds(ms)};
+                        g_cvc_body[k].turn = 0.0f;
+                    };
+                    // Its own animation played through: at its last frame, or replaced by the game's
+                    // next one, or past its time.
+                    const auto played = [&](int k) {
+                        const Fighter& f = fighter[k];
+                        const CvcBody& body = g_cvc_body[k];
+                        if (Clock::now() > f.until) {
+                            return true;
                         }
-                        approaching = -1;
+                        if (Clock::now() < f.since + std::chrono::milliseconds(300)) {
+                            return false;
+                        }
+                        return body.motion.load() != f.motion ||
+                               (body.frames.load() > 0.0f && body.frame.load() >= body.frames.load() - 0.5f);
+                    };
+                    const auto stand = [&](int k) {
                         const Moves* moves = kind_of(k);
-                        if (!over && moves && closest > moves->strike + 4.0f) {
-                            // Still out of reach: no swing at the air; its AI carries on, try again soon.
-                            if (*held == objects[k]) {
-                                *held = 0;
-                            }
-                            next_attack = Clock::now() + std::chrono::milliseconds(500);
-                        } else if (!over && moves) {
-                            const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
-                            CvcPlayMotion(image, objects[k], motion);
-                            attacking = k, landed = false;
-                            attack_from = Clock::now(), attack_until = attack_from + std::chrono::milliseconds(ms);
-                            LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
-                                     closest);
-                        } else if (*held == objects[k]) {
-                            *held = 0;
+                        if (moves && moves->idle) {
+                            play(k, moves->idle, Act::Idle, 0);
+                        } else {
+                            fighter[k].act = Act::Idle;
                         }
-                    }
-                    // Facing the other: close in with its own walk, or strike when near enough.
+                        if (attacking == k) {
+                            attacking = -1;
+                            next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
+                        }
+                    };
+                    const auto attack = [&](int k) {
+                        const Moves* moves = kind_of(k);
+                        const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
+                        play(k, motion, Act::Attack, ms);
+                        attacking = k, landed = false, attack_from = Clock::now();
+                        LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
+                                 closest);
+                    };
+                    // Facing the other: walk up to it, or strike when near enough.
                     const auto engage = [&](int k) {
                         const Moves* moves = kind_of(k);
-                        *held = objects[k];
-                        last_attacker = k;
-                        if (closest >= moves->strike && moves->walk) {
-                            CvcPlayMotion(image, objects[k], moves->walk);
-                            approaching = k, approach_until = Clock::now() + std::chrono::seconds(10);
-                            approach_start[0] = (k ? rb : ra)[0], approach_start[1] = (k ? rb : ra)[2];
+                        last_attacker = k, attacking = k;
+                        float cosine = 0.0f, side = 0.0f;
+                        if (closest < moves->strike && face(k, cosine, side) && cosine < moves->aim &&
+                            moves->turn_left && moves->turn_right) {
+                            // Near but not square to it (a slam lands in front): round first.
+                            play(k, side > 0.0f ? moves->turn_left : moves->turn_right, Act::Turn, 4000);
+                        } else if (closest >= moves->strike && moves->walk) {
+                            play(k, moves->walk, Act::Walk, 10000);
                             LOG_INFO(Core, "cvcbrawl: {} closes in (bodies {:.0f} apart)", k ? "B" : "A", closest);
                         } else {
-                            const auto& [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
-                            CvcPlayMotion(image, objects[k], motion);
-                            attacking = k, landed = false;
-                            attack_from = Clock::now(), attack_until = attack_from + std::chrono::milliseconds(ms);
-                            LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
-                                     closest);
+                            attack(k);
                         }
                     };
-                    // Nothing of ours before the fight is placed (cvcplace: behind the loading screen,
-                    // through the host's first-sight cutscene).
-                    if (turning >= 0) {
-                        float cosine = 0.0f, side = 0.0f;
-                        const int k = turning;
-                        steer(k, 1.2f);
-                        if (over || !face(k, cosine, side) || cosine > 0.9f || Clock::now() > turn_until) {
-                            turning = -1;
-                            LOG_INFO(Core, "cvcbrawl: {} turned to {:.2f}", k ? "B" : "A", cosine);
-                            if (!over && cosine > 0.8f) {
-                                engage(k); // facing it now: straight at it
-                            } else if (*held == objects[k]) {
-                                *held = 0;
-                            }
+                    if (!over && cvc_placed) {
+                        // Both kept out of their AI (re-set: a slot can be replaced, cvckeep).
+                        *reinterpret_cast<volatile u64*>(image + 0x1593ae0) = objects[0];
+                        *reinterpret_cast<volatile u64*>(image + 0x1593b48) = objects[1];
+                        static bool hooked = false;
+                        if (!hooked) {
+                            hooked = true;
+                            g_cvc_rays.image = image;
+                            *reinterpret_cast<volatile u64*>(image + 0x1593d70) =
+                                reinterpret_cast<u64>(&CvcAiThunk); // contact_patch.py HELD
+                            LOG_INFO(Core, "cvcbrawl: fight placed, both held; motion clock hook {}",
+                                     CvcInstallMotionHook(image) ? "in" : "NOT in (unexpected code)");
+                            stand(0), stand(1);
                         }
-                    }
-                    // Far off: it walks to the other, steered as it goes. Near but not facing it: its
-                    // own turn on the spot, steered, then the attack.
-                    if (attacking < 0 && approaching < 0 && turning < 0 && !over && cvc_placed &&
-                        Clock::now() > next_attack) {
-                        for (int turn = 0; turn < 2 && attacking < 0 && approaching < 0 && turning < 0; turn++) {
-                            const int k = (last_attacker + 1 + turn) % 2; // take turns when both can
+                        for (int k = 0; k < 2; k++) {
+                            Fighter& f = fighter[k];
                             const Moves* moves = kind_of(k);
-                            if (!moves || moves->attacks.empty() || apart > moves->reach ||
-                                *reinterpret_cast<const volatile u64*>(image + 0x1593b48) == objects[k]) {
+                            if (!moves) {
                                 continue;
                             }
                             float cosine = 0.0f, side = 0.0f;
-                            if (!face(k, cosine, side)) {
-                                continue;
-                            }
-                            if (cosine > 0.8f || (closest >= moves->strike && moves->walk)) {
-                                engage(k);
-                            } else if (moves->turn_left && moves->turn_right) {
-                                *held = objects[k];
-                                last_attacker = k;
-                                turning = k, turn_until = Clock::now() + std::chrono::seconds(4);
-                                // The other to its left (side > 0): steering turns it counter-clockwise.
-                                CvcPlayMotion(image, objects[k], side > 0.0f ? moves->turn_left : moves->turn_right);
-                                LOG_INFO(Core, "cvcbrawl: {} turns to face the other ({:.2f})", k ? "B" : "A", cosine);
+                            const bool known = face(k, cosine, side);
+                            switch (f.act) {
+                            case Act::Attack:
+                                // Turned onto the other while winding up, then the blow goes where it goes.
+                                if (Clock::now() < f.since + std::chrono::milliseconds(900)) {
+                                    steer(k, 0.5f);
+                                } else {
+                                    g_cvc_body[k].turn = 0.0f;
+                                }
+                                if (Clock::now() > f.until) {
+                                    stand(k);
+                                }
+                                break;
+                            case Act::Walk:
+                                steer(k, 0.45f);
+                                if (closest < moves->strike) {
+                                    engage(k); // square to it: the attack; else round first
+                                } else if (Clock::now() > f.until) {
+                                    stand(k);
+                                }
+                                break;
+                            case Act::Turn:
+                                steer(k, 0.5f);
+                                if (known && cosine > std::min(moves->aim + 0.03f, 0.97f)) {
+                                    LOG_INFO(Core, "cvcbrawl: {} turned to {:.2f}", k ? "B" : "A", cosine);
+                                    engage(k);
+                                } else if (!known || Clock::now() > f.since + std::chrono::seconds(6)) {
+                                    stand(k);
+                                } else if (played(k)) {
+                                    // Still round the other way: the turn again, on from where it is.
+                                    CvcPlayMotion(image, objects[k], side > 0.0f ? moves->turn_left : moves->turn_right, 0.3f);
+                                    f.motion = side > 0.0f ? moves->turn_left : moves->turn_right;
+                                    f.until = Clock::now() + std::chrono::seconds(4);
+                                }
+                                break;
+                            case Act::Flinch:
+                                if (played(k)) {
+                                    if (f.heavy && moves->retreat) {
+                                        play(k, moves->retreat, Act::Retreat, 3000);
+                                        LOG_INFO(Core, "cvcbrawl: {} steps back", k ? "B" : "A");
+                                    } else {
+                                        stand(k);
+                                    }
+                                }
+                                break;
+                            case Act::Retreat:
+                                if (played(k)) {
+                                    stand(k);
+                                }
+                                break;
+                            case Act::Idle:
+                                break;
                             }
                         }
-                    }
-                    // Bodies do not pass through each other: where bones of the two overlap
-                    // (closer than 5 units), both are moved apart by part of the overlap.
-                    if (!now[0].empty() && !now[1].empty()) {
-                        if (closest < 5.0f && apart > 0.001f) {
-                            const float step = std::min((5.0f - closest) * 0.25f, 0.4f) / apart;
-                            const float to_a[3]{(ra[0] - rb[0]) * step, 0.0f, (ra[2] - rb[2]) * step};
-                            const float to_b[3]{-to_a[0], 0.0f, -to_a[2]};
-                            MoveCharacter(objects[0], to_a);
-                            MoveCharacter(objects[1], to_b);
+                        // The next move: whoever's turn it is, when it stands and nobody attacks.
+                        // Strictly in turn: the one hit answers once it has recovered; the other goes
+                        // again only if that one cannot (more than 8 s on).
+                        if (attacking < 0 && Clock::now() > next_attack) {
+                            const bool waited = Clock::now() > next_attack + std::chrono::seconds(8);
+                            for (int turn = 0; turn < (waited ? 2 : 1) && attacking < 0; turn++) {
+                                const int k = (last_attacker + 1 + turn) % 2;
+                                const Moves* moves = kind_of(k);
+                                float cosine = 0.0f, side = 0.0f;
+                                if (!moves || moves->attacks.empty() || fighter[k].act != Act::Idle ||
+                                    std::hypot(ra[0] - rb[0], ra[2] - rb[2]) > moves->reach || !face(k, cosine, side)) {
+                                    continue;
+                                }
+                                if (cosine > 0.8f) {
+                                    engage(k);
+                                } else if (moves->turn_left && moves->turn_right) {
+                                    last_attacker = k, attacking = k;
+                                    play(k, side > 0.0f ? moves->turn_left : moves->turn_right, Act::Turn, 4000);
+                                    LOG_INFO(Core, "cvcbrawl: {} turns to face the other ({:.2f})", k ? "B" : "A", cosine);
+                                }
+                            }
+                        }
+                        // Two bodies that touch ease apart (a few units a second, on the game thread).
+                        const float dx = ra[0] - rb[0], dz = ra[2] - rb[2], apart = std::hypot(dx, dz);
+                        const float ease = closest < 3.5f && apart > 0.001f ? std::min((3.5f - closest) * 2.0f, 4.0f) / apart : 0.0f;
+                        for (int k = 0; k < 2; k++) {
+                            std::scoped_lock guard{g_cvc_body[k].lock};
+                            g_cvc_body[k].apart[0] = (k ? -dx : dx) * ease;
+                            g_cvc_body[k].apart[1] = (k ? -dz : dz) * ease;
+                        }
+                    } else if (over) {
+                        for (int k = 0; k < 2; k++) {
+                            g_cvc_body[k].turn = 0.0f;
+                            std::scoped_lock guard{g_cvc_body[k].lock};
+                            g_cvc_body[k].apart[0] = g_cvc_body[k].apart[1] = 0.0f;
                         }
                     }
                     for (int k = 0; k < 2; k++) {
@@ -2085,39 +2604,73 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const float damage =
                                 set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set;
                             *health = std::max(0.0f, *health - damage);
-                            // The one hit reels: one of its own hit reactions, its AI held meanwhile.
-                            // (Reporting weak-point damage here too made Basaran's script run its death
-                            // early; that is kept for the knockout below.)
-                            // Whatever it was doing of ours (closing in, turning) gives way to it.
+                            // The impact: both freeze for a moment, the view shakes, then the one hit
+                            // flinches (one of its own, by where the blow landed: the head, from
+                            // behind, else the body) and is pushed away along the blow, and a heavy blow
+                            // makes it step back after; the striker rocks back a little.
                             const Moves* victim_moves = kind_of(1 - k);
-                            auto* reeling = reinterpret_cast<volatile u64*>(image + 0x1593b48);
-                            if (approaching == 1 - k) {
-                                approaching = -1;
+                            const Moves* striker_moves = kind_of(k);
+                            const float strength = std::clamp(hit_speed / 120.0f, 0.5f, 1.6f);
+                            const bool heavy = *health > 0.0f && (strength > 1.1f || rng() % 100 < 50);
+                            const int stop_ms = heavy ? 130 : 90;
+                            CvcHitStop(objects[0], objects[1], stop_ms, 0.04f);
+                            g_cvc_shake = (heavy ? 1.6f : 0.9f) * strength;
+                            g_cvc_shake_at = std::chrono::duration<float>(Clock::now().time_since_epoch()).count();
+                            const float* vr = k ? (const float*)ra : (const float*)rb; // the victim's root
+                            const float* sr = k ? (const float*)rb : (const float*)ra;
+                            float dir[2]{vr[0] - sr[0], vr[2] - sr[2]};
+                            const float span = std::max(std::hypot(dir[0], dir[1]), 0.001f);
+                            dir[0] /= span, dir[1] /= span;
+                            const std::array<float, 3> point = now[k][hit_bone];
+                            {
+                                // The ground under the contact: the victim's lowest bone.
+                                std::array<float, 3> ground = point;
+                                for (const auto& b : now[1 - k]) {
+                                    ground[1] = std::min(ground[1], b[1]);
+                                }
+                                const u64 entry = q(image + (k ? 0x1593b28 : 0x1593b30));
+                                const bool armoured = entry >= table && (entry - table) / 0x1e8 == 2; // Gaius
+                                CvcImpact(image, objects[1 - k], armoured, point.data(), ground.data(), strength, heavy);
                             }
-                            if (turning == 1 - k) {
-                                turning = -1;
+                            // The flinch (not from the knockout blow: the death follows that).
+                            u64 flinch = 0;
+                            if (*health > 0.0f && victim_moves) {
+                                float low = 1e9f, high = -1e9f;
+                                for (const auto& b : now[1 - k]) {
+                                    low = std::min(low, b[1]), high = std::max(high, b[1]);
+                                }
+                                float cosine = 0.0f, side = 0.0f;
+                                const bool behind = face(1 - k, cosine, side) && cosine < -0.2f;
+                                const bool on_head = point[1] > low + (high - low) * 0.75f;
+                                const auto& pick = behind ? victim_moves->back : on_head ? victim_moves->high
+                                                                                          : victim_moves->front;
+                                flinch = pick[rng() % pick.size()];
+                                fighter[1 - k] = {Act::Flinch, flinch, Clock::now() + std::chrono::milliseconds(stop_ms),
+                                                  Clock::now() + std::chrono::milliseconds(stop_ms + 4000), heavy};
+                                g_cvc_body[1 - k].turn = 0.0f;
+                                LOG_INFO(Core, "cvcbrawl: {} flinches ({:#x}{}{}){}", k ? "A" : "B", flinch,
+                                         behind ? ", from behind" : "", on_head ? ", head" : "", heavy ? ", heavy" : "");
                             }
-                            if (*held == objects[1 - k]) {
-                                *held = 0;
-                            }
-                            if (*health > 0.0f && victim_moves && !victim_moves->reactions.empty() &&
-                                (*reeling == 0 || *reeling == objects[1 - k])) {
-                                const auto& [reaction, ms] =
-                                    victim_moves->reactions[rng() % victim_moves->reactions.size()];
-                                *reeling = objects[1 - k];
-                                CvcPlayMotion(image, objects[1 - k], reaction);
-                                std::thread([image, victim = objects[1 - k], ms] {
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-                                    auto* slot = reinterpret_cast<volatile u64*>(image + 0x1593b48);
-                                    if (*slot == victim && *reinterpret_cast<const volatile u8*>(image + 0x1593efb) == 0) {
-                                        *slot = 0;
-                                    }
-                                }).detach();
-                            }
+                            const float shove = (14.0f + 16.0f * strength) / (victim_moves ? victim_moves->mass : 1.0f);
+                            const float recoil = 4.0f / (striker_moves ? striker_moves->mass : 1.0f);
+                            std::thread([image, victim = objects[1 - k], striker = k, flinch, stop_ms,
+                                         push = std::array<float, 2>{dir[0] * shove, dir[1] * shove},
+                                         back = std::array<float, 2>{-dir[0] * recoil, -dir[1] * recoil}] {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(stop_ms));
+                                if (flinch) {
+                                    CvcPlayMotion(image, victim, flinch, 0.12f);
+                                }
+                                for (int b = 0; b < 2; b++) {
+                                    std::scoped_lock guard{g_cvc_body[b].lock};
+                                    const auto& v = b == striker ? back : push;
+                                    g_cvc_body[b].push[0] += v[0], g_cvc_body[b].push[1] += v[1];
+                                }
+                            }).detach();
                             (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
                             LOG_INFO(Core,
-                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart), health A {:.0f} B {:.0f} at {} ms",
+                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart, roots {:.0f}), health A {:.0f} B {:.0f} at {} ms",
                                      k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
+                                     std::hypot(ra[0] - rb[0], ra[2] - rb[2]),
                                      *reinterpret_cast<const float*>(managers[0] + 0x50),
                                      *reinterpret_cast<const float*>(managers[1] + 0x50),
                                      std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2146,8 +2699,23 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // level's own death (its AI runs it); a guest is held again below.
                             for (const u64 slot : {0x1593ae0ull, 0x1593b48ull}) {
                                 auto* hold = reinterpret_cast<volatile u64*>(image + slot);
-                                if (*hold == objects[1 - k]) {
+                                if (*hold == objects[1 - k] || *hold == objects[k]) {
                                     *hold = 0;
+                                }
+                            }
+                            // The winner stays out of its AI (it would go after Wander, over the body):
+                            // it finishes what it was doing, then stands.
+                            *reinterpret_cast<volatile u64*>(image + 0x1593ae0) = objects[k];
+                            {
+                                const Moves* moves = kind_of(k);
+                                const auto left = fighter[k].act == Act::Idle ? Clock::duration{}
+                                                                              : std::max(Clock::duration{}, fighter[k].until - Clock::now());
+                                if (moves && moves->idle) {
+                                    std::thread([image, winner = objects[k], idle = moves->idle,
+                                                 wait = std::min(left, Clock::duration(std::chrono::seconds(6)))] {
+                                        std::this_thread::sleep_for(wait + std::chrono::milliseconds(200));
+                                        CvcPlayMotion(image, winner, idle, 0.5f);
+                                    }).detach();
                                 }
                             }
                             // A guest colossus (not the level's own boss, 0x325e8a8) plays its own death
@@ -2191,50 +2759,6 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // +0x108 set, 0x82df90 stops the AI, character +0x240 = 1 and +0xb0d bit 2
                             // (object +0x360 / +0xc2d).
                             const u64 loser = objects[1 - k];
-                            // Colossi do not collide with each other: the winner (now after Wander)
-                            // would walk through the body. Kept 30 units from its nearest bone.
-                            std::thread([winner = objects[k], loser] {
-                                const auto until = Clock::now() + std::chrono::seconds(40);
-                                while (Clock::now() < until) {
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
-                                    u8 type = 0;
-                                    SIZE_T got = 0;
-                                    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(loser + 0xc),
-                                                           &type, 1, &got) || type != 9) {
-                                        return;
-                                    }
-                                    // Its skeleton's middle (bone world matrices, translation at +0x30).
-                                    u64 matrices = 0;
-                                    ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(loser + 0x120 + 0x198),
-                                                      &matrices, 8, &got);
-                                    const auto* w = reinterpret_cast<const volatile float*>(winner + 0x130);
-                                    float c[2]{}, nearest = 1e9f;
-                                    int count = 0;
-                                    for (int i = 0; matrices && i < 256; i++) {
-                                        float m[4]{};
-                                        if (!ReadProcessMemory(GetCurrentProcess(),
-                                                               reinterpret_cast<const void*>(matrices + i * 64 + 0x30), m,
-                                                               sizeof(m), &got) ||
-                                            m[3] != 1.0f) {
-                                            break;
-                                        }
-                                        const float d = std::hypot(w[0] - m[0], w[2] - m[2]);
-                                        if (d < nearest) {
-                                            nearest = d, c[0] = m[0], c[1] = m[2];
-                                        }
-                                        count++;
-                                    }
-                                    if (count == 0) {
-                                        continue;
-                                    }
-                                    const float dx = w[0] - c[0], dz = w[2] - c[1], gap = std::hypot(dx, dz);
-                                    if (gap < 30.0f && gap > 0.001f) {
-                                        const float push = std::min(30.0f - gap, 0.5f) / gap;
-                                        const float delta[3]{dx * push, 0.0f, dz * push};
-                                        MoveCharacter(winner, delta);
-                                    }
-                                }
-                            }).detach();
                             LOG_INFO(Core, "cvcbrawl: loser {:#x} death state: manager +0x108 {} health {:.0f}, "
                                      "+0x360 {}, +0xc2d {:#x}", loser,
                                      *reinterpret_cast<const volatile u8*>(loser_manager + 0x108),
@@ -2256,6 +2780,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 LOG_INFO(Core, "cvcbrawl: boss entry {} {:#x}:{}", def == 0x1593b28 ? "A" : "B", entry,
                                          found);
                             }
+                            g_cvc_body[1 - k].object = 0;
                             *reinterpret_cast<volatile u64*>(image + (k == 0 ? 0x1593b10 : 0x1593b08)) = 0;
                             LOG_INFO(Core, "cvcbrawl: loser cleared from the fight");
                             for (int step = 0; step < 60; step++) {
@@ -2276,12 +2801,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // 30 s after the knockout: the fight has been shown (a script can end the
                             // recording on this byte).
                             *reinterpret_cast<volatile u8*>(image + 0x1593b50) = 1;
+                            g_cvc_body[0].object = 0, g_cvc_body[1].object = 0;
                             LOG_INFO(Core, "cvcbrawl: knockout shown (support-object guard stepped in {} times)",
                                      *reinterpret_cast<const volatile u32*>(image + 0x1593b70));
                             return;
                         }
                     }
                 }
+                g_cvc_body[0].object = 0, g_cvc_body[1].object = 0;
             }).detach();
         } else if (action.starts_with("cvchits=")) {
             // Test: colossus-vs-colossus damage from the game's own attack contact. With the
