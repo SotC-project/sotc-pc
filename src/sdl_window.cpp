@@ -910,16 +910,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                  "above {:.0f}", pb[0], pb[1], pb[2], to[0], to[1], to[2], dist, floor_y);
                     };
                     place();
-                    // The host walked out toward the open side, one unit a frame (it must be awake:
+                    // The host walked out toward the open side, two units a frame (it must be awake:
                     // moved before or during its first-sight cutscene the game puts it back).
                     const auto walk_host_out = [&] {
                         float moved = 0.0f;
                         while (moved < walk_out && *reinterpret_cast<const volatile u64*>(b) != 0) {
                             const float dx = open[0] - pb[0], dz = open[1] - pb[2];
                             const float len = std::max(std::hypot(dx, dz), 0.001f);
-                            const float step[3]{dx / len, 0.0f, dz / len};
+                            const float step[3]{2.0f * dx / len, 0.0f, 2.0f * dz / len};
                             MoveCharacter(b, step);
-                            moved += 1.0f;
+                            moved += 2.0f;
                             std::this_thread::sleep_for(std::chrono::milliseconds(33));
                         }
                         if (walk_out > 0.0f) {
