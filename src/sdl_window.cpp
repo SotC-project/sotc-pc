@@ -1467,7 +1467,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const float away = std::atan2(winner_at[2] - mid[2], winner_at[0] - mid[0]);
                             const auto score = [&](int k) {
                                 const float at = tested_angle + offset(k);
-                                return clear_part[k] - 0.2f * std::abs(offset(k)) -
+                                // A fully clear line counts double: a spot parked in front of rock
+                                // shows that rock in the corner of the picture.
+                                return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
                                        (after ? 0.8f * std::cos(at - away) : 0.5f * std::abs(std::cos(at - axis))) -
                                        (visible[k] ? 0.0f : 1.5f);
                             };
@@ -1481,11 +1483,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             low = clear_part[12] < 0.6f;
                             if (low) {
                                 // Under cover: beside the fight, in front of whatever its own line meets.
-                                const float part = std::max(clear_part[0] - 12.0f / reach, 0.3f);
+                                const float part = std::max(clear_part[0] - 25.0f / reach, 0.3f);
                                 radius = reach * part, rise = 20.0f + lift * part;
                             } else if (clear_part[0] >= 0.6f && visible[0]) {
                                 // In front of whatever blocks the far end of its own line.
-                                const float part = clear_part[0] - 12.0f / reach; // 12 units off the hit
+                                const float part = clear_part[0] - 25.0f / reach; // 25 units off the hit
                                 radius = reach * part, rise = 20.0f + lift * part;
                             } else {
                                 // Rock close around this angle, or between it and the colossi: the
