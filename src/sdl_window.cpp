@@ -675,8 +675,12 @@ static void CvcContactWork(u64 image, float dt) {
 static void CvcBodyWork(u64 image) {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point before = Clock::now();
-    const float dt = std::clamp(std::chrono::duration<float>(Clock::now() - before).count(), 0.0f, 0.05f);
+    const float took = std::chrono::duration<float>(Clock::now() - before).count();
+    const float dt = std::clamp(took, 0.0f, 0.05f);
     before = Clock::now();
+    if (took > 0.07f && took < 5.0f && g_cvc_body[0].object.load()) {
+        LOG_INFO(Core, "cvcbody: a long frame, {:.0f} ms", took * 1000.0f); // (a stall, not a snap of the pose)
+    }
     const s64 now = Clock::now().time_since_epoch().count();
     for (int k = 0; k < 2; k++) {
         if (g_cvc_hold_obj[k] && now > g_cvc_hold_until[k].load()) {
@@ -2783,7 +2787,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; no stepping back (out
                         // in the field it is held to its spot: Turtle_retreat_1 slid it off, then the game
                         // pulled it back in a snap).
-                        {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}},
+                        // (Its slam opens with both_hands_attack_1 only: hands_attack_2 (middle), its
+                        // second part, begins reared up and started from a stand it jumps there.)
+                        {8, {{{0x1d59230, 3500}},
                              {0x1d5a4b0}, {0x1d5a4b0}, {0x1d5a4b0},
                              250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0, 1.7f, 0.9f, 10.0f, true, 0x1d59dc0, 0x1d59920,
                              // both_hands_attack_1 > hands_attack_2 (middle); each hands_attack_2 > its _3
