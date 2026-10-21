@@ -70,7 +70,7 @@ void Draw() {
     const u64 image = ImageBase();
     u8 set_up = 0, settled = 0, winner = 0;
     if (!image || !Read(image + SetUp, set_up) || !set_up || !Read(image + CameraSettled, settled) || !settled ||
-        Menu::FrameCovered() || Screens::PauseMenu()) {
+        Menu::FrameCovered() || Menu::StartCovered(true) || Screens::PauseMenu()) {
         return;
     }
     Read(image + Winner, winner);
