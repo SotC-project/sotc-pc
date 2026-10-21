@@ -180,6 +180,12 @@ struct CvcRays {
         float at[4]{};
         float yaw = 0.0f; // its heading about the vertical (radians)
     } effects[24];
+    // Basaran's own pulse (game thread; re/cvc/fx/PULSE.md): 1 start the charge on `object`, 2 fire
+    // from it at `target`.
+    std::atomic<int> pulse{0};
+    u64 pulse_object = 0;
+    float pulse_target[4]{};
+    u64 pulse_charge = 0; // the charge effect's actor while it gathers
     // Sounds to play (game thread): a sound's name (static text) at a point.
     struct SoundRequest {
         std::atomic<const char*> name{nullptr};
@@ -243,12 +249,13 @@ struct CvcReact {
     float dir[3]{};                   // the blow's direction (unit)
     float point[3]{};                 // where it landed
     float dent = 0.0f, dent_v = 0.0f; // units, units/s
+    float sway = 0.0f, sway_v = 0.0f; // the whole body's mass shifted along the blow (units, units/s)
 };
 static CvcReact g_cvc_react[2];
 
-/// A blow on colossus k at `point` along `dir` (x, z), strength 0.5-1.6; `share` scales it (the
-/// striker rocks back a little the other way).
-static void CvcReactImpulse(int k, const float* dir, const float* point, float strength, float share = 1.0f) {
+/// A blow on colossus k at `point` along `dir` (x, z) with impulse `force` (1: a full blow; a graze
+/// 0.1, the heaviest 3); `share` scales it (the striker rocks back a little the other way).
+static void CvcReactImpulse(int k, const float* dir, const float* point, float force, float share = 1.0f) {
     auto& r = g_cvc_react[k];
     std::scoped_lock guard{r.lock};
     const float n = std::max(std::hypot(dir[0], dir[1]), 0.001f);
@@ -256,15 +263,16 @@ static void CvcReactImpulse(int k, const float* dir, const float* point, float s
     // Tilting away from the blow: about the horizontal axis up x dir.
     r.axis[0] = r.dir[2], r.axis[1] = 0.0f, r.axis[2] = -r.dir[0];
     std::memcpy(r.point, point, 12);
-    r.tilt_v += 0.9f * strength * share;
-    r.dent_v += 28.0f * strength * share;
+    r.tilt_v += 1.5f * force * share;
+    r.dent_v += 30.0f * force * share;
+    r.sway_v += 26.0f * force * share;
 }
 
 static void CvcReactWork(u64 image, float dt) {
     for (int k = 0; k < 2; k++) {
         auto& r = g_cvc_react[k];
         const u64 object = g_cvc_body[k].object.load();
-        float tilt, dent, axis[3], dir[3], point[3];
+        float tilt, dent, sway, axis[3], dir[3], point[3];
         {
             std::scoped_lock guard{r.lock};
             // Damped springs (the tilt slower, about 1.1 a second; the dent quicker).
@@ -277,13 +285,16 @@ static void CvcReactWork(u64 image, float dt) {
                 }
             };
             if (dt > 0.0f) {
-                spring(r.tilt, r.tilt_v, 7.0f, 0.35f);
+                spring(r.tilt, r.tilt_v, 6.0f, 0.32f);
                 spring(r.dent, r.dent_v, 12.0f, 0.45f);
+                spring(r.sway, r.sway_v, 5.0f, 0.4f);
+                r.tilt = std::clamp(r.tilt, -0.5f, 0.5f); // (a body does not fold over)
             }
-            tilt = r.tilt, dent = r.dent;
+            tilt = r.tilt, dent = r.dent, sway = r.sway;
             std::memcpy(axis, r.axis, 12), std::memcpy(dir, r.dir, 12), std::memcpy(point, r.point, 12);
         }
-        if (!object || (tilt == 0.0f && dent == 0.0f) || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
+        if (!object || (tilt == 0.0f && dent == 0.0f && sway == 0.0f) ||
+            *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
             continue;
         }
         const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
@@ -324,7 +335,8 @@ static void CvcReactWork(u64 image, float dt) {
             rotate(p);
             // The dent: bones near the contact driven in along the blow (falling off over 25).
             const float off = std::hypot(m[12] - point[0], m[13] - point[1], m[14] - point[2]);
-            const float give = dent * std::max(0.0f, 1.0f - off / 25.0f);
+            // ... and the whole body's mass swaying along it, the feet least.
+            const float give = dent * std::max(0.0f, 1.0f - off / 25.0f) + sway * (0.25f + 0.75f * w);
             float shift = 0.0f;
             for (int q = 0; q < 3; q++) {
                 const float to = pivot[q] + p[q] + dir[q] * give;
@@ -787,6 +799,42 @@ static void CvcPlayMotion(u64 image, u64 object, u64 motion, float blend = 0.0f)
     }
 }
 
+/// Basaran's own pulse, as its motion callbacks do it (re/cvc/fx/PULSE.md): the charge
+/// (Reservoir_turtle_pulse, attached to it through 0x6da930, started 0x6da9f0 mode 3; 0x789600) and
+/// the shot (its firing point 0x6da400, a quaternion along the shot 0x582940, the game's projectile
+/// 0x703880 kind 0; 0x789280), which flies, meets what it meets and starts its own hit effect.
+static void CvcPulseWork(CvcRays& r, int what) {
+    const u64 image = r.image, basaran = r.pulse_object;
+    const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
+    if (what == 1) {
+        const u64 charge = reinterpret_cast<u64(PS4_SYSV_ABI*)(u64, u64, u64)>(image + 0x6da930)(
+            q(image + 0x1f553c0), basaran, q(image + 0x24bfb58));
+        if (charge) {
+            reinterpret_cast<void(PS4_SYSV_ABI*)(u64, s32, s32, u64)>(image + 0x6da9f0)(charge, -1, 3, 0);
+        }
+        r.pulse_charge = charge;
+        LOG_INFO(Core, "cvcpulse: charge {:#x}", charge);
+        return;
+    }
+    alignas(16) float start[4]{}, forward[4]{}, orientation[4]{};
+    reinterpret_cast<void(PS4_SYSV_ABI*)(float*, u64, u64)>(image + 0x6da400)(start, basaran, q(image + 0x24bfca8));
+    for (int c = 0; c < 3; c++) {
+        forward[c] = r.pulse_target[c] - start[c];
+    }
+    const float n = std::max(std::hypot(forward[0], forward[1], forward[2]), 0.001f);
+    for (int c = 0; c < 3; c++) {
+        forward[c] /= n;
+    }
+    reinterpret_cast<void(PS4_SYSV_ABI*)(float*, const float*, const float*)>(image + 0x582940)(orientation, forward, forward);
+    if (r.pulse_charge) {
+        reinterpret_cast<void(PS4_SYSV_ABI*)(u64)>(image + 0x577960)(r.pulse_charge); // the charge ends as it fires
+        r.pulse_charge = 0;
+    }
+    reinterpret_cast<void(PS4_SYSV_ABI*)(u64, const float*, const float*, s32)>(image + 0x703880)(basaran, start, orientation, 0);
+    LOG_INFO(Core, "cvcpulse: fired from {:.0f} {:.0f} {:.0f} at {:.0f} {:.0f} {:.0f}", start[0], start[1], start[2],
+             r.pulse_target[0], r.pulse_target[1], r.pulse_target[2]);
+}
+
 /// Starts a requested motion on a colossus (game thread).
 static void CvcStartMotion(CvcRays& r, CvcRays::MotionRequest& request, u64 object) {
         const u64 component = object + 0x120;
@@ -914,6 +962,9 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
         CvcStartMotion(r, request, object);
     }
     motion_guard.unlock();
+    if (const int pulse = r.pulse.exchange(0); pulse && r.image && r.pulse_object) {
+        CvcPulseWork(r, pulse);
+    }
     for (auto& request : r.sounds) {
         const char* name = request.name.load();
         if (name && r.image) {
@@ -2711,6 +2762,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // end (a part given with ms: held that long, e.g. lying in a loop).
                         std::vector<std::pair<u64, int>> down;
                         std::vector<u64> idles; // standing variants, now and then
+                        // How hard its blows land for the speed of the striking bone (its mass behind
+                        // them): Basaran's slow, heavy slams count as much as Gaius's fast sword.
+                        float heft = 1.0f;
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -2726,17 +2780,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // 0x693f57); Knight_Search
                              {}, {0x1d38ed0}}}, // a wide sword sweep
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
-                        // Turtle_Standing_left/right_rotation_1; Turtle_Standing; Turtle_retreat_1.
+                        // Turtle_Standing_left/right_rotation_1; Turtle_Standing; no stepping back (out
+                        // in the field it is held to its spot: Turtle_retreat_1 slid it off, then the game
+                        // pulled it back in a snap).
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}},
                              {0x1d5a4b0}, {0x1d5a4b0}, {0x1d5a4b0},
-                             250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0x1d561a0, 1.7f, 0.9f, 10.0f, true, 0x1d59dc0, 0x1d59920,
+                             250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0, 1.7f, 0.9f, 10.0f, true, 0x1d59dc0, 0x1d59920,
                              // both_hands_attack_1 > hands_attack_2 (middle); each hands_attack_2 > its _3
                              {{0x1d59230, 0x1d59480}, {0x1d59480, 0x1d596d0}, {0x1d59920, 0x1d59b70},
                               {0x1d59dc0, 0x1d5a010}}, true,
                              // Turtle_overturn_the_beginning_(right) > turned_over_the_first_two > turned_over >
                              // overturned_loop (3 s on its back) > flip_over_stop_1 > _2; Turtle_Standing_1, _2
                              {{0x1d56640, 0}, {0x1d56890, 0}, {0x1d56f80, 0}, {0x1d571d0, 3000}, {0x1d57420, 0}, {0x1d57670, 0}},
-                             {0x1d545e0, 0x1d54830}}},
+                             {0x1d545e0, 0x1d54830}, 4.0f}},
                         // (straight: both_hands_attack_1 / hands_attack_2 (middle); to the left / right:
                         // hands_attack_2 (left) / (right))
                     };
@@ -2759,6 +2815,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
+                    // Balance lost to blows (impulses add up, it drains back 0.35 a second); past 2.2
+                    // the colossus loses its footing (Basaran overturns, Gaius staggers far).
+                    static float balance[2]{};
+                    static Clock::time_point balance_at = Clock::now();
+                    {
+                        const float elapsed = std::chrono::duration<float>(Clock::now() - balance_at).count();
+                        balance_at = Clock::now();
+                        for (float& b : balance) {
+                            b = std::max(0.0f, b - 0.35f * elapsed);
+                        }
+                    }
                     // Basaran's pulse: its phase (0 charging, 1 fired, 2 done), when it fired, where it
                     // struck, and a strike on the other waiting for the blow code below.
                     static int pulse_phase = 0;
@@ -2964,7 +3031,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 CvcEffect("npe/player_spark.npe", mouth);
                                 CvcSound(rng() % 2 ? "kmvo_pulse_c2" : "kmvo_pulse_c4", mouth);
                                 CvcSound("kame_pulse_c1", mouth);
-                                Sotc::CvcHud::Charge(mouth, 1.4f);
+                                g_cvc_rays.pulse_object = objects[k];
+                                g_cvc_rays.image = image;
+                                g_cvc_rays.pulse = 1; // its own charge
                                 LOG_INFO(Core, "cvcbrawl: {} charges its pulse ({:.0f} apart)", k ? "B" : "A", closest);
                             } else if (other && other->walk && fighter[j].act == Act::Idle) {
                                 play(j, other->walk, Act::Walk, 8000);
@@ -3102,7 +3171,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 break;
                             case Act::Flinch:
                                 if (played(k)) {
-                                    if (f.heavy && !moves->down.empty() && rng() % 100 < 35) {
+                                    if (!moves->down.empty() && balance[k] > 2.2f) {
+                                        balance[k] = 0.0f;
                                         // Knocked off its feet: its own fall, then getting up again.
                                         play(k, moves->down[0].first, Act::Down, moves->down[0].second ? moves->down[0].second : 8000);
                                         fighter[k].part = 0;
@@ -3165,7 +3235,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     CvcEffect("npe/arrow_hit_spark.npe", mouth, yaw);
                                     std::memcpy(pulse_from.data(), mouth, 12);
                                     pulse_drawn = 0.0f;
-                                    Sotc::CvcHud::Bolt(mouth, pulse_point.data(), 0.45f);
+                                    std::memcpy(g_cvc_rays.pulse_target, pulse_point.data(), 12);
+                                    g_cvc_rays.pulse_object = objects[k];
+                                    g_cvc_rays.pulse = 2; // its own shot
                                     CvcSound(rng() % 2 ? "kame_pulse_fire1" : "kame_pulse_fire2", mouth);
                                     CvcSound("kame_pulse_line1", pulse_point.data());
                                     CvcSound("kame_pulse_line2", mouth);
@@ -3297,19 +3369,27 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
                         if (hit_bone >= 0) {
                             landed = true;
-                            // Below 1: a share of the victim's full health (any pair, same number of blows).
+                            // The blow's impulse: the striking bone's speed and the mass behind it (1: a
+                            // full blow); its pulse lands as a full blow. Damage goes with it: a graze
+                            // does little, the heaviest blow twice a full one.
+                            const Moves* striker_kind = kind_of(k);
+                            const float force = pulsed ? 1.2f
+                                                       : std::clamp(hit_speed / 300.0f * (striker_kind ? striker_kind->heft : 1.0f),
+                                                                    0.05f, 3.0f);
+                            // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
-                            const float damage =
-                                set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set;
+                            const float damage = (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
+                                                 std::clamp(force, 0.1f, 2.0f);
                             *health = std::max(0.0f, *health - damage);
+                            balance[1 - k] += force;
                             // The impact: both freeze for a moment, the view shakes, then the one hit
                             // flinches (one of its own, by where the blow landed: the head, from
                             // behind, else the body) and is pushed away along the blow, and a heavy blow
                             // makes it step back after; the striker rocks back a little.
                             const Moves* victim_moves = kind_of(1 - k);
                             const Moves* striker_moves = kind_of(k);
-                            const float strength = std::clamp(hit_speed / 120.0f, 0.5f, 1.6f);
-                            const bool heavy = *health > 0.0f && (strength > 1.1f || rng() % 100 < 50);
+                            const float strength = std::clamp(force, 0.3f, 1.6f); // (effects and sounds)
+                            const bool heavy = *health > 0.0f && force > 0.9f;
                             const int stop_ms = 60; // the one hit reacts a beat after the blow
                             // (No hit-stop or camera shake: freezing only the motion clock, and a fast wobble
                             // filmed at 30 frames a second, both read as the bodies snapping.)
@@ -3329,15 +3409,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const bool armoured = entry >= table && (entry - table) / 0x1e8 == 2; // Gaius
                                 CvcImpact(image, objects[1 - k], armoured, point.data(), ground.data(), strength, heavy);
                             }
-                            // Its body gives under the blow (and the striker's rocks back a little).
-                            CvcReactImpulse(1 - k, dir, point.data(), strength);
+                            // Its body gives under the blow, as much as the blow carries (and the striker's
+                            // rocks back a little); losing its footing without a fall of its own (Gaius),
+                            // it staggers far.
+                            const Moves* victim_kind = kind_of(1 - k);
+                            const bool stagger = *health > 0.0f && balance[1 - k] > 2.2f && victim_kind && victim_kind->down.empty();
+                            CvcReactImpulse(1 - k, dir, point.data(), force * (stagger ? 2.2f : 1.0f));
+                            if (stagger) {
+                                balance[1 - k] = 0.0f;
+                                LOG_INFO(Core, "cvcbrawl: {} loses its footing", k ? "A" : "B");
+                            }
                             {
                                 const float back[2]{-dir[0], -dir[1]};
-                                CvcReactImpulse(k, back, point.data(), strength, 0.25f);
+                                CvcReactImpulse(k, back, point.data(), force, 0.25f);
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;
-                            if (*health > 0.0f && victim_moves && fighter[1 - k].act != Act::Down) { // (down: it lies on)
+                            // (A graze is only felt in its body, not a flinch; down, it lies on.)
+                            if (*health > 0.0f && victim_moves && fighter[1 - k].act != Act::Down && force > 0.35f) {
                                 float low = 1e9f, high = -1e9f;
                                 for (const auto& b : now[1 - k]) {
                                     low = std::min(low, b[1]), high = std::max(high, b[1]);
@@ -3349,7 +3438,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                                                           : victim_moves->front;
                                 flinch = pick[rng() % pick.size()];
                                 fighter[1 - k] = {Act::Flinch, flinch, Clock::now() + std::chrono::milliseconds(stop_ms),
-                                                  Clock::now() + std::chrono::milliseconds(stop_ms + 4000), heavy};
+                                                  Clock::now() + std::chrono::milliseconds(stop_ms + 4000), heavy || stagger};
                                 g_cvc_body[1 - k].turn = 0.0f;
                                 LOG_INFO(Core, "cvcbrawl: {} flinches ({:#x}{}{}){}", k ? "A" : "B", flinch,
                                          behind ? ", from behind" : "", on_head ? ", head" : "", heavy ? ", heavy" : "");
@@ -3367,8 +3456,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }).detach();
                             (*reinterpret_cast<volatile u32*>(image + (k == 0 ? 0x1593ec8 : 0x1593ecc)))++;
                             LOG_INFO(Core,
-                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, {:.1f} apart, roots {:.0f}), health A {:.0f} B {:.0f} at {} ms",
-                                     k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, hit_gap,
+                                     "cvcbrawl: {} hit {} (bone {}, {:.0f} units/s, force {:.2f}, balance {:.1f}, roots {:.0f}), health A {:.0f} B {:.0f} at {} ms",
+                                     k == 0 ? "A" : "B", k == 0 ? "B" : "A", hit_bone, hit_speed, force, balance[1 - k],
                                      std::hypot(ra[0] - rb[0], ra[2] - rb[2]),
                                      *reinterpret_cast<const float*>(managers[0] + 0x50),
                                      *reinterpret_cast<const float*>(managers[1] + 0x50),
