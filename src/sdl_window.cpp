@@ -1122,11 +1122,22 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
             const u64 image = module ? module->GetBaseAddress() : 0;
             static std::list<std::string> names; // kept: the request holds the text
-            names.push_back(action.substr(10));
+            std::string name = action.substr(10);
+            const bool on_a = name.ends_with("@a"); // on colossus A's chest instead
+            if (on_a) {
+                name.resize(name.size() - 2);
+            }
+            names.push_back(name);
             const u64 a = image ? *reinterpret_cast<const volatile u64*>(image + 0x1593b08) : 0;
             const u64 b = image ? *reinterpret_cast<const volatile u64*>(image + 0x1593b10) : 0;
             float at[3]{};
-            if (a && b) {
+            if (on_a && a) {
+                std::memcpy(at, reinterpret_cast<const float*>(a + 0x130), 12);
+                at[1] += 20.0f;
+                LOG_INFO(Core, "cvceffect: {} on A (at {} ms)", name,
+                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count());
+            } else if (a && b) {
                 for (int c = 0; c < 3; c++) {
                     at[c] = (reinterpret_cast<const float*>(a + 0x130)[c] + reinterpret_cast<const float*>(b + 0x130)[c]) / 2;
                 }
@@ -1134,6 +1145,26 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             }
             g_cvc_rays.image = image;
             CvcEffect(names.back().c_str(), at);
+        } else if (action.starts_with("cvcwander=")) {
+            // Test: "cvcwander=90" puts Wander 90 in front of colossus B (along its root bone's -z),
+            // on its ground (cvcbrawl's pulse experiments: does its AI fire at him from there?).
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            const float ahead = std::stof(action.substr(10));
+            const u64 b = image ? *reinterpret_cast<const volatile u64*>(image + 0x1593b10) : 0;
+            const u64 player = image ? PlayerObject(image) : 0;
+            const u64 mats = b ? *reinterpret_cast<const volatile u64*>(b + 0x120 + 0x198) : 0;
+            if (b && player && mats) {
+                const auto* m = reinterpret_cast<const float*>(mats);
+                float fx = -m[8], fz = -m[10];
+                const float n = std::max(std::hypot(fx, fz), 0.001f);
+                fx /= n, fz /= n;
+                const auto* pb = reinterpret_cast<const float*>(b + 0x130);
+                const auto* pp = reinterpret_cast<const float*>(player + 0x130);
+                const float delta[3]{pb[0] + fx * ahead - pp[0], pb[1] + 5.0f - pp[1], pb[2] + fz * ahead - pp[2]};
+                MoveCharacter(player, delta);
+                LOG_INFO(Core, "cvcwander: Wander to {:.0f} {:.0f} {:.0f}", pp[0], pp[1], pp[2]);
+            }
         } else if (action.starts_with("cvcfree=")) {
             // Test: "cvcfree=B:40" leaves colossus B (or A) to its own AI for 40 s (cvcbrawl).
             const int k = action[8] == 'B' ? 1 : 0;
@@ -2563,8 +2594,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // attack_1_Introduction > attack_one_stop_(success); attack_2_Introduction >
                              // _loop > _quit
                              {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}, false,
-                             // Knight_fall > Knight_started (rising, as from his intro); Knight_Search
-                             {{0x1d39120, 0}, {0x1d37310, 0}}, {0x1d38ed0}}}, // a wide sword sweep
+                             // (no knockdown: Knight_fall's own effects crash the game's effect update,
+                             // 0x693f57); Knight_Search
+                             {}, {0x1d38ed0}}}, // a wide sword sweep
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; Turtle_retreat_1.
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}},
