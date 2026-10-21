@@ -177,7 +177,8 @@ struct CvcRays {
     struct EffectRequest {
         std::atomic<const char*> name{nullptr};
         float at[4]{};
-    } effects[8];
+        float yaw = 0.0f; // its heading about the vertical (radians)
+    } effects[24];
     // Sounds to play (game thread): a sound's name (static text) at a point.
     struct SoundRequest {
         std::atomic<const char*> name{nullptr};
@@ -228,6 +229,8 @@ struct CvcContact {
     std::vector<std::array<float, 3>> before[2]; // bones (world) the frame before
 };
 static CvcContact g_cvc_contact;
+// Test aid (cvcfree=B:40): a colossus left to its own AI (not held, no moves of ours) until then.
+static std::atomic<s64> g_cvc_free_until[2]{};
 // Camera shake of the spectator camera (cvccam): how far it throws the view (units) and when it
 // started (steady clock, seconds).
 static std::atomic<float> g_cvc_shake{0.0f}, g_cvc_shake_at{-10.0f};
@@ -286,11 +289,12 @@ static void CvcHitStop(u64 a, u64 b, int ms, float scale) {
 
 /// Asks for one of the game's effects (by its file name, e.g. "npe/knight_metal_react.npe";
 /// static text) at a point.
-static void CvcEffect(const char* name, const float* at) {
+static void CvcEffect(const char* name, const float* at, float yaw = 0.0f) {
     for (auto& slot : g_cvc_rays.effects) {
         if (slot.name.load() == nullptr) {
             std::memcpy(slot.at, at, 12);
             slot.at[3] = 1.0f;
+            slot.yaw = yaw;
             const char* expected = nullptr;
             if (slot.name.compare_exchange_strong(expected, name)) {
                 return;
@@ -337,14 +341,14 @@ static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false) {
 
 /// Starts a requested effect through the game's effect bridge (re/cvc/fx/SHAKE_PARTICLES.md):
 /// 0x5f5930 builds its transform, 0x690950 starts it; the game ends it itself.
-static void CvcEffectWork(u64 image, const char* name, const float* at) {
+static void CvcEffectWork(u64 image, const char* name, const float* at, float yaw) {
     const u64 live = CvcFindEffect(image, name);
     if (!live) {
         LOG_INFO(Core, "cvc: effect {} not loaded", name);
         return;
     }
     alignas(16) u8 transform[0x40]{};
-    alignas(16) const float rotation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    alignas(16) const float rotation[4]{0.0f, std::sin(yaw * 0.5f), 0.0f, std::cos(yaw * 0.5f)};
     alignas(16) const float position[4]{at[0], at[1], at[2], 1.0f};
     reinterpret_cast<void(PS4_SYSV_ABI*)(void*, const float*, const float*)>(image + 0x5f5930)(transform, rotation,
                                                                                               position);
@@ -400,33 +404,31 @@ static void CvcImpact(u64 image, u64 victim, bool armoured, const float* point, 
              strength, heavy ? ", heavy" : "");
     if (armoured) {
         CvcEffect("npe/knight_metal_react.npe", point);
-        CvcEffect("npe/knight_impact_smoke.npe", point);
+        CvcEffect("npe/arrow_hit_spark.npe", point);
         if (heavy) {
             CvcEffect("npe/knight_metal_chip.npe", point);
         }
     } else {
-        CvcEffect("npe/tts_add_chip.npe", point);
-        CvcEffect("npe/tts_impact_smoke.npe", point);
+        CvcEffect("npe/knight_add_chip.npe", point);
+        CvcEffect("npe/arrow_hit_smoke.npe", point);
         if (heavy) {
-            CvcEffect("npe/knight_broken_chip2.npe", point);
+            CvcEffect("npe/knight_shockwave_add.npe", point);
         }
     }
     if (heavy) {
-        CvcEffect("npe/knight_smoke.npe", ground);
+        CvcEffect("npe/player_stone_dust.npe", ground);
     }
     // The crash of it (on Gaius's armour or Basaran's stone), stones falling, and the one hit
-    // crying out (their own voices: ktvo Gaius, kmvo Basaran).
+    // crying out (their own damage voices).
     static std::mt19937 rng{std::random_device{}()};
     static const char* const armour[]{"knight_body1", "knight_body3", "knight_body5", "knight_body8"};
     static const char* const stone[]{"kame_stone_2", "kame_stone_4", "kame_stone_6"};
     static const char* const pebbles[]{"kame_stone_s1", "kame_stone_s3", "kame_stone_s5"};
-    static const char* const growl_knight[]{"ktvo_growl1", "ktvo_growl2", "ktvo_growl3"};
-    static const char* const growl_kame[]{"kmvo_growl4", "kmvo_growl5", "kmvo_growl6"};
+    static const char* const growl_knight[]{"knight_damage_voice_2", "knight_damage_voice_5", "knight_damage_voice_2"};
+    static const char* const growl_kame[]{"kmvo_dam1", "kmvo_dam3", "kmvo_dam5"};
     CvcSound(armoured ? armour[rng() % 4] : stone[rng() % 3], point);
     CvcSound(pebbles[rng() % 3], ground);
-    if (heavy) {
-        CvcSound(armoured ? growl_knight[rng() % 3] : growl_kame[rng() % 3], point);
-    }
+    CvcSound(armoured ? growl_knight[rng() % 3] : growl_kame[rng() % 3], point);
 }
 
 static void CvcContactWork(u64 image, float dt) {
@@ -794,7 +796,7 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
     for (auto& request : r.effects) {
         const char* name = request.name.load();
         if (name && r.image) {
-            CvcEffectWork(r.image, name, request.at);
+            CvcEffectWork(r.image, name, request.at, request.yaw);
             request.name.store(nullptr);
         }
     }
@@ -1115,6 +1117,30 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             LOG_INFO(Core, "cvcsound: {} at {:.0f} {:.0f} {:.0f} (at {} ms)", name, at[0], at[1], at[2],
                      std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::system_clock::now().time_since_epoch()).count());
+        } else if (action.starts_with("cvceffect=")) {
+            // Test: "cvceffect=npe/tts_pls_muzle.npe" starts that effect at the fight's midpoint, 25 up.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            const u64 image = module ? module->GetBaseAddress() : 0;
+            static std::list<std::string> names; // kept: the request holds the text
+            names.push_back(action.substr(10));
+            const u64 a = image ? *reinterpret_cast<const volatile u64*>(image + 0x1593b08) : 0;
+            const u64 b = image ? *reinterpret_cast<const volatile u64*>(image + 0x1593b10) : 0;
+            float at[3]{};
+            if (a && b) {
+                for (int c = 0; c < 3; c++) {
+                    at[c] = (reinterpret_cast<const float*>(a + 0x130)[c] + reinterpret_cast<const float*>(b + 0x130)[c]) / 2;
+                }
+                at[1] += 25.0f;
+            }
+            g_cvc_rays.image = image;
+            CvcEffect(names.back().c_str(), at);
+        } else if (action.starts_with("cvcfree=")) {
+            // Test: "cvcfree=B:40" leaves colossus B (or A) to its own AI for 40 s (cvcbrawl).
+            const int k = action[8] == 'B' ? 1 : 0;
+            const float seconds = std::stof(action.substr(10));
+            g_cvc_free_until[k] = (std::chrono::steady_clock::now() + std::chrono::milliseconds(s64(seconds * 1000)))
+                                      .time_since_epoch().count();
+            LOG_INFO(Core, "cvcfree: {} on its own AI for {:.0f} s", k ? "B" : "A", seconds);
         } else if (action == "soundlog") {
             // Test: log the name of every sound the game plays (CvcSoundName), once each.
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
@@ -2521,6 +2547,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // An attack's next part, played when the part before ends (its AI would pick it):
                         // ended on its own last frame the pose snaps (Gaius's sword) to whatever follows.
                         std::unordered_map<u64, u64> follow;
+                        bool pulse = false; // fires its electric pulse (Basaran)
+                        // Knocked down by a heavy blow: its own fall and recovery, each part played to its
+                        // end (a part given with ms: held that long, e.g. lying in a loop).
+                        std::vector<std::pair<u64, int>> down;
+                        std::vector<u64> idles; // standing variants, now and then
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -2531,7 +2562,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              250.0f, 0x1d38340, 8.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
                              // attack_1_Introduction > attack_one_stop_(success); attack_2_Introduction >
                              // _loop > _quit
-                             {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}}}, // a wide sword sweep
+                             {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}, false,
+                             // Knight_fall > Knight_started (rising, as from his intro); Knight_Search
+                             {{0x1d39120, 0}, {0x1d37310, 0}}, {0x1d38ed0}}}, // a wide sword sweep
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; Turtle_retreat_1.
                         {8, {{{0x1d59230, 3500}, {0x1d59480, 3000}},
@@ -2539,7 +2572,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0x1d561a0, 1.7f, 0.9f, 10.0f, true, 0x1d59dc0, 0x1d59920,
                              // both_hands_attack_1 > hands_attack_2 (middle); each hands_attack_2 > its _3
                              {{0x1d59230, 0x1d59480}, {0x1d59480, 0x1d596d0}, {0x1d59920, 0x1d59b70},
-                              {0x1d59dc0, 0x1d5a010}}}},
+                              {0x1d59dc0, 0x1d5a010}}, true,
+                             // Turtle_overturn_the_beginning_(right) > turned_over_the_first_two > turned_over >
+                             // overturned_loop (3 s on its back) > flip_over_stop_1 > _2; Turtle_Standing_1, _2
+                             {{0x1d56640, 0}, {0x1d56890, 0}, {0x1d56f80, 0}, {0x1d571d0, 3000}, {0x1d57420, 0}, {0x1d57670, 0}},
+                             {0x1d545e0, 0x1d54830}}},
                         // (straight: both_hands_attack_1 / hands_attack_2 (middle); to the left / right:
                         // hands_attack_2 (left) / (right))
                     };
@@ -2549,18 +2586,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto it = kinds.find(entry >= table ? int((entry - table) / 0x1e8) : -1);
                         return it == kinds.end() ? nullptr : &it->second;
                     };
-                    enum class Act { Idle, Turn, Walk, Attack, Flinch, Retreat };
+                    enum class Act { Idle, Turn, Walk, Attack, Flinch, Retreat, Pulse, Down };
                     struct Fighter {
                         Act act = Act::Idle;
                         u64 motion = 0;
                         Clock::time_point since, until;
                         bool heavy = false; // a flinch followed by stepping back
                         bool bait = false;  // walking up to be struck (the other holds its ground)
+                        size_t part = 0;    // Down: which part of its fall and recovery
                     };
                     static Fighter fighter[2];
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
+                    // Basaran's pulse: its phase (0 charging, 1 fired, 2 done), when it fired, where it
+                    // struck, and a strike on the other waiting for the blow code below.
+                    static int pulse_phase = 0;
+                    static Clock::time_point pulse_fired;
+                    static std::array<float, 3> pulse_point{};
+                    static bool pulse_on_target = false;
+                    static int pulse_hit_for = -1;
+                    static std::array<float, 3> pulse_from{}; // where it left its mouth
+                    static float pulse_drawn = 0.0f;          // how far along the bolt has been drawn (0-1)
                     static std::vector<std::array<float, 3>> landing; // (test aid, below)
                     static float nearest_swing = 1e9f, nearest_any = 1e9f; // closest a moving / any bone came (misses in the log)
                     static Clock::time_point attack_from, next_attack = Clock::now();
@@ -2662,7 +2709,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     const auto stand = [&](int k) {
                         const Moves* moves = kind_of(k);
                         const bool was_attacking = fighter[k].act == Act::Attack;
-                        if (moves && moves->idle) {
+                        if (moves && !moves->idles.empty() && rng() % 100 < 30) {
+                            play(k, moves->idles[rng() % moves->idles.size()], Act::Idle, 0); // now and then, another stance
+                        } else if (moves && moves->idle) {
                             play(k, moves->idle, Act::Idle, 0);
                         } else {
                             fighter[k].act = Act::Idle;
@@ -2716,10 +2765,25 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                        const float* other = k ? (const float*)ra : (const float*)rb;
                                        return !front(k, spot) || std::hypot(other[0] - spot[0], other[2] - spot[2]) >= 8.0f;
                                    }()) {
-                            // It waits; the other comes on into its reach (then it strikes).
+                            // It waits; the other comes on into its reach (then it strikes). Or, from
+                            // where it is, it fires its pulse at it.
                             const int j = 1 - k;
                             const Moves* other = kind_of(j);
-                            if (other && other->walk && fighter[j].act == Act::Idle) {
+                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 45)) {
+                                play(k, moves->idle, Act::Pulse, 6000);
+                                pulse_phase = 0, landed = false, attack_from = Clock::now();
+                                float head[3]{};
+                                front(k, head);
+                                const float* me = k ? (const float*)rb : (const float*)ra;
+                                const float mouth[3]{(head[0] + me[0] * 2.0f) / 3.0f, me[1] + 14.0f, (head[2] + me[2] * 2.0f) / 3.0f};
+                                // (Its own tts_pls_* charge and bolt effects are not resident in this arena, and
+                                // Wander's sword effects s_* crash outside his hands: general sparks stand in.)
+                                CvcEffect("npe/torch_spark.npe", mouth);
+                                CvcEffect("npe/player_spark.npe", mouth);
+                                CvcSound(rng() % 2 ? "kmvo_pulse_c2" : "kmvo_pulse_c4", mouth);
+                                CvcSound("kame_pulse_c1", mouth);
+                                LOG_INFO(Core, "cvcbrawl: {} charges its pulse ({:.0f} apart)", k ? "B" : "A", closest);
+                            } else if (other && other->walk && fighter[j].act == Act::Idle) {
                                 play(j, other->walk, Act::Walk, 8000);
                                 fighter[j].bait = true;
                                 LOG_INFO(Core, "cvcbrawl: {} holds its ground, {} comes on ({:.0f} apart)", k ? "B" : "A",
@@ -2760,8 +2824,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     }
                     if (!over && cvc_placed) {
                         // Both kept out of their AI (re-set: a slot can be replaced, cvckeep).
-                        *reinterpret_cast<volatile u64*>(image + 0x1593ae0) = objects[0];
-                        *reinterpret_cast<volatile u64*>(image + 0x1593b48) = objects[1];
+                        const s64 tick = Clock::now().time_since_epoch().count();
+                        const bool free_a = tick < g_cvc_free_until[0].load(), free_b = tick < g_cvc_free_until[1].load();
+                        *reinterpret_cast<volatile u64*>(image + 0x1593ae0) = free_a ? 0 : objects[0];
+                        *reinterpret_cast<volatile u64*>(image + 0x1593b48) = free_b ? 0 : objects[1];
+                        if (free_a || free_b) {
+                            next_attack = Clock::now() + std::chrono::seconds(1); // nothing of ours meanwhile
+                        }
                         static bool hooked = false;
                         if (!hooked) {
                             hooked = true;
@@ -2850,7 +2919,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 break;
                             case Act::Flinch:
                                 if (played(k)) {
-                                    if (f.heavy && moves->retreat) {
+                                    if (f.heavy && !moves->down.empty() && rng() % 100 < 35) {
+                                        // Knocked off its feet: its own fall, then getting up again.
+                                        play(k, moves->down[0].first, Act::Down, moves->down[0].second ? moves->down[0].second : 8000);
+                                        fighter[k].part = 0;
+                                        LOG_INFO(Core, "cvcbrawl: {} goes down", k ? "B" : "A");
+                                    } else if (f.heavy && moves->retreat) {
                                         play(k, moves->retreat, Act::Retreat, 3000);
                                         LOG_INFO(Core, "cvcbrawl: {} steps back", k ? "B" : "A");
                                     } else {
@@ -2863,6 +2937,92 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     stand(k);
                                 }
                                 break;
+                            case Act::Down:
+                                // A part given a time is held that long (a loop); the others to their end.
+                                if (moves->down[f.part].second ? Clock::now() > f.since + std::chrono::milliseconds(
+                                                                     moves->down[f.part].second)
+                                                               : played(k)) {
+                                    if (++f.part < moves->down.size()) {
+                                        const auto [motion, ms] = moves->down[f.part];
+                                        CvcPlayMotion(image, objects[k], motion, 0.3f);
+                                        f.motion = motion, f.since = Clock::now();
+                                        f.until = Clock::now() + std::chrono::milliseconds(ms ? ms + 1000 : 8000);
+                                    } else {
+                                        LOG_INFO(Core, "cvcbrawl: {} is up again", k ? "B" : "A");
+                                        stand(k);
+                                    }
+                                }
+                                break;
+                            case Act::Pulse: {
+                                // Charge 1.4 s, fire from its mouth along its facing at the other's chest
+                                // (it hits when squarely aimed), the strike 0.25 s later, done after 1.5 s.
+                                float head[3]{};
+                                front(k, head);
+                                const float* me = k ? (const float*)rb : (const float*)ra;
+                                const float mouth[3]{(head[0] + me[0] * 2.0f) / 3.0f, me[1] + 14.0f,
+                                                     (head[2] + me[2] * 2.0f) / 3.0f};
+                                if (pulse_phase == 0 && Clock::now() < f.since + std::chrono::milliseconds(1400)) {
+                                    steer(k, 0.4f);
+                                } else if (pulse_phase == 0) {
+                                    g_cvc_body[k].turn = 0.0f;
+                                    // The other's chest: the middle of its bones.
+                                    std::array<float, 3> chest{};
+                                    for (const auto& b : now[1 - k]) {
+                                        for (int c = 0; c < 3; c++) {
+                                            chest[c] += b[c] / float(now[1 - k].size());
+                                        }
+                                    }
+                                    pulse_on_target = known && cosine > 0.85f && !now[1 - k].empty();
+                                    const float fx = head[0] - me[0], fz = head[2] - me[2];
+                                    const float n = std::max(std::hypot(fx, fz), 0.001f);
+                                    pulse_point = pulse_on_target ? chest
+                                                                  : std::array<float, 3>{mouth[0] + fx / n * 70.0f, me[1] - 10.0f,
+                                                                                         mouth[2] + fz / n * 70.0f};
+                                    const float yaw = std::atan2(pulse_point[0] - mouth[0], pulse_point[2] - mouth[2]);
+                                    CvcEffect("npe/bp_harpoon_impact.npe", mouth, yaw);
+                                    CvcEffect("npe/arrow_hit_spark.npe", mouth, yaw);
+                                    std::memcpy(pulse_from.data(), mouth, 12);
+                                    pulse_drawn = 0.0f;
+                                    CvcSound(rng() % 2 ? "kame_pulse_fire1" : "kame_pulse_fire2", mouth);
+                                    CvcSound("kame_pulse_line1", pulse_point.data());
+                                    CvcSound("kame_pulse_line2", mouth);
+                                    pulse_phase = 1, pulse_fired = Clock::now();
+                                    LOG_INFO(Core, "cvcbrawl: {} fires its pulse ({}, facing {:.2f})", k ? "B" : "A",
+                                             pulse_on_target ? "at the other" : "past it", cosine);
+                                } else if (pulse_phase == 1 && Clock::now() <= pulse_fired + std::chrono::milliseconds(250)) {
+                                    // The bolt crossing: sparks laid along it every few units as it travels.
+                                    const float reach = std::min(1.0f, std::chrono::duration<float>(Clock::now() - pulse_fired).count() / 0.25f);
+                                    const float length = std::hypot(pulse_point[0] - pulse_from[0], pulse_point[1] - pulse_from[1],
+                                                                    pulse_point[2] - pulse_from[2]);
+                                    const float step = std::max(4.0f / std::max(length, 1.0f), 0.02f);
+                                    const float yaw = std::atan2(pulse_point[0] - pulse_from[0], pulse_point[2] - pulse_from[2]);
+                                    for (int n = 0; pulse_drawn + step <= reach && n < 6; n++) {
+                                        pulse_drawn += step;
+                                        const float at[3]{pulse_from[0] + (pulse_point[0] - pulse_from[0]) * pulse_drawn,
+                                                          pulse_from[1] + (pulse_point[1] - pulse_from[1]) * pulse_drawn,
+                                                          pulse_from[2] + (pulse_point[2] - pulse_from[2]) * pulse_drawn};
+                                        CvcEffect(n % 2 ? "npe/player_spark.npe" : "npe/arrow_hit_spark.npe", at, yaw);
+                                    }
+                                } else if (pulse_phase == 1) {
+                                    const float yaw = std::atan2(pulse_point[0] - mouth[0], pulse_point[2] - mouth[2]);
+                                    if (pulse_on_target) {
+                                        CvcEffect("npe/knight_shockwave_add.npe", pulse_point.data(), yaw);
+                                        CvcEffect("npe/arrow_hit_spark.npe", pulse_point.data(), yaw);
+                                        CvcEffect("npe/tts_pls_dst_smoke.npe", pulse_point.data(), yaw);
+                                        CvcSound(rng() % 2 ? "kame_pulse_hit1" : "kame_pulse_hit3", pulse_point.data());
+                                        pulse_hit_for = k; // the blow code below takes it
+                                    } else {
+                                        CvcEffect("npe/tts_pls_dst_smoke.npe", pulse_point.data(), yaw);
+                                        CvcEffect("npe/gyz_gds_impact.npe", pulse_point.data(), yaw);
+                                        CvcEffect("npe/player_stone_dust.npe", pulse_point.data(), yaw);
+                                        CvcSound("kame_pulse_hit2", pulse_point.data());
+                                    }
+                                    pulse_phase = 2;
+                                } else if (pulse_phase == 2 && Clock::now() > pulse_fired + std::chrono::milliseconds(1500)) {
+                                    stand(k);
+                                }
+                                break;
+                            }
                             case Act::Idle:
                                 break;
                             }
@@ -2923,8 +3083,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             g_cvc_contact.attacker = -1;
                             g_cvc_contact.found = false;
                         }
-                        if (!fell && (!swinging || now[k].size() != before[k].size() || now[1 - k].empty() ||
-                                      dt <= 0.0f)) {
+                        const bool pulsed = pulse_hit_for == k;
+                        if (!fell && !pulsed && (!swinging || now[k].size() != before[k].size() || now[1 - k].empty() ||
+                                                 dt <= 0.0f)) {
                             continue;
                         }
                         // The blow: its swing meets the other's body in the game's own collision
@@ -2932,7 +3093,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         int hit_bone = -1;
                         float hit_speed = 0.0f, hit_gap = 0.0f;
                         std::array<float, 3> contact{};
-                        if (swinging) {
+                        if (pulsed) {
+                            hit_bone = 0, hit_speed = 300.0f, contact = pulse_point; // its pulse struck
+                            pulse_hit_for = -1;
+                        } else if (swinging) {
                             const Moves* striker = kind_of(k);
                             g_cvc_contact.least = striker && striker->swing > 0.0f ? striker->swing : speed;
                             g_cvc_contact.body = kind_of(1 - k) ? kind_of(1 - k)->body : 8.0f;
@@ -2984,7 +3148,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;
-                            if (*health > 0.0f && victim_moves) {
+                            if (*health > 0.0f && victim_moves && fighter[1 - k].act != Act::Down) { // (down: it lies on)
                                 float low = 1e9f, high = -1e9f;
                                 for (const auto& b : now[1 - k]) {
                                     low = std::min(low, b[1]), high = std::max(high, b[1]);
