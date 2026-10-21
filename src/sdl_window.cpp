@@ -2815,7 +2815,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
-                    // Balance lost to blows (impulses add up, it drains back slowly, 0.04 a second); past 2.2
+                    // Balance lost to blows (impulses add up, it drains back slowly, 0.04 a second); past 1.8 (two full blows close together)
                     // the colossus loses its footing (Basaran overturns, Gaius staggers far).
                     static float balance[2]{};
                     static Clock::time_point balance_at = Clock::now();
@@ -3171,7 +3171,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 break;
                             case Act::Flinch:
                                 if (played(k)) {
-                                    if (!moves->down.empty() && balance[k] > 2.2f) {
+                                    if (!moves->down.empty() && balance[k] > 1.8f) {
                                         balance[k] = 0.0f;
                                         // Knocked off its feet: its own fall, then getting up again.
                                         play(k, moves->down[0].first, Act::Down, moves->down[0].second ? moves->down[0].second : 8000);
@@ -3422,7 +3422,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // rocks back a little); losing its footing without a fall of its own (Gaius),
                             // it staggers far.
                             const Moves* victim_kind = kind_of(1 - k);
-                            const bool stagger = *health > 0.0f && balance[1 - k] > 2.2f && victim_kind && victim_kind->down.empty();
+                            const bool stagger = *health > 0.0f && balance[1 - k] > 1.8f && victim_kind && victim_kind->down.empty();
                             CvcReactImpulse(1 - k, dir, point.data(), force * (stagger ? 2.2f : 1.0f));
                             if (stagger) {
                                 balance[1 - k] = 0.0f;
