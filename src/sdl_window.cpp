@@ -2885,7 +2885,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
                         // damage; Knight_walk; Knight_Standing_left/right_rotation; Knight_Standing;
                         // Knight_retreat.
-                        {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
+                        // (The slam three times in four: the sweep, made against Wander, mostly passes
+                        // beside or under a colossus's own collision.)
+                        {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
                              // (strike 6: from 8-10 its sword passed short of the other's own collision)
                              250.0f, 0x1d38340, 6.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
