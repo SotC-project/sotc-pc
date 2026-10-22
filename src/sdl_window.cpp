@@ -3102,8 +3102,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             landing.clear();
                             if (was_attacking && !landed) {
-                                LOG_INFO(Core, "cvcbrawl: {} missed (the bodies came within {:.1f} of each other)", k ? "B" : "A",
-                                         g_cvc_gap.load());
+                                float cosine = 0.0f, side = 0.0f;
+                                face(k, cosine, side);
+                                const float* me = k ? (const float*)rb : (const float*)ra;
+                                const float* it = k ? (const float*)ra : (const float*)rb;
+                                const float d = std::hypot(it[0] - me[0], it[2] - me[2]);
+                                const float sine = std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
+                                LOG_INFO(Core, "cvcbrawl: {} missed (the bodies came within {:.1f} of each other; the other at "
+                                         "{:.0f} ahead, {:.0f} {})", k ? "B" : "A", g_cvc_gap.load(), d * cosine, d * sine,
+                                         side > 0.0f ? "left" : "right");
                             }
                             attacking = -1;
                             next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
@@ -3235,7 +3242,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             switch (f.act) {
                             case Act::Attack: {
                                 // Turned onto the other while winding up, then the blow goes where it goes.
-                                const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(900);
+                                // (Basaran rears up for 1.6 s before its slam comes down: it can come on under it.)
+                                const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900);
                                 if (winding) {
                                     steer(k, 0.5f);
                                 } else {
