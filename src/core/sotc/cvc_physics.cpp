@@ -292,6 +292,8 @@ struct Body {
     std::vector<Vec3> before; // each part's centre the step before
 };
 Body g_body[2];
+std::mutex g_shapes_lock;
+std::vector<std::vector<Vec3>> g_shapes[2]; // as last placed (the overlay)
 std::map<std::pair<int, int>, std::uint64_t> g_touched; // part pair (A's, B's) -> step it last touched
 std::uint64_t g_step = 0;
 
@@ -309,6 +311,11 @@ const std::array<int, 35>* Parents(int kind) {
     Mass(kind); // (loaded)
     const auto it = g_parents.find(kind);
     return it == g_parents.end() ? nullptr : &it->second;
+}
+
+std::vector<std::vector<Vec3>> Shapes(int k) {
+    std::scoped_lock guard{g_shapes_lock};
+    return g_shapes[k & 1];
 }
 
 float Mass(int kind) {
@@ -381,6 +388,13 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         body.before.clear();
         for (const Placed& p : placed[k]) {
             body.before.push_back(p.center);
+        }
+        {
+            std::scoped_lock guard{g_shapes_lock};
+            g_shapes[k].clear();
+            for (const Placed& p : placed[k]) {
+                g_shapes[k].push_back(p.points);
+            }
         }
     }
     // Where the two meet: every pair of parts whose boxes overlap, then their hulls.

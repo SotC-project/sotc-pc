@@ -464,14 +464,21 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
     static float last[2][70 * 16], offset[2][70 * 16], now[70 * 16];
     static bool have[2]{};
     static u64 last_motion[2]{};
+    static float last_step[2]{}; // how far its root moved the frame before (a steady lunge is no snap)
     const u64 motion = g_cvc_body[k].motion.load();
     const size_t n = size_t(count) * 16;
     std::memcpy(now, reinterpret_cast<const void*>(matrices), n * 4);
-    float jump = 0.0f;
+    float step = 0.0f;
     if (have[k]) {
-        jump = std::hypot(now[12] - last[k][12], now[13] - last[k][13], now[14] - last[k][14]);
+        step = std::hypot(now[12] - (last[k][12] - offset[k][12]), now[13] - (last[k][13] - offset[k][13]),
+                          now[14] - (last[k][14] - offset[k][14]));
     }
-    if (have[k] && motion && last_motion[k] && (motion != last_motion[k] || jump > 0.6f)) {
+    // (A snap: its motion changed, or its root moved a unit more than it did the frame before; a
+    // steady lunge or walk is none: at a fixed 0.6 a frame, every frame of a lunge restarted it and the
+    // bodies and the view following them shook.)
+    const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || step > last_step[k] + 1.0f);
+    last_step[k] = step;
+    if (snap) {
         for (size_t i = 0; i < n; i++) {
             offset[k][i] = last[k][i] - now[i];
         }

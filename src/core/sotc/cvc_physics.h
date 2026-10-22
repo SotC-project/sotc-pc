@@ -43,6 +43,9 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
 /// A colossus's mass (its hulls' volume), 0 when unknown.
 float Mass(int kind);
 
+/// Colossus k's collision as last placed (each part's hull points, world), for a debug overlay.
+std::vector<std::vector<Vec3>> Shapes(int k);
+
 /// A colossus's skeleton: each of its 35 bones' parent (-1 the root), null when unknown.
 const std::array<int, 35>* Parents(int kind);
 

@@ -13,6 +13,7 @@
 #include "core/memory.h"
 #include "core/sotc/challenge.h"
 #include "core/sotc/cvc_hud.h"
+#include "core/sotc/cvc_physics.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/screens.h"
 #include "core/sotc/ui.h"
@@ -176,6 +177,50 @@ void Bolt(const float* from, const float* to, float seconds) {
     g_pulse.charge_until = 0;
 }
 
+namespace {
+// Debug (CVC_HULLS set): each collision part's outline over the picture (the 2-D hull of its
+// points on screen), A orange, B cyan: how the physics' shapes sit on the colossi.
+void DrawShapes(u64 image, ImDrawList* draw, const ImVec2& display) {
+    for (int k = 0; k < 2; k++) {
+        for (const auto& part : Sotc::CvcPhysics::Shapes(k)) {
+            std::vector<ImVec2> pts;
+            for (const auto& p : part) {
+                ImVec2 at;
+                if (Project(image, p.data(), display, at)) {
+                    pts.push_back(at);
+                }
+            }
+            if (pts.size() < 3) {
+                continue;
+            }
+            // Monotone chain hull on screen.
+            std::sort(pts.begin(), pts.end(), [](const ImVec2& a, const ImVec2& b) {
+                return a.x < b.x || (a.x == b.x && a.y < b.y);
+            });
+            std::vector<ImVec2> hull(2 * pts.size());
+            size_t n = 0;
+            const auto cross = [](const ImVec2& o, const ImVec2& a, const ImVec2& b) {
+                return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+            };
+            for (size_t i = 0; i < pts.size(); i++) {
+                while (n >= 2 && cross(hull[n - 2], hull[n - 1], pts[i]) <= 0.0f) {
+                    n--;
+                }
+                hull[n++] = pts[i];
+            }
+            for (size_t i = pts.size() - 1, t = n + 1; i-- > 0;) {
+                while (n >= t && cross(hull[n - 2], hull[n - 1], pts[i]) <= 0.0f) {
+                    n--;
+                }
+                hull[n++] = pts[i];
+            }
+            draw->AddPolyline(hull.data(), int(n), k ? IM_COL32(80, 220, 255, 200) : IM_COL32(255, 160, 40, 200),
+                              ImDrawFlags_Closed, 1.5f);
+        }
+    }
+}
+} // namespace
+
 void Draw() {
     const u64 image = ImageBase();
     // Frames in a row without the loading cover: the first uncovered frame can still be the
@@ -206,6 +251,9 @@ void Draw() {
 
     if (!Screens::Letterboxed()) {
         DrawPulse(image, draw, display, scale, now);
+        if (std::getenv("CVC_HULLS")) {
+            DrawShapes(image, draw, display);
+        }
     }
 
     // Names and bars along the top, A on the left and B on the right, each bar full toward its
