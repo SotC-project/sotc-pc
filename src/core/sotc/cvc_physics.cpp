@@ -419,11 +419,14 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             }
         }
     }
-    // Out of each other (half the depth a step, by inverse mass), on the ground plane.
+    // Out of each other (half the depth a step, by inverse mass), on the ground plane; at most 0.3
+    // a step (a blade swung deep into the other is driven by its arm, not to be thrown out with
+    // the whole body).
     if (deepest > 0.0f) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
-        out.shift[1] = flat * (deepest * 0.5f * (1.0f / mass[1]) / share);
-        out.shift[0] = flat * (-deepest * 0.5f * (1.0f / mass[0]) / share);
+        const float out_by = std::min(deepest * 0.5f, 0.3f);
+        out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
+        out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }
     // The strongest meeting's impulse: the struck pushed along it, the striker back (through its
     // arm), each turned about its root.
