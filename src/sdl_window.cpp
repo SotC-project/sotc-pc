@@ -3374,13 +3374,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                               250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 0.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
                               {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
                               false, {}, {}, 2.0f}},
-                        // Quadratus (Buffalo): comparable_foot_beginning > comparable_foot (its rearing
-                        // stomp); no damage motions: neck_fits (its shake) for all; walk; right / left
-                        // around; Standing_1; and_back_away. Its root faces along -z.
-                        {1, {{{0x1d7e660, 5000}},
-                             {0x1d84090}, {0x1d84090}, {0x1d84090},
-                             250.0f, 0x1d7e1c0, 4.0f, -2, 0x1d80470, 0x1d80220, 0.0f, 0x1d7d190, 0x1d7dad0, 1.4f, 0.85f, 8.0f, false, 0, 0,
-                             {{0x1d7e660, 0x1d7e8b0}}, false, {}, {}, 1.5f}},
+                        // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
+                        // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
+                        // walk; left / right rotation; Standing; recession. Its root faces along -z.
+                        {1, {{{0x1d625c0, 5000}, {0x1d62f00, 5000}},
+                             {0x1d62120}, {0x1d63840}, {0x1d62120},
+                             250.0f, 0x1d61590, 4.0f, -2, 0x1d60ea0, 0x1d60c50, 0.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.85f, 8.0f, false, 0, 0,
+                             {{0x1d625c0, 0x1d62810}, {0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 1.5f}},
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
                         // left / right rotation; Standing; no stepping back. Its root faces along +z.
