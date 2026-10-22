@@ -298,7 +298,138 @@ static void CvcReactImpulse(int k, const float* dir, const float* point, float f
     r.sway_v += 26.0f * force * share;
 }
 
+/// Per-limb give: the struck part's chain of bones bending at its joints and springing back to the
+/// animated pose (the motors), each bone's turn a rotation vector (world axis x angle, radians) and
+/// its rate (rad/s).
+struct CvcFlex {
+    std::mutex lock;
+    int kind = -1;
+    std::array<std::array<float, 3>, 35> angle{}, rate{};
+};
+static CvcFlex g_cvc_flex[2];
+
+/// A blow felt by colossus k's bone `bone` at `point`, pushing along `dir` (unit) at `speed`
+/// (units/s, what that region of it is given): that bone and up to three above it turn about their
+/// joints (r x v / r^2, halving up the chain).
+static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const float* point, const float* dir,
+                           float speed) {
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents || bone <= 0 || bone >= 35) {
+        return;
+    }
+    auto& f = g_cvc_flex[k];
+    std::scoped_lock guard{f.lock};
+    f.kind = kind;
+    float share = 1.0f;
+    for (int b = bone, depth = 0; b > 0 && depth < 4; b = (*parents)[b], depth++, share *= 0.5f) {
+        const float* m = bones + b * 16;
+        const float r[3]{point[0] - m[12], point[1] - m[13], point[2] - m[14]};
+        const float r2 = std::max(r[0] * r[0] + r[1] * r[1] + r[2] * r[2], 4.0f);
+        const float w[3]{(r[1] * dir[2] - r[2] * dir[1]), (r[2] * dir[0] - r[0] * dir[2]), (r[0] * dir[1] - r[1] * dir[0])};
+        auto& rate = f.rate[size_t(b)];
+        for (int c = 0; c < 3; c++) {
+            rate[c] += w[c] * speed / r2 * share;
+        }
+        if (const float n = std::hypot(rate[0], rate[1], rate[2]); n > 8.0f) {
+            for (float& c : rate) {
+                c *= 8.0f / n;
+            }
+        }
+    }
+}
+
+/// Colossus k's limbs giving (CvcFlex) on its bone matrices: the springs stepped, then each bone
+/// with a turn turns itself and everything below it about its joint, parents first. Its matrices
+/// hold the 35 bones twice (35-69 repeat 0-34): both turned.
+static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
+    auto& f = g_cvc_flex[k];
+    std::array<std::array<float, 3>, 35> angle;
+    int kind;
+    {
+        std::scoped_lock guard{f.lock};
+        kind = f.kind;
+        constexpr float w0 = 9.0f, zeta = 0.45f; // (back to its pose in about half a second)
+        for (size_t b = 0; b < 35 && dt > 0.0f; b++) {
+            for (int c = 0; c < 3; c++) {
+                f.rate[b][c] += (-w0 * w0 * f.angle[b][c] - 2.0f * zeta * w0 * f.rate[b][c]) * dt;
+                f.angle[b][c] += f.rate[b][c] * dt;
+            }
+            if (const float a = std::hypot(f.angle[b][0], f.angle[b][1], f.angle[b][2]); a > 0.4f) {
+                for (float& c : f.angle[b]) {
+                    c *= 0.4f / a; // (a joint bends so far)
+                }
+            }
+        }
+        angle = f.angle;
+    }
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents) {
+        return;
+    }
+    // Parents first, and what hangs below each bone (itself included), once per kind.
+    static std::map<int, std::pair<std::vector<int>, std::array<std::vector<int>, 35>>> trees;
+    auto& [order, below] = trees[kind];
+    if (order.empty()) {
+        order.push_back(0);
+        for (size_t i = 0; i < order.size(); i++) {
+            for (int c = 0; c < 35; c++) {
+                if ((*parents)[c] == order[i]) {
+                    order.push_back(c);
+                }
+            }
+        }
+        for (int b = 0; b < 35; b++) {
+            for (int d = b; d >= 0; d = (*parents)[d]) {
+                below[size_t(d)].push_back(b);
+            }
+        }
+    }
+    for (const int b : order) {
+        const auto& t = angle[size_t(b)];
+        const float a = std::hypot(t[0], t[1], t[2]);
+        if (a < 1e-4f) {
+            continue;
+        }
+        const float axis[3]{t[0] / a, t[1] / a, t[2] / a}, c = std::cos(a), s = std::sin(a);
+        const auto rotate = [&](float* v) {
+            const float dot = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2];
+            const float cr[3]{axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]};
+            for (int q = 0; q < 3; q++) {
+                v[q] = v[q] * c + cr[q] * s + axis[q] * dot * (1.0f - c);
+            }
+        };
+        const auto* joint = reinterpret_cast<const volatile float*>(matrices + b * 64);
+        const float pivot[3]{joint[12], joint[13], joint[14]};
+        for (const int d : below[size_t(b)]) {
+            for (const int i : {d, d + 35}) {
+                if (i >= count) {
+                    continue;
+                }
+                auto* m = reinterpret_cast<volatile float*>(matrices + i * 64);
+                for (int row = 0; row < 3; row++) {
+                    float v[3]{m[row * 4], m[row * 4 + 1], m[row * 4 + 2]};
+                    rotate(v);
+                    m[row * 4] = v[0], m[row * 4 + 1] = v[1], m[row * 4 + 2] = v[2];
+                }
+                float v[3]{m[12] - pivot[0], m[13] - pivot[1], m[14] - pivot[2]};
+                rotate(v);
+                m[12] = pivot[0] + v[0], m[13] = pivot[1] + v[1], m[14] = pivot[2] + v[2];
+            }
+        }
+    }
+}
+
 static void CvcReactWork(u64 image, float dt) {
+    for (int k = 0; k < 2; k++) { // the limbs give first, then the whole body leans
+        const u64 object = g_cvc_body[k].object.load();
+        if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
+            continue;
+        }
+        const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
+        if (matrices && Core::Memory::Instance()->IsValidMapping(matrices, 35 * 64)) {
+            CvcFlexWork(k, matrices, Core::Memory::Instance()->IsValidMapping(matrices, 70 * 64) ? 70 : 35, dt);
+        }
+    }
     for (int k = 0; k < 2; k++) {
         auto& r = g_cvc_react[k];
         const u64 object = g_cvc_body[k].object.load();
@@ -668,6 +799,15 @@ static void CvcPhysicsWork(u64 image, float dt) {
             const float kicked = std::hypot(result.kick[k][0], result.kick[k][2]);
             CvcReactSpin(k, result.spin[k].data(), strongest->point.data(), dir, std::min(kicked * 6.0f, 40.0f),
                          std::min(kicked * 1.5f, 20.0f));
+        }
+    }
+    // Each new meeting with some weight bends the struck one's limb there (the region of it given
+    // the impulse over about an eighth of its mass).
+    for (const auto& hit : result.hits) {
+        if (hit.first && hit.impulse > 4000.0f) {
+            const int struck = 1 - hit.striker;
+            CvcFlexImpulse(struck, kinds[struck], bones[struck], hit.struck_bone, hit.point.data(), hit.normal.data(),
+                           hit.impulse / (Sotc::CvcPhysics::Mass(kinds[struck]) * 0.12f));
         }
     }
     // A blow for cvcbrawl: the strongest new meeting with some weight behind it.
@@ -2959,6 +3099,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static std::vector<std::array<float, 3>> landing; // (test aid, below)
                     static float nearest_swing = 1e9f, nearest_any = 1e9f; // closest a moving / any bone came (misses in the log)
                     static Clock::time_point attack_from, next_attack = Clock::now();
+                    static std::array<float, 2> attack_root{}; // where the attacker stood when it began
                     static std::mt19937 rng{std::random_device{}()};
                     const bool over = *reinterpret_cast<const volatile u8*>(image + 0x1593efb) != 0;
                     const auto* ra = reinterpret_cast<const volatile float*>(objects[0] + 0x130);
@@ -3109,8 +3250,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float d = std::hypot(it[0] - me[0], it[2] - me[2]);
                                 const float sine = std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
                                 LOG_INFO(Core, "cvcbrawl: {} missed (the bodies came within {:.1f} of each other; the other at "
-                                         "{:.0f} ahead, {:.0f} {})", k ? "B" : "A", g_cvc_gap.load(), d * cosine, d * sine,
-                                         side > 0.0f ? "left" : "right");
+                                         "{:.0f} ahead, {:.0f} {}; it came on {:.1f})", k ? "B" : "A", g_cvc_gap.load(), d * cosine,
+                                         d * sine, side > 0.0f ? "left" : "right",
+                                         std::hypot(me[0] - attack_root[0], me[2] - attack_root[1]));
                             }
                             attacking = -1;
                             next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
@@ -3128,6 +3270,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         play(k, motion, Act::Attack, 12000);
                         attacking = k, landed = false, attack_from = Clock::now();
                         g_cvc_gap = 1e9f;
+                        {
+                            const float* me = k ? (const float*)rb : (const float*)ra;
+                            attack_root = {me[0], me[2]};
+                        }
                         nearest_swing = nearest_any = 1e9f;
                         LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
                                  closest);

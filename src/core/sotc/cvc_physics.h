@@ -18,6 +18,7 @@ using Vec3 = std::array<float, 3>;
 struct Hit {
     int striker = 0;   // 0 or 1: the one driving into the other there
     int bone = -1;     // the striker's bone whose part met
+    int struck_bone = -1; // the struck one's bone whose part was met
     Vec3 point{};      // where (world)
     Vec3 normal{};     // from the striker into the struck (unit)
     float closing = 0; // how fast they came together along it (units/s)
@@ -40,6 +41,9 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
 
 /// A colossus's mass (its hulls' volume), 0 when unknown.
 float Mass(int kind);
+
+/// A colossus's skeleton: each of its 35 bones' parent (-1 the root), null when unknown.
+const std::array<int, 35>* Parents(int kind);
 
 /// Two convex point sets overlapping: true with the direction to move b out of a (unit) and how
 /// far. (Exposed for the self-check.)

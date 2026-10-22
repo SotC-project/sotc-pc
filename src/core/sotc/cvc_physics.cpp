@@ -257,14 +257,27 @@ struct Part {
     std::vector<Vec3> local;
 };
 std::map<int, std::vector<Part>> g_parts;
+std::map<int, std::array<int, 35>> g_parents;
 
 void Load() {
 #ifndef CVC_PHYSICS_SELF_CHECK
     const auto file = cmrc::res::get_filesystem().open("src/resources/cvc_hulls.txt");
-    std::istringstream in{std::string(file.begin(), file.end())};
-    int kind = 0, count = 0;
-    Part p;
-    while (in >> kind >> p.part >> p.bone >> p.volume >> count) {
+    std::istringstream text{std::string(file.begin(), file.end())};
+    for (std::string line; std::getline(text, line);) {
+        std::istringstream in{line};
+        int kind = 0, count = 0;
+        if (line.starts_with("P ")) { // a skeleton: P kind and its 35 parents
+            in.ignore(2);
+            auto& parents = g_parents[(in >> kind, kind)];
+            for (int& parent : parents) {
+                in >> parent;
+            }
+            continue;
+        }
+        Part p;
+        if (!(in >> kind >> p.part >> p.bone >> p.volume >> count)) {
+            continue;
+        }
         p.local.resize(size_t(count));
         for (auto& v : p.local) {
             in >> v[0] >> v[1] >> v[2];
@@ -290,6 +303,12 @@ bool Overlap(const std::vector<Vec3>& a, const std::vector<Vec3>& b, Vec3& norma
         return false;
     }
     return Epa(a, b, s, normal, depth);
+}
+
+const std::array<int, 35>* Parents(int kind) {
+    Mass(kind); // (loaded)
+    const auto it = g_parents.find(kind);
+    return it == g_parents.end() ? nullptr : &it->second;
 }
 
 float Mass(int kind) {
@@ -406,6 +425,7 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             const float into_a = Dot(a.velocity, n), into_b = -Dot(b.velocity, n);
             hit.striker = into_a >= into_b ? 0 : 1;
             hit.bone = hit.striker ? b.bone : a.bone;
+            hit.struck_bone = hit.striker ? a.bone : b.bone;
             hit.normal = hit.striker ? -n : n;
             hit.point = (Far(a.points, n) + Far(b.points, -n)) * 0.5f;
             const float striking = limb * (hit.striker ? b.volume : a.volume);
