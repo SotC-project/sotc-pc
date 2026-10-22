@@ -843,6 +843,23 @@ static void CvcPhysicsWork(u64 image, float dt) {
     }
     g_cvc_gap_now = result.gap;
     g_cvc_touch_now = !result.hits.empty();
+    // (Clipping in the log: the deepest the bodies were inside each other over each 2 s.)
+    {
+        static float deepest = 0.0f;
+        static int deep_bone[2]{};
+        static auto since = std::chrono::steady_clock::now();
+        for (const auto& hit : result.hits) {
+            if (hit.depth > deepest) {
+                deepest = hit.depth, deep_bone[hit.striker] = hit.bone, deep_bone[1 - hit.striker] = hit.struck_bone;
+            }
+        }
+        if (std::chrono::steady_clock::now() > since + std::chrono::seconds(2)) {
+            if (deepest > 0.0f) {
+                LOG_INFO(Core, "cvcphys: deepest {:.1f} inside each other (A bone {}, B bone {})", deepest, deep_bone[0], deep_bone[1]);
+            }
+            deepest = 0.0f, since = std::chrono::steady_clock::now();
+        }
+    }
     const Sotc::CvcPhysics::Hit* strongest = nullptr;
     for (const auto& hit : result.hits) {
         if (!strongest || hit.impulse > strongest->impulse) {
