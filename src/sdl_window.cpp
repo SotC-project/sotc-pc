@@ -350,6 +350,32 @@ static bool CvcLimb(int kind, int bone) {
     return count[size_t(bone)] <= std::max(3, int(parents->size()) / 6);
 }
 
+/// Whether bone `bone` (of `bones`, this frame's matrices) carries a foot on the ground: a bone
+/// below it within 2 of the lowest. Such a chain does not give (a foreleg bent by a blow slid its
+/// planted foot 2 units).
+static bool CvcStanding(int kind, const float* bones, int bone) {
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents) {
+        return false;
+    }
+    const int count = int(parents->size());
+    float lowest = 1e9f;
+    for (int b = 0; b < count; b++) {
+        lowest = std::min(lowest, bones[b * 16 + 13]);
+    }
+    for (int b = 0; b < count; b++) {
+        if (bones[b * 16 + 13] > lowest + 2.0f) {
+            continue;
+        }
+        for (int d = b, guard = 0; d >= 0 && guard < 300; d = (*parents)[size_t(d)], guard++) {
+            if (d == bone) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// A blow felt by colossus k's bone `bone` at `point`, pushing along `dir` (unit) at `speed`
 /// (units/s, what that region of it is given): that bone and up to three above it turn about their
 /// joints (r x v / r^2, halving up the chain).
@@ -363,6 +389,9 @@ static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const 
     std::scoped_lock guard{f.lock};
     f.kind = kind;
     float share = 1.0f;
+    if (CvcStanding(kind, bones, bone)) {
+        return;
+    }
     for (int b = bone, depth = 0; b > 0 && depth < 4 && CvcLimb(kind, b); b = (*parents)[b], depth++, share *= 0.5f) {
         const float* m = bones + b * 16;
         const float r[3]{point[0] - m[12], point[1] - m[13], point[2] - m[14]};
@@ -387,7 +416,7 @@ static void CvcFlexShift(int k, int kind, const float* bones, int bone, const fl
     if (!parents || bone <= 0 || bone >= int(parents->size())) {
         return;
     }
-    if (!CvcLimb(kind, bone)) {
+    if (!CvcLimb(kind, bone) || CvcStanding(kind, bones, bone)) {
         return;
     }
     auto& f = g_cvc_flex[k];
@@ -655,13 +684,15 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
             if (!rigid[k][b]) {
                 // (Not fixed in its parent's frame: its offset from the parent blended from the one it
                 // had, at the length it has now; moved by its own share it was stretched 6 units.)
-                float off[3], length = 0.0f, blended = 0.0f;
+                // (Its length blended too: set at once to the new one, a foot jumped 2 units.)
+                float off[3], length = 0.0f, was_length = 0.0f, blended = 0.0f;
                 for (int c = 0; c < 3; c++) {
                     const float is = anim[b * 16 + 12 + c] - anim[q * 16 + 12 + c];
                     off[c] = is + (was_off[k][b][c] - is) * amount[k];
-                    length += is * is, blended += off[c] * off[c];
+                    length += is * is, was_length += was_off[k][b][c] * was_off[k][b][c], blended += off[c] * off[c];
                 }
-                const float scale = blended > 1e-8f ? std::sqrt(length / blended) : 1.0f;
+                const float want = std::sqrt(length) + (std::sqrt(was_length) - std::sqrt(length)) * amount[k];
+                const float scale = blended > 1e-8f ? want / std::sqrt(blended) : 1.0f;
                 for (int c = 0; c < 3; c++) {
                     m[12 + c] = now[q * 16 + 12 + c] + off[c] * scale;
                 }
@@ -734,6 +765,7 @@ static void CvcQuality(int k, u64 object, const float* anim, const float* drawn,
         s32 act;
         float give, tilt, blend;
         float low_anim[3]; // the lowest bone where its animation has it
+        float root_anim[3], root_drawn[3]; // bone 0 where its animation has it, and as drawn
     } r{};
 #pragma pack(pop)
     auto& body = g_cvc_body[k];
@@ -811,6 +843,7 @@ static void CvcQuality(int k, u64 object, const float* anim, const float* drawn,
     if (r.low_bone >= 0) {
         std::memcpy(r.low_anim, anim + r.low_bone * 16 + 12, 12);
     }
+    std::memcpy(r.root_anim, anim + 12, 12), std::memcpy(r.root_drawn, drawn + 12, 12);
     {
         std::scoped_lock guard{g_cvc_flex[k].lock};
         for (const auto& a : g_cvc_flex[k].angle) {
@@ -1025,6 +1058,13 @@ static void CvcHitStop(u64 a, u64 b, int ms, float scale) {
     g_cvc_hold_scale[0] = scale, g_cvc_hold_scale[1] = scale;
     g_cvc_hold_obj[0] = a, g_cvc_hold_obj[1] = b;
     g_cvc_hold_until[0] = until, g_cvc_hold_until[1] = until;
+}
+
+/// Plays one colossus's animation `scale` times as fast for `ms` milliseconds (a charge: its walk,
+/// quickened). A blow's hit-stop takes over both meanwhile.
+static void CvcQuicken(int k, u64 object, int ms, float scale) {
+    g_cvc_hold_scale[k] = scale, g_cvc_hold_obj[k] = object;
+    g_cvc_hold_until[k] = (std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)).time_since_epoch().count();
 }
 
 /// Asks for one of the game's effects (by its file name, e.g. "npe/knight_metal_react.npe";
@@ -1983,8 +2023,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         std::string text = std::getenv("SOTC_SCRIPT");
         if (text.starts_with("@res:")) {
             // A script built into the program (the Free Play colossus-vs-colossus battle).
+            // "?host=N": Gaius against that colossus, in its arena, instead of Basaran.
+            int host = 8;
+            if (const auto q = text.find("?host="); q != std::string::npos) {
+                host = std::atoi(text.c_str() + q + 6);
+                text.resize(q);
+            }
             const auto file = cmrc::res::get_filesystem().open("src/resources/" + text.substr(5));
             text.assign(file.begin(), file.end());
+            if (host != 8) {
+                const auto replace_all = [&](const std::string& from, const std::string& to) {
+                    for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size()) {
+                        text.replace(at, from.size(), to);
+                    }
+                };
+                replace_all(":poke=325e8b4:8,", fmt::format(":poke=325e8b4:{},", host));
+                replace_all("cvctarget=238#0:238#1:2:8", fmt::format("cvctarget=238#0:238#1:2:{}", host));
+                replace_all("cvcplace=55@930/-900+230", "cvcplace=55"); // (Basaran's open ground)
+            }
         } else if (text.starts_with('@')) {
             std::ifstream file{text.substr(1)};
             text.assign(std::istreambuf_iterator<char>(file), {});
@@ -3736,6 +3792,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // How hard its blows land for the speed of the striking bone (its mass behind
                         // them): Basaran's slow, heavy slams count as much as Gaius's fast sword.
                         float heft = 1.0f;
+                        // Comes on at an angle, its nose this far beside the other (0: straight on; one
+                        // that holds its ground, 12): Quadratus, whose head reaches past its forelegs
+                        // but not past Gaius's sword held out in front, butts him from the side.
+                        float angle_in = 0.0f;
+                        // Charges (two attacks in three): its walk at 2.5 times its pace for up to 2.2 s,
+                        // straight at the other, a blow when its body meets it (Quadratus: its own
+                        // attacks are made for Wander under its head; its head swing is a shake).
+                        bool charge = false;
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -3800,15 +3864,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
                         // (The right stomp from its strike: its wind-up, right arm attack started, plays 9 s,
                         // the whole stomp 21 s.)
-                        // Its head swing (a butt) two times in three: its forelegs come down 10 ahead of its
-                        // root, its own head 20 ahead, so against a standing colossus a stomp only reaches
-                        // what its head already touches.
-                        {1, {{{0x1d63840, 3500}, {0x1d63840, 3500}, {0x1d62810, 5000}},
+                        // Mostly it charges (below): its forelegs come down 10 ahead of its root, its own
+                        // head 20 ahead, so against a standing colossus a stomp only reaches what its head
+                        // already touches; its head swing is a shake.
+                        {1, {{{0x1d62810, 5000}},
                              {0x1d62120}, {0x1d62120}, {0x1d62120},
-                             // (strike 2.5: its head swings across where it stands, not out to the other: from 5-8
-                             // apart it met Gaius at 0-4 units/s; swing 20: slower than a sword)
-                             250.0f, 0x1d61590, 2.5f, -2, 0x1d60ea0, 0x1d60c50, 20.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.85f, 8.0f, false, 0, 0,
-                             {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f}},
+                             // (strike 12: it charges from there, its head first; swing 12: its head meets
+                             // the other at 15-27 units/s; aim 0.7: it butts with the other off to one side)
+                             250.0f, 0x1d61590, 12.0f, -2, 0x1d60ea0, 0x1d60c50, 12.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.7f, 8.0f, false, 0, 0,
+                             {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f, 10.0f, true}},
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
                         // left / right rotation; Standing; no stepping back. Its root faces along +z.
@@ -4064,7 +4128,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             motion = side > 0.0f ? moves->strike_left : moves->strike_right, ms = 3000;
                         }
                         (void)ms; // it ends when its last part does (Act::Attack below); 12 s at most
-                        play(k, motion, Act::Attack, 12000);
+                        if (moves->charge && rng() % 3 != 0) {
+                            motion = moves->walk;
+                            play(k, motion, Act::Attack, 2200);
+                            CvcQuicken(k, objects[k], 2200, 2.5f);
+                        } else {
+                            play(k, motion, Act::Attack, 12000);
+                        }
                         attacking = k, landed = false, attack_from = Clock::now();
                         g_cvc_gap = 1e9f;
                         {
@@ -4265,7 +4335,21 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             case Act::Attack: {
                                 // Turned onto the other while winding up, then the blow goes where it goes.
                                 // (Basaran rears up for 1.6 s before its slam comes down: it can come on under it.)
-                                const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900);
+                                const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900) ||
+                                                     (moves->charge && f.motion == moves->walk); // (a charge steers all the way)
+                                // A charge that has met the other stops there (its body is in the way).
+                                static Clock::time_point met_at[2]{};
+                                if (moves->charge && f.motion == moves->walk && g_cvc_touch_now.load()) {
+                                    if (met_at[k] == Clock::time_point{}) {
+                                        met_at[k] = Clock::now();
+                                    } else if (Clock::now() > met_at[k] + std::chrono::milliseconds(300)) {
+                                        met_at[k] = {};
+                                        stand(k);
+                                        break;
+                                    }
+                                } else {
+                                    met_at[k] = {};
+                                }
                                 if (winding) {
                                     steer(k, 0.3f);
                                 } else {
@@ -4315,7 +4399,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // point 12 beside the other on the side its nose is already: the other ends
                                 // up beside its head, where its side slams bring its head and hands down.
                                 float angled[3]{};
-                                const bool angling = moves->holds && [&] {
+                                const bool angling = (moves->holds || moves->angle_in > 0.0f) && [&] {
                                     float nose[3]{};
                                     if (!front(k, nose)) {
                                         return false;
@@ -4329,7 +4413,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     if ((nose[0] - me[0]) * px + (nose[2] - me[2]) * pz < 0.0f) {
                                         px = -px, pz = -pz;
                                     }
-                                    angled[0] = it[0] + px * 12.0f, angled[1] = it[1], angled[2] = it[2] + pz * 12.0f;
+                                    const float beside = moves->angle_in > 0.0f ? moves->angle_in : 12.0f;
+                                    angled[0] = it[0] + px * beside, angled[1] = it[1], angled[2] = it[2] + pz * beside;
                                     return true;
                                 }();
                                 steer(k, 0.45f, flanking ? flank_spot : angling ? angled : nullptr);
@@ -4659,6 +4744,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // (blades 2-4 units inside for up to 0.7 s in the quality log).
                             if (fighter[k].act == Act::Attack && force > 0.2f) {
                                 stand(k);
+                                // (Quickly out: crossfaded over the stance's 0.6 s the blade stayed 4 deep
+                                // in the other for half a second.)
+                                if (striker_moves && fighter[k].motion == striker_moves->idle) {
+                                    CvcPlayMotion(image, objects[k], striker_moves->idle, 0.25f);
+                                }
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;

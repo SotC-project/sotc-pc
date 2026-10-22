@@ -76,7 +76,11 @@ bool all_items = true;
 bool no_damage = false;
 bool unlimited_grip = false;
 bool max_damage = false;
-bool versus = false; // colossus vs colossus: watch Gaius fight Basaran
+bool versus = false; // colossus vs colossus: watch Gaius fight another colossus
+// The colossi Gaius can be watched fighting, each in its own arena (boss table index): only pairs
+// whose fights pass re/cvc/quality.py (no snapping, deforming, locking or clipping) are offered.
+constexpr int VersusOpponents[]{8};
+int versus_opponent = 0;
 
 constexpr std::array<const char*, 3> Difficulties{"Easy", "Normal", "Hard"};
 constexpr std::array<const char*, 3> DifficultyIds{"easy", "normal", "hard"};
@@ -166,11 +170,11 @@ void Relaunch(const std::string& freeplay_args, const std::string& challenge_spe
 void StartBattle() {
     if (versus) {
         // Colossus vs colossus: Gaius's arena start, then the battle script built into the program
-        // (re/cvc_arena.sh PRODUCT=): Gaius is brought to Basaran's valley, they fight and the
-        // camera follows; Wander (unhurt) only watches.
+        // (re/cvc_arena.sh PRODUCT=), for the chosen opponent (?host=): Gaius is brought to its
+        // arena, they fight and the camera follows; Wander (unhurt) only watches.
         Relaunch("+nointro +skipSplash=true +boss=2 +shadow_noDamage=true "
                  "+shadow_disableCameraAutoCenter=true",
-                 "", "@res:cvc_gaius_vs_basaran.txt");
+                 "", fmt::format("@res:cvc_gaius_vs_basaran.txt?host={}", VersusOpponents[versus_opponent]));
         return;
     }
     std::string args = fmt::format("+nointro +skipSplash=true +boss={}", colossus);
@@ -646,10 +650,21 @@ std::vector<Row> BuildRows() {
             Challenge::LimitIsEstimate(colossus + 1) ? " " + Lang::Tr("(approximate)") : "");
         const char* helper_note = "Not available in Time Attack";
         const auto step = [](int direction) { return direction == 0 ? 1 : direction; };
-        rows.push_back({"Colossus vs Colossus", OnOff(versus),
-                        "Watch Gaius and Basaran fight each other", true, true,
-                        [](int) { versus = !versus; }});
+        rows.push_back({"Colossus vs Colossus", OnOff(versus), "Watch two colossi fight each other",
+                        true, true, [](int) { versus = !versus; }});
         if (versus) {
+            constexpr int count = int(std::size(VersusOpponents));
+            const int host = VersusOpponents[versus_opponent];
+            rows.push_back({"First Colossus", fmt::format("3. {}", Challenge::ColossusName(3)),
+                            "Brought into the second colossus's arena", true, false, [](int) {}});
+            rows.push_back({"Second Colossus",
+                            fmt::format("{}. {}", host + 1, Challenge::ColossusName(host + 1)),
+                            "Choose the colossus Gaius fights", true, count > 1, [step](int d) {
+                                versus_opponent = (versus_opponent + step(d) + count) % count;
+                            }});
+            rows.push_back({"Arena", Challenge::ColossusName(host + 1),
+                            "The battle is fought where the second colossus lives", true, false,
+                            [](int) {}});
             rows.push_back({"Begin Battle", "", "The game restarts and loads the battle", true, false,
                             [](int d) {
                                 if (d == 0) {
