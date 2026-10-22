@@ -2537,7 +2537,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (settled == 60) {
                             *reinterpret_cast<volatile u64*>(image + 0x1593ae8) = 1;
                         }
-                        // Never inside or against a colossus: at least 22 units from every bone.
+                        // Never inside or against a colossus: at least 22 units from every bone. Eased
+                        // out (a blow can throw a body at the eye: jumping clear read as a cut).
+                        const float free_cam[3]{cam[0], cam[1], cam[2]};
                         for (int pass = 0; pass < 2; pass++) {
                             for (const auto& b : body_points) {
                                 const float d[3]{cam[0] - b[0], cam[1] - b[1], cam[2] - b[2]};
@@ -2548,6 +2550,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                         cam[c] = length > 0.001f ? b[c] + d[c] * up : cam[c] + (c == 1 ? 22.0f : 0.0f);
                                     }
                                 }
+                            }
+                        }
+                        {
+                            static float clear_now[3]{};
+                            for (int c = 0; c < 3; c++) {
+                                clear_now[c] += (cam[c] - free_cam[c] - clear_now[c]) * 0.12f;
+                                cam[c] = free_cam[c] + clear_now[c];
                             }
                         }
                         {
@@ -3484,6 +3493,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             static Clock::time_point last_blow[2]{};
                             if (g_cvc_blow.ready && g_cvc_blow.striker == k && Clock::now() < last_blow[k] + std::chrono::milliseconds(500)) {
                                 g_cvc_blow.ready = false;
+                            } else if (g_cvc_blow.ready && g_cvc_blow.striker == k && fighter[k].act != Act::Attack) {
+                                g_cvc_blow.ready = false; // (bodies knocking together outside a strike push and lean, no harm)
                             } else if (g_cvc_blow.ready && g_cvc_blow.striker == k) {
                                 last_blow[k] = Clock::now();
                                 g_cvc_blow.ready = false;

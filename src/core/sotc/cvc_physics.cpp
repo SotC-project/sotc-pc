@@ -375,7 +375,7 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         const Vec3 arm = Cross(r, n);
         return 1.0f / (1.0f / mass[k] + Dot(arm, arm) / (mass[k] * std::max(gyration[k], 1.0f)));
     };
-    float deepest = 0.0f, strongest = 0.0f;
+    float deepest = 0.0f, strongest = 0.0f, deep_speed = 0.0f;
     int strong_striker = 0;
     Vec3 deep_normal{}, strong_impulse{}, strong_point{};
     for (size_t i = 0; i < placed[0].size(); i++) {
@@ -411,7 +411,7 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             hit.impulse = hit.closing * (1.0f + bounce) / (1.0f / striking + 1.0f / felt(1 - hit.striker, hit.point, n));
             out.hits.push_back(hit);
             if (depth > deepest) {
-                deepest = depth, deep_normal = n;
+                deepest = depth, deep_normal = n, deep_speed = Length(relative);
             }
             if (hit.impulse > strongest) {
                 strongest = hit.impulse, strong_striker = hit.striker;
@@ -419,12 +419,12 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             }
         }
     }
-    // Out of each other (half the depth a step, by inverse mass), on the ground plane; at most 0.3
-    // a step (a blade swung deep into the other is driven by its arm, not to be thrown out with
-    // the whole body).
+    // Out of each other (half the depth a step, by inverse mass), on the ground plane: bodies
+    // pressed together firmly (up to 1.2 a step), a part swung into the other softly (0.3: a blade
+    // swung deep into it is driven by its arm, not to be thrown out with the whole body).
     if (deepest > 0.0f) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
-        const float out_by = std::min(deepest * 0.5f, 0.3f);
+        const float out_by = std::min(deepest * 0.5f, deep_speed > 30.0f ? 0.3f : 1.2f);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }
