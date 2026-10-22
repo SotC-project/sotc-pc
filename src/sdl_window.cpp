@@ -2889,8 +2889,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // beside or under a colossus's own collision.)
                         {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
-                             // (strike 6: from 8-10 its sword passed short of the other's own collision)
-                             250.0f, 0x1d38340, 6.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
+                             // (strike 3: its slam met the other's own collision from 2-5 apart, passed
+                             // short from 8; it steps in to there)
+                             250.0f, 0x1d38340, 3.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
                              // attack_1_Introduction > attack_one_stop_(success); attack_2_Introduction >
                              // _loop > _quit
                              {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}, false,
@@ -3239,14 +3240,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 } else {
                                     g_cvc_body[k].turn = 0.0f;
                                 }
-                                // Stepping into it while winding up, until the bodies meet (its swing is in
-                                // place: from where it stood it fell short).
+                                // Stepping into it while winding up, until it is within striking distance (its
+                                // swing is in place: from where it stood it fell short; the bodies push back
+                                // where they meet).
                                 {
                                     const float* me = k ? (const float*)rb : (const float*)ra;
                                     const float* it = k ? (const float*)ra : (const float*)rb;
                                     float to[2]{it[0] - me[0], it[2] - me[2]};
                                     const float n = std::max(std::hypot(to[0], to[1]), 0.001f);
-                                    const float pace = winding && !g_cvc_touch_now.load() && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
+                                    const float pace = winding && closest > moves->strike && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
                                     std::scoped_lock guard{g_cvc_body[k].lock};
                                     g_cvc_body[k].step[0] = to[0] / n * pace, g_cvc_body[k].step[1] = to[1] / n * pace;
                                 }
@@ -3516,10 +3518,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (hit_bone >= 0) {
                             landed = true;
                             // The blow's impulse from the physics, against a full blow's (1); its pulse lands
-                            // as a heavy blow (1.4). Damage goes with it: a graze does little, the heaviest
-                            // blow twice a full one.
+                            // as a full blow. Damage goes with it: a graze does little, the heaviest blow
+                            // twice a full one.
                             constexpr float full_blow = 40000.0f;
-                            const float force = pulsed ? 1.4f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
+                            const float force = pulsed ? 1.0f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
                             const float damage = (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
