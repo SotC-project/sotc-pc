@@ -3360,7 +3360,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         auto [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
                         // The other off to one side: the attack to that side, if it has one.
                         float cosine = 1.0f, side = 0.0f;
-                        if (moves->strike_left && face(k, cosine, side) && cosine < 0.97f) {
+                        // (Its side slams bring its head down on the other; its middle one mostly lands
+                        // short: two in three to the side the other leans to.)
+                        if (moves->strike_left && face(k, cosine, side) && (cosine < 0.97f || rng() % 3 != 0)) {
                             motion = side > 0.0f ? moves->strike_left : moves->strike_right, ms = 3000;
                         }
                         (void)ms; // it ends when its last part does (Act::Attack below); 12 s at most
@@ -3397,7 +3399,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // where it is, it fires its pulse at it.
                             const int j = 1 - k;
                             const Moves* other = kind_of(j);
-                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 25)) { // its weapon at range
+                            // Its weapon well out of reach of its slam (beyond 50), at most every 30 s (each pulse
+                            // knocks the other back out: more often it pinned it there); else
+                            // reach it slams.
+                            static Clock::time_point last_pulse{};
+                            const float* it = k ? (const float*)ra : (const float*)rb;
+                            const float* self = k ? (const float*)rb : (const float*)ra;
+                            const bool out_of_reach = std::hypot(it[0] - self[0], it[2] - self[2]) > 50.0f;
+                            if (moves->pulse && out_of_reach && Clock::now() > last_pulse + std::chrono::seconds(30)) {
+                                last_pulse = Clock::now();
                                 play(k, moves->idle, Act::Pulse, 6000);
                                 pulse_phase = 0, landed = false, attack_from = Clock::now();
                                 float mouth[3]{};
