@@ -211,6 +211,7 @@ struct CvcBody {
     float apart[2]{};           // easing apart from the other body, units/s (lock)
     float step[2]{};            // stepping in to strike, units/s (lock; unused: bodies walk in)
     float ours = 0.0f;          // how far our code moved its root lately (no animation of its own: glides in the log)
+    float ours_xz[2]{};         // what our code moved its root by since the last trace record (x, z)
     std::atomic<float> turn{0}; // yaw rate asked for (rad/s, + counter-clockwise from above)
     float turning = 0.0f;       // yaw rate now, eased toward `turn`
     // Read back: the motion it plays (static MotionKind record), its frame and last frame.
@@ -455,15 +456,78 @@ static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& an
     }
 }
 
+/// No snaps of the pose: when colossus k's motion changes (or its root jumps), the drawn pose that
+/// frame starts from where the frame before left it, and the difference dies away (about 0.15 s),
+/// so a motion begun on a pose that does not join the last one (Gaius's sword at the start of his
+/// slam, Basaran's head into its walk, its root dropping into its slam) carries on from it.
+static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
+    static float last[2][70 * 16], offset[2][70 * 16], now[70 * 16];
+    static bool have[2]{};
+    static u64 last_motion[2]{};
+    const u64 motion = g_cvc_body[k].motion.load();
+    const size_t n = size_t(count) * 16;
+    std::memcpy(now, reinterpret_cast<const void*>(matrices), n * 4);
+    float jump = 0.0f;
+    if (have[k]) {
+        jump = std::hypot(now[12] - last[k][12], now[13] - last[k][13], now[14] - last[k][14]);
+    }
+    if (have[k] && motion && last_motion[k] && (motion != last_motion[k] || jump > 0.6f)) {
+        for (size_t i = 0; i < n; i++) {
+            offset[k][i] = last[k][i] - now[i];
+        }
+    } else {
+        const float keep = std::exp(-dt / 0.15f);
+        for (size_t i = 0; i < n; i++) {
+            offset[k][i] *= keep;
+        }
+    }
+    last_motion[k] = motion, have[k] = true;
+    for (int b = 0; b < count; b++) {
+        float* m = now + b * 16;
+        const float* o = offset[k] + b * 16;
+        for (int i = 0; i < 16; i++) {
+            m[i] += o[i];
+        }
+        // The axes kept square and of their lengths (a blend of two sets of axes shears).
+        float* x = m;
+        float* y = m + 4;
+        float* z = m + 8;
+        const float lx = std::hypot(x[0], x[1], x[2]), ly = std::hypot(y[0], y[1], y[2]), lz = std::hypot(z[0], z[1], z[2]);
+        if (lx < 1e-6f || ly < 1e-6f || lz < 1e-6f) {
+            continue;
+        }
+        float ux[3]{x[0] / lx, x[1] / lx, x[2] / lx};
+        float dy = ux[0] * y[0] + ux[1] * y[1] + ux[2] * y[2];
+        float uy[3]{y[0] - ux[0] * dy, y[1] - ux[1] * dy, y[2] - ux[2] * dy};
+        const float ny = std::max(std::hypot(uy[0], uy[1], uy[2]), 1e-6f);
+        for (float& c : uy) {
+            c /= ny;
+        }
+        float uz[3]{ux[1] * uy[2] - ux[2] * uy[1], ux[2] * uy[0] - ux[0] * uy[2], ux[0] * uy[1] - ux[1] * uy[0]};
+        if (uz[0] * z[0] + uz[1] * z[1] + uz[2] * z[2] < 0.0f) {
+            for (float& c : uz) {
+                c = -c;
+            }
+        }
+        for (int c = 0; c < 3; c++) {
+            x[c] = ux[c] * lx, y[c] = uy[c] * ly, z[c] = uz[c] * lz;
+        }
+    }
+    std::memcpy(last[k], now, n * 4);
+    std::memcpy(reinterpret_cast<void*>(matrices), now, n * 4);
+}
+
 static void CvcReactWork(u64 image, float dt) {
-    for (int k = 0; k < 2; k++) { // the limbs give first, then the whole body leans
+    for (int k = 0; k < 2; k++) { // no snaps first, then the limbs give, then the whole body leans
         const u64 object = g_cvc_body[k].object.load();
         if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
             continue;
         }
         const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
         if (matrices && Core::Memory::Instance()->IsValidMapping(matrices, 35 * 64)) {
-            CvcFlexWork(k, matrices, Core::Memory::Instance()->IsValidMapping(matrices, 70 * 64) ? 70 : 35, dt);
+            const int count = Core::Memory::Instance()->IsValidMapping(matrices, 70 * 64) ? 70 : 35;
+            CvcInertiaWork(k, matrices, count, dt);
+            CvcFlexWork(k, matrices, count, dt);
         }
     }
     for (int k = 0; k < 2; k++) {
@@ -826,6 +890,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
         if (result.shift[k][0] != 0.0f || result.shift[k][2] != 0.0f) {
             MoveCharacter(objects[k], result.shift[k].data());
             g_cvc_body[k].ours += std::hypot(result.shift[k][0], result.shift[k][2]);
+            g_cvc_body[k].ours_xz[0] += result.shift[k][0], g_cvc_body[k].ours_xz[1] += result.shift[k][2];
         }
         if (blow) {
             std::scoped_lock guard{g_cvc_body[k].lock};
@@ -977,6 +1042,36 @@ static void CvcProbeSkeleton(u64 image, int k, u64 object) {
     samples[k]++;
 }
 
+/// Research trace (CVC_TRACE set): each frame, each colossus's root, what our code moved it by since
+/// the frame before, its motion and frame, and whether the bodies touch, to testrun/root_trace.bin
+/// (re/cvc/trace.py finds the root moves neither its motion nor our code explains: snaps).
+static void CvcTrace(int k, u64 object) {
+    static std::ofstream out;
+    static bool opened = false;
+    if (!opened) {
+        out.open("D:/sotc-pc/testrun/root_trace.bin", std::ios::binary | std::ios::trunc);
+        opened = true;
+    }
+    auto& body = g_cvc_body[k];
+    struct Record {
+        float t;
+        u32 k;
+        float pos[3], ours[2], frame;
+        u64 motion;
+        u32 touching, act;
+    } r{};
+    r.t = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    r.k = u32(k);
+    const auto* p = reinterpret_cast<const volatile float*>(object + 0x130);
+    r.pos[0] = p[0], r.pos[1] = p[1], r.pos[2] = p[2];
+    r.ours[0] = body.ours_xz[0], r.ours[1] = body.ours_xz[1];
+    body.ours_xz[0] = body.ours_xz[1] = 0.0f;
+    r.frame = body.frame.load();
+    r.motion = body.motion.load();
+    r.touching = g_cvc_touch_now.load() ? 1 : 0;
+    out.write(reinterpret_cast<const char*>(&r), sizeof(r));
+}
+
 static void CvcBodyWork(u64 image) {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point before = Clock::now();
@@ -1024,6 +1119,7 @@ static void CvcBodyWork(u64 image) {
         if (delta[0] != 0.0f || delta[2] != 0.0f) {
             MoveCharacter(object, delta);
             body.ours += std::hypot(delta[0], delta[2]);
+            body.ours_xz[0] += delta[0], body.ours_xz[1] += delta[2];
         }
         {
             static Clock::time_point since[2]{};
@@ -1043,6 +1139,9 @@ static void CvcBodyWork(u64 image) {
         }
         if (std::getenv("CVC_PROBE_SKEL")) {
             CvcProbeSkeleton(image, k, object);
+        }
+        if (std::getenv("CVC_TRACE")) {
+            CvcTrace(k, object);
         }
         // Research probe (CVC_PROBE_LEASH): Basaran shoved along x by 5, 10, 20 and 40 units, 10 s
         // apart, its root logged every 6 frames: how far it may go and how the game brings it back.
@@ -3323,6 +3422,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // Crossfade per move: standing, walking and turning ease in; an attack and a
                     // flinch come in quicker.
                     const auto play = [&](int k, u64 motion, Act act, int ms) {
+                        // (Never the same motion started again within a second: a walk restarted every
+                        // tick tripped the game's own motion state, "No Entry != Here", and crashed it.)
+                        if (fighter[k].motion == motion && Clock::now() < fighter[k].since + std::chrono::seconds(1)) {
+                            fighter[k].act = act, fighter[k].until = Clock::now() + std::chrono::milliseconds(ms);
+                            return;
+                        }
                         const float blend = act == Act::Attack ? 0.4f : act == Act::Flinch ? 0.25f
                                           : act == Act::Idle ? 0.6f : 0.35f;
                         CvcPlayMotion(image, objects[k], motion, blend);
@@ -3587,7 +3692,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     const float* me = k ? (const float*)rb : (const float*)ra;
                                     if (std::hypot(me[0] - flank_spot[0], me[2] - flank_spot[2]) < 5.0f || g_cvc_touch_now.load()) {
                                         stand(k);
-                                        engage(k); // (squares up to it, then strikes)
+                                        attack(k); // (it turns onto it as it winds up; engage would walk it on again)
                                     } else if (Clock::now() > f.until) {
                                         stand(k);
                                     }
