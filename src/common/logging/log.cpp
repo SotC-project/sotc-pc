@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -65,6 +66,16 @@ void VLog(Class log_class, Level level, const char* file, int line, const char* 
     fmt::memory_buffer msg;
     fmt::vformat_to(fmt::appender(msg), format, args);
     const std::string_view fn = std::string_view(func) == "operator()" ? "lambda" : func;
+    // SOTC_LOG_TIME: each line led by the steady clock in seconds, the time the CvC quality log
+    // keeps too (re/cvc/timeline.py merges them).
+    static const bool timed = std::getenv("SOTC_LOG_TIME") != nullptr;
+    if (timed) {
+        logger->log(ToSpdlog(level), "{:.4f} [{}] <{}> ({}) {}:{} {}: {}",
+                    std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                    NameOf(log_class), NameOf(ToSpdlog(level)), Common::GetCurrentThreadName(),
+                    spdlog::source_loc::basename(file), line, fn, std::string_view(msg.data(), msg.size()));
+        return;
+    }
     logger->log(ToSpdlog(level), "[{}] <{}> ({}) {}:{} {}: {}", NameOf(log_class),
                 NameOf(ToSpdlog(level)), Common::GetCurrentThreadName(),
                 spdlog::source_loc::basename(file), line, fn,

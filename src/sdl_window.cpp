@@ -212,6 +212,7 @@ struct CvcBody {
     float step[2]{};            // stepping in to strike, units/s (lock; unused: bodies walk in)
     float ours = 0.0f;          // how far our code moved its root lately (no animation of its own: glides in the log)
     float ours_xz[2]{};         // what our code moved its root by since the last trace record (x, z)
+    float ours_q[2]{};          // the same since the last quality record (CVC_QUALITY)
     std::atomic<float> turn{0}; // yaw rate asked for (rad/s, + counter-clockwise from above)
     float turning = 0.0f;       // yaw rate now, eased toward `turn`
     // Read back: the motion it plays (static MotionKind record), its frame and last frame.
@@ -239,6 +240,21 @@ static CvcBlow g_cvc_blow;
 static std::atomic<float> g_cvc_gap{1e9f}; // least gap between the bodies since cvcbrawl reset it (misses in the log)
 static std::atomic<float> g_cvc_gap_now{1e9f}; // the gap between the bodies this frame
 static std::atomic<bool> g_cvc_touch_now{false}; // their hulls meet this frame
+static std::atomic<float> g_cvc_depth_now{0.0f}; // how far their hulls are inside each other this frame
+static std::atomic<int> g_cvc_contacts_now{0};    // how many part pairs meet this frame
+// The spectator camera as last set (eye, point looked at), for the quality log.
+static std::array<std::atomic<float>, 6> g_cvc_cam_now{};
+// What cvcbrawl has each fighter doing (its Act), for the quality log.
+static std::atomic<int> g_cvc_act_now[2]{};
+// How much of the last snap's difference each colossus still carries (CvcInertiaWork), for the log.
+static std::atomic<float> g_cvc_blend_now[2]{};
+// How fast each colossus's striking part must meet the other for a blow (cvcbrawl: its moves' swing;
+// 40 the default): slow heavy strikers (Quadratus's head, Basaran's slams) meet slower than a sword.
+static std::atomic<float> g_cvc_coming[2]{40.0f, 40.0f};
+// The ground under colossus A (the game's line test from just above its feet, 40 down; cvccam's ray
+// batch), and the steady-clock second it was measured; NaN: nothing there.
+static std::atomic<float> g_cvc_ground_a{std::numeric_limits<float>::quiet_NaN()};
+static std::atomic<double> g_cvc_ground_a_at{0.0};
 
 struct CvcContact {
     std::atomic<int> attacker{-1};
@@ -313,6 +329,27 @@ struct CvcFlex {
 };
 static CvcFlex g_cvc_flex[2];
 
+/// Whether colossus `kind`'s bone is part of a limb, which may give: a bone with few bones below it
+/// (at most a sixth of its skeleton, 3 at least), not the root, hips or spine, which carry the whole
+/// body (turned there, the bodies bent in half: bones 1 and 5 in the quality log).
+static bool CvcLimb(int kind, int bone) {
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents || bone <= 0 || bone >= int(parents->size())) {
+        return false;
+    }
+    static std::map<int, std::vector<int>> below; // per kind: how many bones hang below each (itself too)
+    auto& count = below[kind];
+    if (count.empty()) {
+        count.assign(parents->size(), 0);
+        for (size_t b = 0; b < parents->size(); b++) {
+            for (int d = int(b), guard = 0; d >= 0 && guard < 300; d = (*parents)[size_t(d)], guard++) {
+                count[size_t(d)]++;
+            }
+        }
+    }
+    return count[size_t(bone)] <= std::max(3, int(parents->size()) / 6);
+}
+
 /// A blow felt by colossus k's bone `bone` at `point`, pushing along `dir` (unit) at `speed`
 /// (units/s, what that region of it is given): that bone and up to three above it turn about their
 /// joints (r x v / r^2, halving up the chain).
@@ -326,7 +363,7 @@ static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const 
     std::scoped_lock guard{f.lock};
     f.kind = kind;
     float share = 1.0f;
-    for (int b = bone, depth = 0; b > 0 && depth < 4; b = (*parents)[b], depth++, share *= 0.5f) {
+    for (int b = bone, depth = 0; b > 0 && depth < 4 && CvcLimb(kind, b); b = (*parents)[b], depth++, share *= 0.5f) {
         const float* m = bones + b * 16;
         const float r[3]{point[0] - m[12], point[1] - m[13], point[2] - m[14]};
         const float r2 = std::max(r[0] * r[0] + r[1] * r[1] + r[2] * r[2], 4.0f);
@@ -348,6 +385,9 @@ static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const 
 static void CvcFlexShift(int k, int kind, const float* bones, int bone, const float* point, const float* dir, float by) {
     const auto* parents = Sotc::CvcPhysics::Parents(kind);
     if (!parents || bone <= 0 || bone >= int(parents->size())) {
+        return;
+    }
+    if (!CvcLimb(kind, bone)) {
         return;
     }
     auto& f = g_cvc_flex[k];
@@ -381,9 +421,11 @@ static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
                 f.rate[b][c] += (-w0 * w0 * f.angle[b][c] - 2.0f * zeta * w0 * f.rate[b][c]) * dt;
                 f.angle[b][c] += f.rate[b][c] * dt;
             }
-            if (const float a = std::hypot(f.angle[b][0], f.angle[b][1], f.angle[b][2]); a > 0.4f) {
+            // (A joint gives so far: 0.15 rad, 9 degrees; at 0.4 the quality log had every limb at the
+            // limit while the bodies were locked together.)
+            if (const float a = std::hypot(f.angle[b][0], f.angle[b][1], f.angle[b][2]); a > 0.15f) {
                 for (float& c : f.angle[b]) {
-                    c *= 0.4f / a; // (a joint bends so far)
+                    c *= 0.15f / a;
                 }
             }
         }
@@ -465,8 +507,17 @@ static void CvcFlexBend(int kind, const CvcAngles& angle, float* matrices, int c
 /// so a motion begun on a pose that does not join the last one (Gaius's sword at the start of his
 /// slam, Basaran's head into its walk, its root dropping into its slam) carries on from it.
 static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
-    static float last[2][2 * Sotc::CvcPhysics::MaxBones * 16], offset[2][2 * Sotc::CvcPhysics::MaxBones * 16],
-        now[2 * Sotc::CvcPhysics::MaxBones * 16];
+    constexpr int most = 2 * Sotc::CvcPhysics::MaxBones;
+    static float last[2][most * 16], now[most * 16];
+    // Each bone's difference at the snap: the turn from where it is drawn now to where it was (axis,
+    // angle) and the move (x y z); both drawn at `amount` of themselves, dying away. (A bone is turned
+    // along its shortest way, rigidly: the matrices blended entry by entry and squared again flipped
+    // bones over, 180 degrees in the quality log.)
+    static float turn[2][most][4], move[2][most][3], amount[2]{};
+    // Whether each bone hangs rigidly from its parent (as recorded: re/cvc/skeleton.py's guess), its
+    // offset in its parent's frame the same in both poses: then it is drawn where its parent puts it.
+    static bool rigid[2][most]{};
+    static float was_off[2][most][3]{}; // each bone's offset from its parent at the snap, as it was drawn
     static bool have[2]{};
     static u64 last_motion[2]{};
     static float last_step[2]{}; // how far its root moved the frame before (a steady lunge is no snap)
@@ -476,66 +527,322 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
     std::memcpy(now, reinterpret_cast<const void*>(matrices), n * 4);
     float step = 0.0f;
     if (have[k]) {
-        step = std::hypot(now[12] - (last[k][12] - offset[k][12]), now[13] - (last[k][13] - offset[k][13]),
-                          now[14] - (last[k][14] - offset[k][14]));
+        step = std::hypot(now[12] - (last[k][12] - move[k][0][0] * amount[k]),
+                          now[13] - (last[k][13] - move[k][0][1] * amount[k]),
+                          now[14] - (last[k][14] - move[k][0][2] * amount[k]));
     }
     // (A snap: its motion changed, or its root moved a unit more than it did the frame before; a
     // steady lunge or walk is none: at a fixed 0.6 a frame, every frame of a lunge restarted it and the
     // bodies and the view following them shook.)
     const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || step > last_step[k] + 1.0f);
     last_step[k] = step;
+    const auto unit = [](const float* v, float* u) {
+        const float l = std::hypot(v[0], v[1], v[2]);
+        for (int c = 0; c < 3; c++) {
+            u[c] = l > 1e-6f ? v[c] / l : 0.0f;
+        }
+        return l > 1e-6f;
+    };
     if (snap) {
-        for (size_t i = 0; i < n; i++) {
-            offset[k][i] = last[k][i] - now[i];
-        }
-        // (The further the motion puts it, the longer: Basaran's death motion moves its root 13.8, which
-        // in 0.15 s still read as a jump; 0.15 s and 0.03 s a unit more, at most 0.7 s.)
-        const float moved_by = std::hypot(offset[k][12], offset[k][13], offset[k][14]);
-        fade[k] = std::min(0.15f + 0.03f * moved_by, 0.7f);
-    } else {
-        const float keep = std::exp(-dt / fade[k]);
-        for (size_t i = 0; i < n; i++) {
-            offset[k][i] *= keep;
-        }
-    }
-    last_motion[k] = motion, have[k] = true;
-    for (int b = 0; b < count; b++) {
-        float* m = now + b * 16;
-        const float* o = offset[k] + b * 16;
-        for (int i = 0; i < 16; i++) {
-            m[i] += o[i];
-        }
-        // The axes kept square and of their lengths (a blend of two sets of axes shears).
-        float* x = m;
-        float* y = m + 4;
-        float* z = m + 8;
-        const float lx = std::hypot(x[0], x[1], x[2]), ly = std::hypot(y[0], y[1], y[2]), lz = std::hypot(z[0], z[1], z[2]);
-        if (lx < 1e-6f || ly < 1e-6f || lz < 1e-6f) {
-            continue;
-        }
-        float ux[3]{x[0] / lx, x[1] / lx, x[2] / lx};
-        float dy = ux[0] * y[0] + ux[1] * y[1] + ux[2] * y[2];
-        float uy[3]{y[0] - ux[0] * dy, y[1] - ux[1] * dy, y[2] - ux[2] * dy};
-        const float ny = std::max(std::hypot(uy[0], uy[1], uy[2]), 1e-6f);
-        for (float& c : uy) {
-            c /= ny;
-        }
-        float uz[3]{ux[1] * uy[2] - ux[2] * uy[1], ux[2] * uy[0] - ux[0] * uy[2], ux[0] * uy[1] - ux[1] * uy[0]};
-        if (uz[0] * z[0] + uz[1] * z[1] + uz[2] * z[2] < 0.0f) {
-            for (float& c : uz) {
-                c = -c;
+        for (int b = 0; b < count; b++) {
+            const float *was = last[k] + b * 16, *is = now + b * 16;
+            // W = sum over the axes of was_i (x) is_i: the world turn taking each axis now to where it was.
+            float a[3][3], c[3][3], w[9]{};
+            bool ok = true;
+            for (int i = 0; i < 3; i++) {
+                ok &= unit(was + i * 4, a[i]) && unit(is + i * 4, c[i]);
+            }
+            for (int i = 0; i < 3 && ok; i++) {
+                for (int r = 0; r < 3; r++) {
+                    for (int q = 0; q < 3; q++) {
+                        w[r * 3 + q] += a[i][r] * c[i][q];
+                    }
+                }
+            }
+            const float cosine = std::clamp((w[0] + w[4] + w[8] - 1.0f) / 2.0f, -1.0f, 1.0f);
+            float axis[3]{w[7] - w[5], w[2] - w[6], w[3] - w[1]};
+            const float angle = std::acos(cosine);
+            if (!ok || !unit(axis, axis) || angle < 1e-4f) {
+                turn[k][b][0] = turn[k][b][1] = turn[k][b][2] = turn[k][b][3] = 0.0f;
+            } else {
+                turn[k][b][0] = axis[0], turn[k][b][1] = axis[1], turn[k][b][2] = axis[2], turn[k][b][3] = angle;
+            }
+            for (int q = 0; q < 3; q++) {
+                move[k][b][q] = was[12 + q] - is[12 + q];
             }
         }
-        for (int c = 0; c < 3; c++) {
-            x[c] = ux[c] * lx, y[c] = uy[c] * ly, z[c] = uz[c] * lz;
+        if (const auto* parents = Sotc::CvcPhysics::Parents(g_cvc_flex[k].kind)) {
+            for (int b = 0; b < std::min(int(parents->size()), count); b++) {
+                const int q = (*parents)[size_t(b)];
+                rigid[k][b] = false;
+                if (q < 0 || q >= count) {
+                    continue;
+                }
+                float error = 0.0f;
+                for (int row = 0; row < 3; row++) {
+                    float ax[3], bx[3];
+                    unit(last[k] + q * 16 + row * 4, ax), unit(now + q * 16 + row * 4, bx);
+                    float was = 0.0f, is = 0.0f;
+                    for (int c = 0; c < 3; c++) {
+                        was += ax[c] * (last[k][b * 16 + 12 + c] - last[k][q * 16 + 12 + c]);
+                        is += bx[c] * (now[b * 16 + 12 + c] - now[q * 16 + 12 + c]);
+                    }
+                    error += (was - is) * (was - is);
+                }
+                rigid[k][b] = error < 0.3f * 0.3f;
+                for (int c = 0; c < 3; c++) {
+                    was_off[k][b][c] = last[k][b * 16 + 12 + c] - last[k][q * 16 + 12 + c];
+                }
+            }
+        }
+        amount[k] = 1.0f;
+        // (The further the motion puts it, the longer: Basaran's death motion moves its root 13.8, which
+        // in 0.15 s still read as a jump; 0.15 s and 0.03 s a unit more, at most 0.7 s.)
+        const float moved_by = std::hypot(move[k][0][0], move[k][0][1], move[k][0][2]);
+        fade[k] = std::min(0.15f + 0.03f * moved_by, 0.7f);
+    } else {
+        amount[k] *= std::exp(-dt / fade[k]);
+    }
+    last_motion[k] = motion, have[k] = true;
+    g_cvc_blend_now[k] = amount[k];
+    if (amount[k] > 1e-3f) {
+        const auto rotate = [&](int b, float* v) { // bone b's turn, at `amount` of it, on vector v
+            const float* t = turn[k][b];
+            if (t[3] <= 0.0f) {
+                return;
+            }
+            const float angle = t[3] * amount[k], c = std::cos(angle), sn = std::sin(angle);
+            const float dot = t[0] * v[0] + t[1] * v[1] + t[2] * v[2];
+            const float cr[3]{t[1] * v[2] - t[2] * v[1], t[2] * v[0] - t[0] * v[2], t[0] * v[1] - t[1] * v[0]};
+            for (int q = 0; q < 3; q++) {
+                v[q] = v[q] * c + cr[q] * sn + t[q] * dot * (1.0f - c);
+            }
+        };
+        // Positions down the skeleton: a bone where its parent is drawn, at its own offset from it
+        // (turned as its parent is), so no bone's length changes. (Each moved by its own share, they
+        // drifted from their parents: Gaius's sword bone 31 units in the quality log.)
+        const auto* parents = Sotc::CvcPhysics::Parents(g_cvc_flex[k].kind);
+        const int bones = parents ? std::min(int(parents->size()), count) : 0;
+        static std::map<int, std::vector<int>> orders;
+        auto& order = orders[g_cvc_flex[k].kind];
+        if (bones && order.empty()) {
+            std::vector<bool> placed(size_t(bones), false);
+            for (int pass = 0; pass < bones && int(order.size()) < bones; pass++) {
+                for (int b = 0; b < bones; b++) {
+                    const int q = (*parents)[size_t(b)];
+                    if (!placed[size_t(b)] && (q < 0 || q >= bones || placed[size_t(q)])) {
+                        placed[size_t(b)] = true, order.push_back(b);
+                    }
+                }
+            }
+        }
+        static float anim[most * 16];
+        std::memcpy(anim, now, n * 4);
+        for (int b = 0; b < count; b++) {
+            for (int row = 0; row < 3; row++) {
+                rotate(b, now + b * 16 + row * 4);
+            }
+        }
+        for (const int b : order) {
+            const int q = (*parents)[size_t(b)];
+            float* m = now + b * 16;
+            if (q < 0 || q >= bones) {
+                for (int c = 0; c < 3; c++) {
+                    m[12 + c] = anim[b * 16 + 12 + c] + move[k][b][c] * amount[k];
+                }
+                continue;
+            }
+            if (!rigid[k][b]) {
+                // (Not fixed in its parent's frame: its offset from the parent blended from the one it
+                // had, at the length it has now; moved by its own share it was stretched 6 units.)
+                float off[3], length = 0.0f, blended = 0.0f;
+                for (int c = 0; c < 3; c++) {
+                    const float is = anim[b * 16 + 12 + c] - anim[q * 16 + 12 + c];
+                    off[c] = is + (was_off[k][b][c] - is) * amount[k];
+                    length += is * is, blended += off[c] * off[c];
+                }
+                const float scale = blended > 1e-8f ? std::sqrt(length / blended) : 1.0f;
+                for (int c = 0; c < 3; c++) {
+                    m[12 + c] = now[q * 16 + 12 + c] + off[c] * scale;
+                }
+                continue;
+            }
+            float off[3]{anim[b * 16 + 12] - anim[q * 16 + 12], anim[b * 16 + 13] - anim[q * 16 + 13],
+                         anim[b * 16 + 14] - anim[q * 16 + 14]};
+            rotate(q, off);
+            for (int c = 0; c < 3; c++) {
+                m[12 + c] = now[q * 16 + 12 + c] + off[c];
+            }
+        }
+        for (int b = bones; b < count; b++) { // the list's second copy (and any past it) as the first
+            if (b - bones < bones) {
+                std::memcpy(now + b * 16 + 12, now + (b - bones) * 16 + 12, 12);
+            } else {
+                for (int c = 0; c < 3; c++) {
+                    now[b * 16 + 12 + c] += move[k][b][c] * amount[k];
+                }
+            }
+        }
+        if (!bones) {
+            for (int b = 0; b < count; b++) {
+                for (int c = 0; c < 3; c++) {
+                    now[b * 16 + 12 + c] += move[k][b][c] * amount[k];
+                }
+            }
         }
     }
     std::memcpy(last[k], now, n * 4);
     std::memcpy(reinterpret_cast<void*>(matrices), now, n * 4);
 }
 
-static void CvcReactWork(u64 image, float dt) {
-    for (int k = 0; k < 2; k++) { // no snaps first, then the limbs give, then the whole body leans
+/// Quality log (CVC_QUALITY set): each frame, each colossus, to testrun/cvc_quality.bin, how its
+/// drawn pose differs from the one its animation gave (`anim`, before our smoothing, giving and
+/// leaning): the most any joint's bend changed (degrees), a bone's length to its parent changed, a
+/// bone moved, a bone's axes' lengths changed (not rigid); and its root, what our code moved it by,
+/// its motion, whether the bodies touch and how deep, its lowest bone (feet sliding).
+/// re/cvc/quality.py reads it (with the log's hits) into a per-fight summary.
+static void CvcQuality(int k, u64 object, const float* anim, const float* drawn, int kind) {
+    static std::ofstream out;
+    static bool opened = false;
+    if (!opened) {
+        out.open("D:/sotc-pc/testrun/cvc_quality.bin", std::ios::binary | std::ios::trunc);
+        opened = true;
+    }
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents) {
+        return;
+    }
+#pragma pack(push, 1)
+    struct Record {
+        double t;
+        u32 k;
+        float pos[3], ours[2];
+        u64 motion;
+        float frame;
+        u32 touching;
+        float depth, bend;
+        s32 bend_bone;
+        float stretch;
+        s32 stretch_bone;
+        float offset;
+        s32 offset_bone;
+        float scale;
+        s32 scale_bone, low_bone;
+        float low[3], yaw;
+        u32 frame_no, contacts;
+        float cam[6];
+        s32 act;
+        float give, tilt, blend;
+        float low_anim[3]; // the lowest bone where its animation has it
+    } r{};
+#pragma pack(pop)
+    auto& body = g_cvc_body[k];
+    r.t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    r.k = u32(k);
+    const auto* p = reinterpret_cast<const volatile float*>(object + 0x130);
+    r.pos[0] = p[0], r.pos[1] = p[1], r.pos[2] = p[2];
+    r.ours[0] = body.ours_q[0], r.ours[1] = body.ours_q[1];
+    body.ours_q[0] = body.ours_q[1] = 0.0f;
+    r.motion = body.motion.load(), r.frame = body.frame.load();
+    r.touching = g_cvc_touch_now.load() ? 1 : 0, r.depth = g_cvc_depth_now.load();
+    r.bend_bone = r.stretch_bone = r.offset_bone = r.scale_bone = -1;
+    const int bones = int(parents->size());
+    float lowest = 1e9f;
+    const auto length = [](const float* m, int row) { return std::hypot(m[row * 4], m[row * 4 + 1], m[row * 4 + 2]); };
+    for (int b = 0; b < bones; b++) {
+        const float *a = anim + b * 16, *d = drawn + b * 16;
+        const float off = std::hypot(d[12] - a[12], d[13] - a[13], d[14] - a[14]);
+        if (off > r.offset) {
+            r.offset = off, r.offset_bone = b;
+        }
+        for (int row = 0; row < 3; row++) {
+            if (const float sc = std::abs(length(d, row) - length(a, row)); sc > r.scale) {
+                r.scale = sc, r.scale_bone = b;
+            }
+        }
+        if (d[13] < lowest) {
+            lowest = d[13], r.low_bone = b, r.low[0] = d[12], r.low[1] = d[13], r.low[2] = d[14];
+        }
+        const int q = (*parents)[size_t(b)];
+        if (q < 0 || q >= bones) {
+            continue;
+        }
+        const float *ap = anim + q * 16, *dp = drawn + q * 16;
+        const float la = std::hypot(a[12] - ap[12], a[13] - ap[13], a[14] - ap[14]);
+        const float ld = std::hypot(d[12] - dp[12], d[13] - dp[13], d[14] - dp[14]);
+        // (Only a link its animation keeps the same length: the recorded skeleton's guessed parents
+        // include some that are no joint, whose length the animation itself changes.)
+        static std::map<std::pair<int, int>, std::pair<float, float>> span; // kind, bone -> least, most
+        auto& [least, longest] = span.try_emplace({kind, b}, la, la).first->second;
+        least = std::min(least, la), longest = std::max(longest, la);
+        if (longest - least < 0.3f && std::abs(ld - la) > r.stretch) {
+            r.stretch = std::abs(ld - la), r.stretch_bone = b;
+        }
+        // The joint's bend: its rotation relative to its parent's, drawn against animated
+        // (rel = R_b R_p^T, rows the axes; the angle of rel_d rel_a^T).
+        float rel_a[9], rel_d[9];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                rel_a[i * 3 + j] = rel_d[i * 3 + j] = 0.0f;
+                for (int c = 0; c < 3; c++) {
+                    rel_a[i * 3 + j] += a[i * 4 + c] * ap[j * 4 + c] / std::max(length(a, i) * length(ap, j), 1e-6f);
+                    rel_d[i * 3 + j] += d[i * 4 + c] * dp[j * 4 + c] / std::max(length(d, i) * length(dp, j), 1e-6f);
+                }
+            }
+        }
+        float trace = 0.0f;
+        for (int i = 0; i < 9; i++) {
+            trace += rel_d[i] * rel_a[i];
+        }
+        const float bend = std::acos(std::clamp((trace - 1.0f) / 2.0f, -1.0f, 1.0f)) * 57.29578f;
+        if (bend > r.bend) {
+            r.bend = bend, r.bend_bone = b;
+        }
+    }
+    r.yaw = std::atan2(drawn[2], drawn[0]);
+    static u32 frames = 0;
+    r.frame_no = k == 0 ? ++frames : frames;
+    r.contacts = u32(g_cvc_contacts_now.load());
+    for (int c = 0; c < 6; c++) {
+        r.cam[c] = g_cvc_cam_now[c].load();
+    }
+    r.act = g_cvc_act_now[k].load();
+    r.blend = g_cvc_blend_now[k].load();
+    if (r.low_bone >= 0) {
+        std::memcpy(r.low_anim, anim + r.low_bone * 16 + 12, 12);
+    }
+    {
+        std::scoped_lock guard{g_cvc_flex[k].lock};
+        for (const auto& a : g_cvc_flex[k].angle) {
+            r.give = std::max(r.give, std::hypot(a[0], a[1], a[2]) * 57.29578f);
+        }
+    }
+    {
+        std::scoped_lock guard{g_cvc_react[k].lock};
+        r.tilt = std::hypot(g_cvc_react[k].tilt[0], g_cvc_react[k].tilt[1]) * 57.29578f;
+    }
+    out.write(reinterpret_cast<const char*>(&r), sizeof(r));
+    // Every bone's drawn position (cvc_bones.bin: t, k, count, then x y z each).
+    static std::ofstream bones_out("D:/sotc-pc/testrun/cvc_bones.bin", std::ios::binary | std::ios::trunc);
+    const u32 head[2]{u32(k), u32(bones)};
+    bones_out.write(reinterpret_cast<const char*>(&r.t), 8);
+    bones_out.write(reinterpret_cast<const char*>(head), 8);
+    for (int b = 0; b < bones; b++) {
+        bones_out.write(reinterpret_cast<const char*>(drawn + b * 16 + 12), 12);
+    }
+}
+
+// The pose each colossus's animation gave this frame, before any of ours (the quality log).
+static const bool g_cvc_quality = std::getenv("CVC_QUALITY") != nullptr;
+static float g_cvc_anim[2][2 * Sotc::CvcPhysics::MaxBones * 16];
+static int g_cvc_anim_count[2]{};
+
+/// No snaps, before anything reads the pose: the physics too sees each body as it is drawn. (It read
+/// the animation's own pose: at a motion change the jump to the next one's first frame read as a
+/// strike at 150 units a second.)
+static void CvcInertiaPass(float dt) {
+    for (int k = 0; k < 2; k++) {
+        g_cvc_anim_count[k] = 0;
         const u64 object = g_cvc_body[k].object.load();
         if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
             continue;
@@ -543,7 +850,24 @@ static void CvcReactWork(u64 image, float dt) {
         const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
         const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
         if (count && matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(count) * 64)) {
+            if (g_cvc_quality) {
+                std::memcpy(g_cvc_anim[k], reinterpret_cast<const void*>(matrices), size_t(count) * 64);
+                g_cvc_anim_count[k] = count;
+            }
             CvcInertiaWork(k, matrices, count, dt);
+        }
+    }
+}
+
+static void CvcReactWork(u64 image, float dt) {
+    for (int k = 0; k < 2; k++) { // the limbs give, then the whole body leans (no snaps: CvcInertiaPass)
+        const u64 object = g_cvc_body[k].object.load();
+        if (!object || *reinterpret_cast<const volatile u8*>(object + 0xc) != 9) {
+            continue;
+        }
+        const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
+        const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
+        if (count && matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(count) * 64)) {
             CvcFlexWork(k, matrices, count, dt);
         }
     }
@@ -569,7 +893,9 @@ static void CvcReactWork(u64 image, float dt) {
                 spring(r.tilt[1], r.tilt_v[1], weak ? 2.2f : 6.0f, weak ? 0.5f : 0.32f);
                 spring(r.dent, r.dent_v, 12.0f, 0.45f);
                 spring(r.sway, r.sway_v, 5.0f, 0.4f);
-                const float most = weak ? 1.05f : 0.5f; // (a body does not fold over; off its feet, nearly so)
+                // (A rigid body rocks on its feet a few degrees; off its feet, more: at 0.5 / 1.05 rad,
+                // bent by height, the bodies folded over, the quality log's worst bends.)
+                const float most = weak ? 0.3f : 0.12f;
                 if (const float lean = std::hypot(r.tilt[0], r.tilt[1]); lean > most) {
                     r.tilt[0] *= most / lean, r.tilt[1] *= most / lean;
                 }
@@ -586,13 +912,13 @@ static void CvcReactWork(u64 image, float dt) {
         }
         const auto* at = reinterpret_cast<const volatile float*>(object + 0x130);
         const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
-        int count = 0;
+        const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
+        if (!count || !matrices || !Core::Memory::Instance()->IsValidMapping(matrices, size_t(count) * 64)) {
+            continue;
+        }
         float low = 1e9f, high = -1e9f;
-        for (; matrices && count < 128 && Core::Memory::Instance()->IsValidMapping(matrices + count * 64, 64); count++) {
-            const auto* m = reinterpret_cast<const volatile float*>(matrices + count * 64 + 0x30);
-            if (m[3] != 1.0f || std::hypot(m[0] - at[0], m[2] - at[2]) > 400.0f) {
-                break;
-            }
+        for (int i = 0; i < count; i++) {
+            const auto* m = reinterpret_cast<const volatile float*>(matrices + i * 64 + 0x30);
             low = std::min(low, float(m[1])), high = std::max(high, float(m[1]));
         }
         if (count == 0 || high - low < 1.0f) {
@@ -602,9 +928,8 @@ static void CvcReactWork(u64 image, float dt) {
         float moved = 0.0f;
         for (int i = 0; i < count; i++) {
             auto* m = reinterpret_cast<volatile float*>(matrices + i * 64);
-            const float w = std::clamp((m[13] - low) / (high - low), 0.0f, 1.0f);
-            // Rodrigues: rotate by tilt * w about `axis` through `pivot`.
-            const float angle = tilt * w, c = std::cos(angle), s = std::sin(angle);
+            // Rodrigues: rotate by tilt about `axis` through `pivot`, every bone alike (rigid).
+            const float angle = tilt, c = std::cos(angle), s = std::sin(angle);
             const auto rotate = [&](float* v) {
                 const float dot = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2];
                 const float cr[3]{axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2],
@@ -620,13 +945,11 @@ static void CvcReactWork(u64 image, float dt) {
             }
             float p[3]{m[12] - pivot[0], m[13] - pivot[1], m[14] - pivot[2]};
             rotate(p);
-            // The dent: bones near the contact driven in along the blow (falling off over 25).
-            const float off = std::hypot(m[12] - point[0], m[13] - point[1], m[14] - point[2]);
-            // ... and the whole body's mass swaying along it, the feet least.
-            const float give = dent * std::max(0.0f, 1.0f - off / 25.0f) + sway * (0.25f + 0.75f * w);
+            // (No dent or sway: bones driven in near the contact, or the upper body carried along,
+            // moved bones without their parents: stretched up to 9 units in the quality log.)
             float shift = 0.0f;
             for (int q = 0; q < 3; q++) {
-                const float to = pivot[q] + p[q] + dir[q] * give;
+                const float to = pivot[q] + p[q];
                 shift += (to - m[12 + q]) * (to - m[12 + q]);
                 m[12 + q] = to;
             }
@@ -636,6 +959,13 @@ static void CvcReactWork(u64 image, float dt) {
         if (++logged[k] % 60 == 0) {
             LOG_INFO(Core, "cvcreact: {} tilt {:.3f} dent {:.1f}: bones moved up to {:.1f} ({} bones, {:.0f}..{:.0f} high)",
                      k ? "B" : "A", tilt, dent, moved, count, low, high);
+        }
+    }
+    for (int k = 0; k < 2 && g_cvc_quality; k++) {
+        const u64 object = g_cvc_body[k].object.load();
+        if (g_cvc_anim_count[k] && object) {
+            const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
+            CvcQuality(k, object, g_cvc_anim[k], reinterpret_cast<const float*>(matrices), g_cvc_flex[k].kind);
         }
     }
 }
@@ -928,6 +1258,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
             MoveCharacter(objects[k], result.shift[k].data());
             g_cvc_body[k].ours += std::hypot(result.shift[k][0], result.shift[k][2]);
             g_cvc_body[k].ours_xz[0] += result.shift[k][0], g_cvc_body[k].ours_xz[1] += result.shift[k][2];
+            g_cvc_body[k].ours_q[0] += result.shift[k][0], g_cvc_body[k].ours_q[1] += result.shift[k][2];
         }
         if (blow) {
             std::scoped_lock guard{g_cvc_body[k].lock};
@@ -938,6 +1269,14 @@ static void CvcPhysicsWork(u64 image, float dt) {
     }
     g_cvc_gap_now = result.gap;
     g_cvc_touch_now = !result.hits.empty();
+    {
+        float depth = 0.0f;
+        for (const auto& hit : result.hits) {
+            depth = std::max(depth, hit.depth);
+        }
+        g_cvc_depth_now = depth;
+        g_cvc_contacts_now = int(result.hits.size());
+    }
     // (Clipping in the log: the deepest the bodies were inside each other over each 2 s.)
     {
         static float deepest = 0.0f;
@@ -961,9 +1300,9 @@ static void CvcPhysicsWork(u64 image, float dt) {
             strongest = &hit;
         }
         if (hit.first) {
-            LOG_INFO(Core, "cvcphys: {} bone {} met {} at {:.0f} {:.0f} {:.0f}, closing {:.0f}, impulse {:.0f}",
+            LOG_INFO(Core, "cvcphys: {} bone {} met {} at {:.0f} {:.0f} {:.0f}, closing {:.0f}, impulse {:.0f}, depth {:.2f}",
                      hit.striker ? "B" : "A", hit.bone, hit.striker ? "A" : "B", hit.point[0], hit.point[1], hit.point[2],
-                     hit.closing, hit.impulse);
+                     hit.closing, hit.impulse, hit.depth);
         }
     }
     if (strongest && strongest->impulse > 0.0f) {
@@ -1028,7 +1367,8 @@ static void CvcPhysicsWork(u64 image, float dt) {
         return true;
     };
     for (const auto& hit : result.hits) {
-        if (!hit.first || hit.impulse < least || hit.closing < coming) {
+        const float need = std::min(coming, g_cvc_coming[hit.striker].load());
+        if (!hit.first || hit.impulse < least * need / coming || hit.closing < need) {
             continue;
         }
         float point[3]{hit.point[0], hit.point[1], hit.point[2]};
@@ -1198,6 +1538,7 @@ static void CvcBodyWork(u64 image) {
             MoveCharacter(object, delta);
             body.ours += std::hypot(delta[0], delta[2]);
             body.ours_xz[0] += delta[0], body.ours_xz[1] += delta[2];
+            body.ours_q[0] += delta[0], body.ours_q[1] += delta[2];
         }
         {
             static Clock::time_point since[2]{};
@@ -1288,6 +1629,7 @@ static void CvcBodyWork(u64 image) {
         body.last[0] = at[0], body.last[1] = at[1], body.last[2] = at[2];
         body.last_motion = body.motion.load() ? body.motion.load() : 1;
     }
+    CvcInertiaPass(dt);
     CvcPhysicsWork(image, dt);
     CvcReactWork(image, dt);
 }
@@ -2362,9 +2704,24 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             cutscene = cutscene || now;
                         }
+                        // A net under it, not a floor. Where the game's line test finds ground under it
+                        // (measured within the last second), only a fall through that ground is caught,
+                        // back onto it. Where there is none, the guess (3 below the host's root) holds it.
+                        // (Held at the guess whenever it was below, Gaius shook up and down on Quadratus's
+                        // ground, 1.5-3.8 lower: lifted, then set down by the game, every other frame.)
                         const float y = pa[1];
-                        if (y < floor_y) {
-                            const float lift[3]{0.0f, floor_y - y, 0.0f};
+                        const double now_s =
+                            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                        const float ground = g_cvc_ground_a.load();
+                        const bool measured = now_s - g_cvc_ground_a_at.load() < 1.0;
+                        float catch_at = floor_y, put_at = floor_y;
+                        if (measured && !std::isnan(ground)) {
+                            catch_at = ground - 2.0f, put_at = ground;
+                        } else if (!measured) {
+                            catch_at = floor_y - 6.0f; // (not measured yet: only a long fall)
+                        }
+                        if (y < catch_at && put_at - y < (measured ? 6.0f : 1e9f)) {
+                            const float lift[3]{0.0f, put_at - y, 0.0f};
                             MoveCharacter(a, lift);
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -2587,6 +2944,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                 // Ticks A / B has been missing in a row: moving a colossus can make it unusable
                 // for a moment, which is not being gone.
                 int missing[2]{};
+                bool retargeted[2]{}; // the other's target list set to Wander while this one was torn down
                 // Ticks each usable object has been listed in a row: a boss object the game has
                 // just created is not set up for the AI yet (crash at 0x839ccd when adopted at once).
                 std::unordered_map<u64, int> age;
@@ -2616,14 +2974,34 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const u64 current = q(image + slot);
                         bool& empty = waiting[slot == 0x1593b10];
                         if (current ? listed(current) : !empty) {
+                            if (current && std::exchange(retargeted[slot == 0x1593b10], false) &&
+                                !*reinterpret_cast<const volatile u8*>(image + 0x1593efb)) {
+                                *reinterpret_cast<volatile u64*>(image + (slot == 0x1593b08 ? 0x1593f40 : 0x1593f00)) =
+                                    current; // back: the other targets it again
+                            }
                             missing[slot == 0x1593b10] = 0;
                             continue; // fine, or cleared on purpose (defeat)
                         }
-                        // Torn down (+0 cleared, as Barba's first-sight cutscene does) is no moment's
-                        // lapse: the other's target list points at freed memory (crash at 0x60541a).
+                        // Torn down (+0 cleared) during a first-sight cutscene: Valus's comes back, so
+                        // meanwhile the other only targets Wander; Barba's is freed (filled with
+                        // 0xdeadbeef54321abc), no moment's lapse: the other's target list pointed at
+                        // freed memory (crash at 0x60541a), so it goes at once.
                         const bool torn = current && q(current) == 0 &&
                                           (*reinterpret_cast<const volatile u32*>(current + 0xc) & 0x10000);
-                        if (current && !torn && ++missing[slot == 0x1593b10] < 30) {
+                        const bool freed = torn && [&] {
+                            for (u64 at = current; at < current + 0x200; at += 8) {
+                                if (q(at) == 0xdeadbeef54321abcull) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }();
+                        if (torn && !freed && !*reinterpret_cast<const volatile u8*>(image + 0x1593efb)) {
+                            *reinterpret_cast<volatile u64*>(image + (slot == 0x1593b08 ? 0x1593f40 : 0x1593f00)) =
+                                PlayerObject(image);
+                            retargeted[slot == 0x1593b10] = true;
+                        }
+                        if (current && !freed && ++missing[slot == 0x1593b10] < 30) {
                             if (missing[slot == 0x1593b10] == 1) {
                                 LOG_INFO(Core, "cvckeep: {} {:#x} unusable (type {}, flags {:#x}, +0 {:#x}, +0x1690 {:#x})",
                                          slot == 0x1593b08 ? "A" : "B", current,
@@ -2865,6 +3243,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     }
                                 }
                             }
+                            {
+                                const float *f = rays.from[50], *t = rays.to[50], *h = rays.hit[50];
+                                const bool hit = std::hypot(h[0] - t[0], h[1] - t[1], h[2] - t[2]) > 0.05f;
+                                g_cvc_ground_a = hit ? h[1] : std::numeric_limits<float>::quiet_NaN();
+                                static int told = 0;
+                                if (told++ % 20 == 0) {
+                                    LOG_INFO(Core, "cvccam: ground under A: from {:.1f} {:.1f} {:.1f} to {:.1f} hit {:.1f} {:.1f} {:.1f}",
+                                             f[0], f[1], f[2], t[1], h[0], h[1], h[2]);
+                                }
+                                g_cvc_ground_a_at = std::chrono::duration<double>(
+                                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                                (void)f;
+                            }
                             for (int k = 0; k < 12; k++) {
                                 const float *f = rays.from[38 + k], *h = rays.hit[38 + k];
                                 ground[k] = f[1] - h[1] < 299.0f ? h[1] - mid[1] : -1e9f;
@@ -2957,7 +3348,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 std::memcpy(rays.to[38 + k], rays.from[13 + 2 * k], 16);
                                 rays.to[38 + k][1] -= 300.0f;
                             }
-                            rays.count = 50, rays.image = image, tested_angle = angle;
+                            { // the ground under A (its feet: the object's position)
+                                const float from[4]{pa[0], pa[1] + 0.5f, pa[2], 1.0f};
+                                const float to[4]{pa[0], pa[1] - 40.0f, pa[2], 1.0f};
+                                std::memcpy(rays.from[50], from, 16), std::memcpy(rays.to[50], to, 16);
+                            }
+                            rays.count = 51, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
@@ -3046,6 +3442,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                                 dir[2] * dir[2]), 0.001f);
                         for (float& c : dir) {
                             c /= length;
+                        }
+                        for (int c = 0; c < 3; c++) {
+                            g_cvc_cam_now[c] = eye[c], g_cvc_cam_now[3 + c] = at[c];
                         }
                         float* out = pose[which ^= 1];
                         const float values[15]{eye[0], eye[1], eye[2], 1.0f, at[0], at[1], at[2], 1.0f,
@@ -3399,10 +3798,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
                         // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
-                        {1, {{{0x1d625c0, 5000}, {0x1d62f00, 5000}},
-                             {0x1d62120}, {0x1d63840}, {0x1d62120},
-                             250.0f, 0x1d61590, 4.0f, -2, 0x1d60ea0, 0x1d60c50, 0.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.85f, 8.0f, false, 0, 0,
-                             {{0x1d625c0, 0x1d62810}, {0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 1.5f}},
+                        // (The right stomp from its strike: its wind-up, right arm attack started, plays 9 s,
+                        // the whole stomp 21 s.)
+                        // Its head swing (a butt) two times in three: its forelegs come down 10 ahead of its
+                        // root, its own head 20 ahead, so against a standing colossus a stomp only reaches
+                        // what its head already touches.
+                        {1, {{{0x1d63840, 3500}, {0x1d63840, 3500}, {0x1d62810, 5000}},
+                             {0x1d62120}, {0x1d62120}, {0x1d62120},
+                             // (strike 2.5: its head swings across where it stands, not out to the other: from 5-8
+                             // apart it met Gaius at 0-4 units/s; swing 20: slower than a sword)
+                             250.0f, 0x1d61590, 2.5f, -2, 0x1d60ea0, 0x1d60c50, 20.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.85f, 8.0f, false, 0, 0,
+                             {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f}},
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
                         // left / right rotation; Standing; no stepping back. Its root faces along +z.
@@ -3590,6 +3996,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                           : act == Act::Idle ? 0.6f : 0.35f;
                         CvcPlayMotion(image, objects[k], motion, blend);
                         fighter[k] = {act, motion, Clock::now(), Clock::now() + std::chrono::milliseconds(ms)};
+                        g_cvc_act_now[k] = int(act);
                         g_cvc_body[k].turn = 0.0f;
                     };
                     // Its own animation played through: at its last frame, or replaced by the game's
@@ -3801,7 +4208,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         for (int k = 0; k < 2; k++) {
                             Fighter& f = fighter[k];
+                            g_cvc_act_now[k] = int(f.act); // (the quality log; a flinch is set without play)
                             const Moves* moves = kind_of(k);
+                            g_cvc_coming[k] = moves && moves->swing > 0.0f ? moves->swing : 40.0f;
                             if (!moves) {
                                 continue;
                             }
@@ -3810,6 +4219,47 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             if (f.act != Act::Attack) { // (stepping in belongs to a strike only)
                                 std::scoped_lock guard{g_cvc_body[k].lock};
                                 g_cvc_body[k].step[0] = g_cvc_body[k].step[1] = 0.0f;
+                            }
+                            // Locked into the other (over a unit inside it for 0.6 s): its body stops the
+                            // blow or the step, so it breaks off and steps back (or stands). (Attacks went
+                            // on through the other for seconds: the quality log's trapped bodies.)
+                            {
+                                // (And an attack leaning on the other 2.5 s, however shallow: Quadratus's
+                                // stomps leant on Gaius for 8 s.)
+                                static Clock::time_point deep_since[2]{}, touch_since[2]{}, quiet_until[2]{};
+                                const auto at = Clock::now();
+                                const bool deep = g_cvc_depth_now.load() > 1.0f;
+                                const bool leaning = g_cvc_touch_now.load() && f.act == Act::Attack;
+                                if (!deep) {
+                                    deep_since[k] = {};
+                                } else if (deep_since[k] == Clock::time_point{}) {
+                                    deep_since[k] = at;
+                                }
+                                if (!leaning) {
+                                    touch_since[k] = {};
+                                } else if (touch_since[k] == Clock::time_point{}) {
+                                    touch_since[k] = at;
+                                }
+                                const bool locked = deep_since[k] != Clock::time_point{} &&
+                                                    at > deep_since[k] + std::chrono::milliseconds(600);
+                                const bool pressed = touch_since[k] != Clock::time_point{} &&
+                                                     at > touch_since[k] + std::chrono::milliseconds(3000);
+                                // (Standing in it too: both stood 1.4 s 3 units inside each other. An attack
+                                // only once it has leant on the other 3 s: a slam winds up in contact, and
+                                // broken off then it never landed.)
+                                if (at > quiet_until[k] && ((locked && (f.act == Act::Walk || f.act == Act::Turn ||
+                                                                        f.act == Act::Idle)) ||
+                                                            (pressed && f.act == Act::Attack))) {
+                                    LOG_INFO(Core, "cvcbrawl: {} {} the other, breaks off", k ? "B" : "A",
+                                             locked ? "locked into" : "leaning on");
+                                    if (moves->retreat) {
+                                        play(k, moves->retreat, Act::Retreat, 2500);
+                                    } else {
+                                        stand(k);
+                                    }
+                                    quiet_until[k] = at + std::chrono::seconds(2);
+                                    deep_since[k] = touch_since[k] = {};
+                                }
                             }
                             switch (f.act) {
                             case Act::Attack: {
@@ -4203,6 +4653,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 CvcReactImpulse(1 - k, dir, point.data(), force * 1.5f);
                                 balance[1 - k] = 0.0f;
                                 LOG_INFO(Core, "cvcbrawl: {} loses its footing", k ? "A" : "B");
+                            }
+                            // The striker's blow is stopped by the body it met: its attack ends there and it
+                            // recovers into its stance (crossfaded) instead of cutting on through the other
+                            // (blades 2-4 units inside for up to 0.7 s in the quality log).
+                            if (fighter[k].act == Act::Attack && force > 0.2f) {
+                                stand(k);
                             }
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;

@@ -472,11 +472,12 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // pressed together firmly (up to 1.2 a step), a part swung into the other softly (0.3: a blade
     // swung deep into it is driven by its arm, not to be thrown out with the whole body).
     // (Only deep: a shallow touch is taken by the limbs bending out; moving a whole standing body for
-    // it read as a glide.)
-    if (deepest > 2.0f) {
+    // it read as a glide. And gently, at most 1.5 units a second, never while a part swings through:
+    // up to 0.6 a step, 36 a second, the bodies snapped in and out of each other; at 3 a second they
+    // still glided. A body pressed in for long breaks off itself: cvcbrawl.)
+    if (deepest > 1.0f && deep_speed < 30.0f) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
-        // (Deeper than 3: no longer a blade's edge in it but a body inside the other, out firmly.)
-        const float out_by = std::min(deepest * 0.5f, deepest > 3.0f ? 0.6f : deep_speed > 30.0f ? 0.2f : 0.4f);
+        const float out_by = std::min(deepest - 0.5f, 1.5f * dt);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <mutex>
 #include <random>
@@ -222,6 +224,15 @@ void DrawShapes(u64 image, ImDrawList* draw, const ImVec2& display) {
 } // namespace
 
 void Draw() {
+    // CVC_QUALITY: the steady clock (the quality log's and the log's time) in the picture's corner,
+    // so a flagged moment is found in the video exactly.
+    if (std::getenv("CVC_QUALITY")) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.3f",
+                      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(8.0f, display.y - 22.0f), IM_COL32(255, 255, 0, 230), text);
+    }
     const u64 image = ImageBase();
     // Frames in a row without the loading cover: the first uncovered frame can still be the
     // cover's last, so the readout waits for three.
