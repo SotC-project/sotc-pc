@@ -975,14 +975,43 @@ static void CvcPhysicsWork(u64 image, float dt) {
     // (Bodies settling or resting against each other are not blows: a blow comes in at 40 units/s
     // or more, with some weight.)
     constexpr float least = 8000.0f, coming = 40.0f;
+    // Where the blow lands on the struck one's own surface: the game's line test along the blow
+    // through the hulls' meeting point, against its triangle meshes (the hulls only approximate them).
+    const auto on_surface = [&](const Sotc::CvcPhysics::Hit& hit, float* at) {
+        const u64 filter = *reinterpret_cast<const volatile u64*>(image + 0x1593ed8);
+        if (!filter) {
+            return false;
+        }
+        using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter, u32 single,
+                                             u64 ignore);
+        const auto test = reinterpret_cast<LineTest>(image + 0x7a7e40);
+        alignas(16) const float from[4]{hit.point[0] - hit.normal[0] * 8.0f, hit.point[1] - hit.normal[1] * 8.0f,
+                                        hit.point[2] - hit.normal[2] * 8.0f, 1.0f};
+        alignas(16) const float to[4]{hit.point[0] + hit.normal[0] * 8.0f, hit.point[1] + hit.normal[1] * 8.0f,
+                                      hit.point[2] + hit.normal[2] * 8.0f, 1.0f};
+        alignas(16) float found[12]{};
+        if (test(found, from, to, filter, 1, objects[hit.striker]) ||
+            *reinterpret_cast<const u64*>(found + 8) != objects[1 - hit.striker]) {
+            return false;
+        }
+        std::memcpy(at, found, 12);
+        return true;
+    };
     for (const auto& hit : result.hits) {
         if (!hit.first || hit.impulse < least || hit.closing < coming) {
             continue;
         }
+        float point[3]{hit.point[0], hit.point[1], hit.point[2]};
+        const bool surface = on_surface(hit, point);
+        static int surfaced = 0, blows = 0;
+        surfaced += surface, blows++;
+        if (blows % 5 == 0) {
+            LOG_INFO(Core, "cvcphys: {} of {} blows put on the struck one's own surface", surfaced, blows);
+        }
         std::scoped_lock guard{g_cvc_blow.lock};
         if (!g_cvc_blow.ready || hit.impulse > g_cvc_blow.impulse) {
             g_cvc_blow.ready = true, g_cvc_blow.striker = hit.striker, g_cvc_blow.bone = hit.bone;
-            std::memcpy(g_cvc_blow.point, hit.point.data(), 12), std::memcpy(g_cvc_blow.normal, hit.normal.data(), 12);
+            std::memcpy(g_cvc_blow.point, point, 12), std::memcpy(g_cvc_blow.normal, hit.normal.data(), 12);
             g_cvc_blow.impulse = hit.impulse, g_cvc_blow.closing = hit.closing;
         }
     }
