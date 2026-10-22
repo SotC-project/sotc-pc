@@ -429,13 +429,15 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }
     // The strongest meeting's impulse: the struck pushed along it, the striker back (through its
-    // arm), each turned about its root.
+    // arm), each turned about its root. The striker's feet are planted and braced for its own
+    // blow: the ground takes most of its recoil (it keeps 15% of the push, 30% of the turn).
     if (strongest > 0.0f) {
         for (int k = 0; k < 2; k++) {
-            const Vec3 j = k == strong_striker ? -strong_impulse : strong_impulse;
-            out.kick[k] = Vec3{j[0], 0.0f, j[2]} * (1.0f / mass[k]);
+            const bool striker = k == strong_striker;
+            const Vec3 j = striker ? -strong_impulse : strong_impulse;
+            out.kick[k] = Vec3{j[0], 0.0f, j[2]} * ((striker ? 0.15f : 1.0f) / mass[k]);
             const Vec3 r{strong_point[0] - roots[k][0], strong_point[1] - roots[k][1], strong_point[2] - roots[k][2]};
-            out.spin[k] = Cross(r, j) * (1.0f / (mass[k] * std::max(gyration[k], 1.0f)));
+            out.spin[k] = Cross(r, j) * ((striker ? 0.3f : 1.0f) / (mass[k] * std::max(gyration[k], 1.0f)));
         }
     }
     g_step++;
