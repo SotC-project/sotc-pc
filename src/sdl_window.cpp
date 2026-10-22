@@ -267,6 +267,9 @@ struct CvcReact {
     float point[3]{};                 // where it landed
     float dent = 0.0f, dent_v = 0.0f; // units, units/s
     float sway = 0.0f, sway_v = 0.0f; // the whole body's mass shifted along the blow (units, units/s)
+    // Off its footing until then (steady clock seconds): the motors holding it upright are weak, it
+    // goes over much further before they bring it back.
+    float weak_until = 0.0f;
 };
 static CvcReact g_cvc_react[2];
 
@@ -478,12 +481,15 @@ static void CvcReactWork(u64 image, float dt) {
                 }
             };
             if (dt > 0.0f) {
-                spring(r.tilt[0], r.tilt_v[0], 6.0f, 0.32f);
-                spring(r.tilt[1], r.tilt_v[1], 6.0f, 0.32f);
+                const float now_s = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                const bool weak = now_s < r.weak_until;
+                spring(r.tilt[0], r.tilt_v[0], weak ? 2.2f : 6.0f, weak ? 0.5f : 0.32f);
+                spring(r.tilt[1], r.tilt_v[1], weak ? 2.2f : 6.0f, weak ? 0.5f : 0.32f);
                 spring(r.dent, r.dent_v, 12.0f, 0.45f);
                 spring(r.sway, r.sway_v, 5.0f, 0.4f);
-                if (const float lean = std::hypot(r.tilt[0], r.tilt[1]); lean > 0.5f) { // (a body does not fold over)
-                    r.tilt[0] *= 0.5f / lean, r.tilt[1] *= 0.5f / lean;
+                const float most = weak ? 1.05f : 0.5f; // (a body does not fold over; off its feet, nearly so)
+                if (const float lean = std::hypot(r.tilt[0], r.tilt[1]); lean > most) {
+                    r.tilt[0] *= most / lean, r.tilt[1] *= most / lean;
                 }
             }
             tilt = std::hypot(r.tilt[0], r.tilt[1]), dent = r.dent, sway = r.sway;
@@ -3805,7 +3811,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     g_cvc_body[1 - k].push[1] += dir[1] * force * full_blow / mass;
                                 }
                             }
-                            if (stagger) { // past its balance: the blow carries it much further
+                            if (stagger) { // past its balance: its motors give, the blow carries it over
+                                {
+                                    std::scoped_lock guard{g_cvc_react[1 - k].lock};
+                                    g_cvc_react[1 - k].weak_until = std::chrono::duration<float>(
+                                        std::chrono::steady_clock::now().time_since_epoch()).count() + 1.3f;
+                                }
                                 CvcReactImpulse(1 - k, dir, point.data(), force * 1.5f);
                                 balance[1 - k] = 0.0f;
                                 LOG_INFO(Core, "cvcbrawl: {} loses its footing", k ? "A" : "B");
