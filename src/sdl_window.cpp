@@ -209,6 +209,7 @@ struct CvcBody {
     std::mutex lock;
     float push[2]{};            // knockback velocity, units/s in x and z (lock)
     float apart[2]{};           // easing apart from the other body, units/s (lock)
+    float step[2]{};            // stepping in to strike, units/s (lock)
     std::atomic<float> turn{0}; // yaw rate asked for (rad/s, + counter-clockwise from above)
     float turning = 0.0f;       // yaw rate now, eased toward `turn`
     // Read back: the motion it plays (static MotionKind record), its frame and last frame.
@@ -234,6 +235,8 @@ struct CvcBlow {
 };
 static CvcBlow g_cvc_blow;
 static std::atomic<float> g_cvc_gap{1e9f}; // least gap between the bodies since cvcbrawl reset it (misses in the log)
+static std::atomic<float> g_cvc_gap_now{1e9f}; // the gap between the bodies this frame
+static std::atomic<bool> g_cvc_touch_now{false}; // their hulls meet this frame
 
 struct CvcContact {
     std::atomic<int> attacker{-1};
@@ -643,6 +646,8 @@ static void CvcPhysicsWork(u64 image, float dt) {
     }
     for (float was = g_cvc_gap.load(); result.gap < was && !g_cvc_gap.compare_exchange_weak(was, result.gap);) {
     }
+    g_cvc_gap_now = result.gap;
+    g_cvc_touch_now = !result.hits.empty();
     const Sotc::CvcPhysics::Hit* strongest = nullptr;
     for (const auto& hit : result.hits) {
         if (!strongest || hit.impulse > strongest->impulse) {
@@ -780,7 +785,7 @@ static void CvcBodyWork(u64 image) {
             // A blow's push dies away over about a third of a second (friction on the ground).
             const float keep = std::exp(-dt / 0.3f);
             for (int c = 0; c < 2; c++) {
-                delta[c * 2] = (body.push[c] + body.apart[c]) * dt;
+                delta[c * 2] = (body.push[c] + body.apart[c] + body.step[c]) * dt;
                 body.push[c] *= keep;
                 if (std::abs(body.push[c]) < 0.05f) {
                     body.push[c] = 0.0f;
@@ -3062,6 +3067,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                (body.frames.load() > 0.0f && body.frame.load() >= body.frames.load() - 0.5f);
                     };
                     const auto stand = [&](int k) {
+                        {
+                            std::scoped_lock guard{g_cvc_body[k].lock};
+                            g_cvc_body[k].step[0] = g_cvc_body[k].step[1] = 0.0f;
+                        }
                         const Moves* moves = kind_of(k);
                         const bool was_attacking = fighter[k].act == Act::Attack;
                         if (moves && !moves->idles.empty() && rng() % 100 < 30) {
@@ -3124,7 +3133,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // where it is, it fires its pulse at it.
                             const int j = 1 - k;
                             const Moves* other = kind_of(j);
-                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 75)) { // its main weapon at range
+                            if (moves->pulse && (closest > 20.0f || rng() % 100 < 25)) { // its weapon at range
                                 play(k, moves->idle, Act::Pulse, 6000);
                                 pulse_phase = 0, landed = false, attack_from = Clock::now();
                                 float mouth[3]{};
@@ -3206,13 +3215,29 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             float cosine = 0.0f, side = 0.0f;
                             const bool known = face(k, cosine, side);
+                            if (f.act != Act::Attack) { // (stepping in belongs to a strike only)
+                                std::scoped_lock guard{g_cvc_body[k].lock};
+                                g_cvc_body[k].step[0] = g_cvc_body[k].step[1] = 0.0f;
+                            }
                             switch (f.act) {
-                            case Act::Attack:
+                            case Act::Attack: {
                                 // Turned onto the other while winding up, then the blow goes where it goes.
-                                if (Clock::now() < attack_from + std::chrono::milliseconds(900)) {
+                                const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(900);
+                                if (winding) {
                                     steer(k, 0.5f);
                                 } else {
                                     g_cvc_body[k].turn = 0.0f;
+                                }
+                                // Stepping into it while winding up, until the bodies meet (its swing is in
+                                // place: from where it stood it fell short).
+                                {
+                                    const float* me = k ? (const float*)rb : (const float*)ra;
+                                    const float* it = k ? (const float*)ra : (const float*)rb;
+                                    float to[2]{it[0] - me[0], it[2] - me[2]};
+                                    const float n = std::max(std::hypot(to[0], to[1]), 0.001f);
+                                    const float pace = winding && !g_cvc_touch_now.load() && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
+                                    std::scoped_lock guard{g_cvc_body[k].lock};
+                                    g_cvc_body[k].step[0] = to[0] / n * pace, g_cvc_body[k].step[1] = to[1] / n * pace;
                                 }
                                 if (played(k)) {
                                     // Its next part: already begun by the game, or begun here; none left: it
@@ -3230,6 +3255,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     }
                                 }
                                 break;
+                            }
                             case Act::Walk:
                                 if (f.bait) {
                                     // Onto the spot in front of the other's head, where its blows land; then
@@ -3435,6 +3461,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             g_cvc_body[k].turn = 0.0f;
                             std::scoped_lock guard{g_cvc_body[k].lock};
                             g_cvc_body[k].apart[0] = g_cvc_body[k].apart[1] = 0.0f;
+                            g_cvc_body[k].step[0] = g_cvc_body[k].step[1] = 0.0f;
                         }
                     }
                     for (int k = 0; k < 2; k++) {
