@@ -163,7 +163,7 @@ static u64 PlayerObject(u64 image) {
 /// thread the camera calls CvcRayThunk, which runs 0x7a7e40 for each (true when nothing is in the
 /// way, else the hit position at +0 of its 0x30-byte result) and sets the state to 2.
 struct CvcRays {
-    float from[40][4], to[40][4], hit[40][4]; // hit: where the line stops (to when clear)
+    float from[52][4], to[52][4], hit[52][4]; // hit: where the line stops (to when clear)
     int count = 0;
     std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
     u64 image = 0;
@@ -2793,6 +2793,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Whether the colossi can be seen from each spot (from the camera itself for
                         // the current angle): lines from there to both (after a knockout, the loser).
                         static bool visible[12];
+                        // The ground under each spot (a line 300 down), above the fight's floor: the rock
+                        // pillars on the rim of Argus's courtyard have no collision for the lines across,
+                        // so a spot above that rim reads as clear while its rocks fill the picture. Over
+                        // ground well above the fight's floor (a rim, a cliff top), far below it (the chasm
+                        // around Argus's fortress, pillars rising out of it) or none at all (outside the
+                        // world as loaded) is no spot to film from.
+                        static float ground[12];
                         static float tested_angle = 0.0f;
                         static bool tested = false;
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
@@ -2825,11 +2832,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             static int reports = 0;
                             if (reports++ % 60 == 0) {
                                 LOG_INFO(Core, "cvccam: lines clear {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} "
-                                         "{:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} (angle {:.2f}, reach {:.0f})",
+                                         "{:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} (angle {:.2f}, reach {:.0f}), ground {}",
                                          clear_part[0], clear_part[1], clear_part[2], clear_part[3],
                                          clear_part[4], clear_part[5], clear_part[6], clear_part[7],
                                          clear_part[8], clear_part[9], clear_part[10], clear_part[11],
-                                         tested_angle, reach);
+                                         tested_angle, reach, [&] {
+                                             std::string g;
+                                             for (const float y : ground) {
+                                                 g += y < -1e8f ? " -" : fmt::format(" {:.0f}", y);
+                                             }
+                                             return g;
+                                         }());
                                 LOG_INFO(Core, "cvccam: line filter {:#x}",
                                          *reinterpret_cast<const volatile u64*>(image + 0x1593ed8));
                             }
@@ -2851,6 +2864,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                         cap_dir[c] = (t[c] - f[c]) / full;
                                     }
                                 }
+                            }
+                            for (int k = 0; k < 12; k++) {
+                                const float *f = rays.from[38 + k], *h = rays.hit[38 + k];
+                                ground[k] = f[1] - h[1] < 299.0f ? h[1] - mid[1] : -1e9f;
                             }
                             for (int k = 0; k < 12; k++) {
                                 visible[k] = true;
@@ -2879,7 +2896,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // shows that rock in the corner of the picture.
                                 return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
                                        (after ? 0.8f * std::cos(at - away) : 1.5f * std::abs(std::cos(at - axis))) -
-                                       (visible[k] ? 0.0f : 1.5f);
+                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -40.0f && ground[k] < 12.0f ? 0.0f : 1.5f);
                             };
                             int pick = 0;
                             for (int k = 1; k < 12; k++) {
@@ -2935,7 +2952,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             std::memcpy(rays.from[37], centre, 12), rays.from[37][3] = 1.0f;
                             std::memcpy(rays.to[37], cam, 12), rays.to[37][3] = 1.0f;
-                            rays.count = 38, rays.image = image, tested_angle = angle;
+                            for (int k = 0; k < 12; k++) { // ground under each spot
+                                std::memcpy(rays.from[38 + k], rays.from[13 + 2 * k], 16);
+                                std::memcpy(rays.to[38 + k], rays.from[13 + 2 * k], 16);
+                                rays.to[38 + k][1] -= 300.0f;
+                            }
+                            rays.count = 50, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
