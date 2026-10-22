@@ -769,7 +769,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
         return;
     }
     // A body stepping into the other meets one braced on its feet: the stepper is the one held back
-    // (80% of the way out), not the other pushed off.
+    // (all the way out), not the other pushed off (at 20% it was still shoved out of reach).
     for (int k = 0; k < 2; k++) {
         const bool stepping = g_cvc_body[k].step[0] != 0.0f || g_cvc_body[k].step[1] != 0.0f;
         const bool braced = g_cvc_body[1 - k].step[0] == 0.0f && g_cvc_body[1 - k].step[1] == 0.0f;
@@ -778,9 +778,9 @@ static void CvcPhysicsWork(u64 image, float dt) {
             const float n = std::max(std::hypot(result.shift[k][0], result.shift[k][2]), 1e-6f);
             const float m = std::max(std::hypot(result.shift[1 - k][0], result.shift[1 - k][2]), 1e-6f);
             for (const int c : {0, 2}) {
-                result.shift[k][c] *= 0.8f * total / n;
-                result.shift[1 - k][c] *= 0.2f * total / m;
-                result.kick[1 - k][c] *= 0.2f; // (its feet take the push of the other coming on, too)
+                result.shift[k][c] *= total / n;
+                result.shift[1 - k][c] *= 0.0f * total / m;
+                result.kick[1 - k][c] *= 0.1f; // (its feet take the push of the other coming on, too)
             }
             break;
         }
@@ -3116,7 +3116,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static std::vector<std::array<float, 3>> landing; // (test aid, below)
                     static float nearest_swing = 1e9f, nearest_any = 1e9f; // closest a moving / any bone came (misses in the log)
                     static Clock::time_point attack_from, next_attack = Clock::now();
-                    static std::array<float, 2> attack_root{}; // where the attacker stood when it began
+                    static std::array<float, 2> attack_root{}, target_root{}; // where each stood when it began
                     static std::mt19937 rng{std::random_device{}()};
                     const bool over = *reinterpret_cast<const volatile u8*>(image + 0x1593efb) != 0;
                     const auto* ra = reinterpret_cast<const volatile float*>(objects[0] + 0x130);
@@ -3267,9 +3267,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float d = std::hypot(it[0] - me[0], it[2] - me[2]);
                                 const float sine = std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
                                 LOG_INFO(Core, "cvcbrawl: {} missed (the bodies came within {:.1f} of each other; the other at "
-                                         "{:.0f} ahead, {:.0f} {}; it came on {:.1f})", k ? "B" : "A", g_cvc_gap.load(), d * cosine,
-                                         d * sine, side > 0.0f ? "left" : "right",
-                                         std::hypot(me[0] - attack_root[0], me[2] - attack_root[1]));
+                                         "{:.0f} ahead, {:.0f} {}; it came on {:.1f}, the other moved {:.1f}; act {})", k ? "B" : "A",
+                                         g_cvc_gap.load(), d * cosine, d * sine, side > 0.0f ? "left" : "right",
+                                         std::hypot(me[0] - attack_root[0], me[2] - attack_root[1]),
+                                         std::hypot(it[0] - target_root[0], it[2] - target_root[1]), int(fighter[1 - k].act));
                             }
                             attacking = -1;
                             next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
@@ -3289,7 +3290,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         g_cvc_gap = 1e9f;
                         {
                             const float* me = k ? (const float*)rb : (const float*)ra;
-                            attack_root = {me[0], me[2]};
+                            const float* it = k ? (const float*)ra : (const float*)rb;
+                            attack_root = {me[0], me[2]}, target_root = {it[0], it[2]};
                         }
                         nearest_swing = nearest_any = 1e9f;
                         LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
