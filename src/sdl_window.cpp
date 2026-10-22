@@ -356,6 +356,8 @@ static void CvcFlexShift(int k, int kind, const float* bones, int bone, const fl
     angle[2] += (r[0] * dir[1] - r[1] * dir[0]) * by / r2;
 }
 
+static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& angle, float* matrices, int count);
+
 /// Colossus k's limbs giving (CvcFlex) on its bone matrices: the springs stepped, then each bone
 /// with a turn turns itself and everything below it about its joint, parents first. Its matrices
 /// hold the 35 bones twice (35-69 repeat 0-34): both turned.
@@ -380,6 +382,18 @@ static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
         }
         angle = f.angle;
     }
+    if (matrices) {
+        static float m[70 * 16];
+        std::memcpy(m, reinterpret_cast<const void*>(matrices), size_t(count) * 64);
+        CvcFlexBend(kind, angle, m, count);
+        std::memcpy(reinterpret_cast<void*>(matrices), m, size_t(count) * 64);
+    }
+}
+
+/// Bones bent by their turns (CvcFlex angles) on matrices `m` (`count` of them, 4x4 row vectors;
+/// past 35 the same bones again): each bone with a turn turns itself and everything below it about
+/// its joint, parents first.
+static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& angle, float* matrices, int count) {
     const auto* parents = Sotc::CvcPhysics::Parents(kind);
     if (!parents) {
         return;
@@ -416,14 +430,14 @@ static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
                 v[q] = v[q] * c + cr[q] * s + axis[q] * dot * (1.0f - c);
             }
         };
-        const auto* joint = reinterpret_cast<const volatile float*>(matrices + b * 64);
+        const float* joint = matrices + b * 16;
         const float pivot[3]{joint[12], joint[13], joint[14]};
         for (const int d : below[size_t(b)]) {
             for (const int i : {d, d + 35}) {
                 if (i >= count) {
                     continue;
                 }
-                auto* m = reinterpret_cast<volatile float*>(matrices + i * 64);
+                float* m = matrices + i * 16;
                 for (int row = 0; row < 3; row++) {
                     float v[3]{m[row * 4], m[row * 4 + 1], m[row * 4 + 2]};
                     rotate(v);
@@ -779,6 +793,15 @@ static void CvcPhysicsWork(u64 image, float dt) {
             return;
         }
         kinds[k] = int((entry - table) / 0x1e8);
+    }
+    // (As they are drawn: limbs bent where they gave, so a part bent out of the other is out of it.)
+    for (int k = 0; k < 2; k++) {
+        std::array<std::array<float, 3>, 35> angle;
+        {
+            std::scoped_lock guard{g_cvc_flex[k].lock};
+            angle = g_cvc_flex[k].angle;
+        }
+        CvcFlexBend(kinds[k], angle, bones[k], 35);
     }
     const float* bone_sets[2]{bones[0], bones[1]};
     const float* root_sets[2]{roots[0], roots[1]};
