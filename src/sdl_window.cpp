@@ -3135,11 +3135,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Near but not square to it (a slam lands in front): round first.
                             play(k, side > 0.0f ? moves->turn_left : moves->turn_right, Act::Turn, 4000);
                             LOG_INFO(Core, "cvcbrawl: {} squares up ({:.2f})", k ? "B" : "A", cosine);
-                        } else if (moves->holds && [&] { // (slams only on the spot in front of its head)
-                                       // (The other already on the spot in front of its head: in reach.)
-                                       float spot[3]{};
+                        } else if (moves->holds && [&] {
+                                       // (Its slam: the other in front of it, near enough to step in on: its
+                                       // hands come down about 22 ahead of its root.)
                                        const float* other = k ? (const float*)ra : (const float*)rb;
-                                       return !front(k, spot) || std::hypot(other[0] - spot[0], other[2] - spot[2]) >= 8.0f;
+                                       const float* me = k ? (const float*)rb : (const float*)ra;
+                                       return std::hypot(other[0] - me[0], other[2] - me[2]) > 40.0f;
                                    }()) {
                             // It waits; the other comes on into its reach (then it strikes). Or, from
                             // where it is, it fires its pulse at it.
@@ -3248,7 +3249,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     const float* it = k ? (const float*)ra : (const float*)rb;
                                     float to[2]{it[0] - me[0], it[2] - me[2]};
                                     const float n = std::max(std::hypot(to[0], to[1]), 0.001f);
-                                    const float pace = winding && closest > moves->strike && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
+                                    // (One that holds its ground slams down about 22 ahead of its root: in until
+                                    // the other is there; the rest until within their striking distance.)
+                                    const bool short_of = moves->holds ? std::hypot(to[0], to[1]) > 22.0f : closest > moves->strike;
+                                    const float pace = winding && short_of && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
                                     std::scoped_lock guard{g_cvc_body[k].lock};
                                     g_cvc_body[k].step[0] = to[0] / n * pace, g_cvc_body[k].step[1] = to[1] / n * pace;
                                 }
