@@ -35,7 +35,10 @@ struct Result {
     float gap = 1e9f; // how near the two came: the least gap between the boxes of a part of each (0: met)
 };
 
-/// One step. kinds: each colossus's boss index (2 Gaius, 8 Basaran); bones: its 35 bone matrices
+/// The most bones a colossus has (each one's matrices hold them twice: their count, twice over).
+constexpr int MaxBones = 64;
+
+/// One step. kinds: each colossus's boss index (2 Gaius, 8 Basaran); bones: its bone matrices
 /// (4x4, row vectors: axes in rows 0-2, position in row 3); roots: its root position. False
 /// when either has no hulls (nothing done).
 bool Step(const int kinds[2], const float* const bones[2], const float* const roots[2], float dt, Result& out);
@@ -46,8 +49,9 @@ float Mass(int kind);
 /// Colossus k's collision as last placed (each part's hull points, world), for a debug overlay.
 std::vector<std::vector<Vec3>> Shapes(int k);
 
-/// A colossus's skeleton: each of its 35 bones' parent (-1 the root), null when unknown.
-const std::array<int, 35>* Parents(int kind);
+/// A colossus's skeleton: each of its bones' parent (-1 the root; as many as it has bones), null
+/// when unknown.
+const std::vector<int>* Parents(int kind);
 
 /// Two convex point sets overlapping: true with the direction to move b out of a (unit) and how
 /// far. (Exposed for the self-check.)

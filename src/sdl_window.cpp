@@ -309,7 +309,7 @@ static void CvcReactImpulse(int k, const float* dir, const float* point, float f
 struct CvcFlex {
     std::mutex lock;
     int kind = -1;
-    std::array<std::array<float, 3>, 35> angle{}, rate{};
+    std::array<std::array<float, 3>, Sotc::CvcPhysics::MaxBones> angle{}, rate{};
 };
 static CvcFlex g_cvc_flex[2];
 
@@ -319,7 +319,7 @@ static CvcFlex g_cvc_flex[2];
 static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const float* point, const float* dir,
                            float speed) {
     const auto* parents = Sotc::CvcPhysics::Parents(kind);
-    if (!parents || bone <= 0 || bone >= 35) {
+    if (!parents || bone <= 0 || bone >= int(parents->size())) {
         return;
     }
     auto& f = g_cvc_flex[k];
@@ -346,7 +346,8 @@ static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const 
 /// A part of colossus k inside the other: its bone turned at its joint so the point moves `by`
 /// along `dir` (unit), out of it (position, not speed: the joint's spring brings it back).
 static void CvcFlexShift(int k, int kind, const float* bones, int bone, const float* point, const float* dir, float by) {
-    if (!Sotc::CvcPhysics::Parents(kind) || bone <= 0 || bone >= 35) {
+    const auto* parents = Sotc::CvcPhysics::Parents(kind);
+    if (!parents || bone <= 0 || bone >= int(parents->size())) {
         return;
     }
     auto& f = g_cvc_flex[k];
@@ -361,20 +362,21 @@ static void CvcFlexShift(int k, int kind, const float* bones, int bone, const fl
     angle[2] += (r[0] * dir[1] - r[1] * dir[0]) * by / r2;
 }
 
-static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& angle, float* matrices, int count);
+using CvcAngles = std::array<std::array<float, 3>, Sotc::CvcPhysics::MaxBones>;
+static void CvcFlexBend(int kind, const CvcAngles& angle, float* matrices, int count);
 
 /// Colossus k's limbs giving (CvcFlex) on its bone matrices: the springs stepped, then each bone
 /// with a turn turns itself and everything below it about its joint, parents first. Its matrices
-/// hold the 35 bones twice (35-69 repeat 0-34): both turned.
+/// hold its bones twice (35 of them for Gaius: 35-69 repeat 0-34): both turned.
 static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
     auto& f = g_cvc_flex[k];
-    std::array<std::array<float, 3>, 35> angle;
+    CvcAngles angle;
     int kind;
     {
         std::scoped_lock guard{f.lock};
         kind = f.kind;
         constexpr float w0 = 9.0f, zeta = 0.45f; // (back to its pose in about half a second)
-        for (size_t b = 0; b < 35 && dt > 0.0f; b++) {
+        for (size_t b = 0; b < f.angle.size() && dt > 0.0f; b++) {
             for (int c = 0; c < 3; c++) {
                 f.rate[b][c] += (-w0 * w0 * f.angle[b][c] - 2.0f * zeta * w0 * f.rate[b][c]) * dt;
                 f.angle[b][c] += f.rate[b][c] * dt;
@@ -388,7 +390,7 @@ static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
         angle = f.angle;
     }
     if (matrices) {
-        static float m[70 * 16];
+        static float m[2 * Sotc::CvcPhysics::MaxBones * 16];
         std::memcpy(m, reinterpret_cast<const void*>(matrices), size_t(count) * 64);
         CvcFlexBend(kind, angle, m, count);
         std::memcpy(reinterpret_cast<void*>(matrices), m, size_t(count) * 64);
@@ -396,26 +398,28 @@ static void CvcFlexWork(int k, u64 matrices, int count, float dt) {
 }
 
 /// Bones bent by their turns (CvcFlex angles) on matrices `m` (`count` of them, 4x4 row vectors;
-/// past 35 the same bones again): each bone with a turn turns itself and everything below it about
-/// its joint, parents first.
-static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& angle, float* matrices, int count) {
+/// past its bones' count the same bones again): each bone with a turn turns itself and everything
+/// below it about its joint, parents first.
+static void CvcFlexBend(int kind, const CvcAngles& angle, float* matrices, int count) {
     const auto* parents = Sotc::CvcPhysics::Parents(kind);
     if (!parents) {
         return;
     }
     // Parents first, and what hangs below each bone (itself included), once per kind.
-    static std::map<int, std::pair<std::vector<int>, std::array<std::vector<int>, 35>>> trees;
+    const int bones = int(parents->size());
+    static std::map<int, std::pair<std::vector<int>, std::vector<std::vector<int>>>> trees;
     auto& [order, below] = trees[kind];
     if (order.empty()) {
+        below.resize(size_t(bones));
         order.push_back(0);
         for (size_t i = 0; i < order.size(); i++) {
-            for (int c = 0; c < 35; c++) {
+            for (int c = 0; c < bones; c++) {
                 if ((*parents)[c] == order[i]) {
                     order.push_back(c);
                 }
             }
         }
-        for (int b = 0; b < 35; b++) {
+        for (int b = 0; b < bones; b++) {
             for (int d = b; d >= 0; d = (*parents)[d]) {
                 below[size_t(d)].push_back(b);
             }
@@ -438,7 +442,7 @@ static void CvcFlexBend(int kind, const std::array<std::array<float, 3>, 35>& an
         const float* joint = matrices + b * 16;
         const float pivot[3]{joint[12], joint[13], joint[14]};
         for (const int d : below[size_t(b)]) {
-            for (const int i : {d, d + 35}) {
+            for (const int i : {d, d + bones}) {
                 if (i >= count) {
                     continue;
                 }
@@ -465,6 +469,7 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
     static bool have[2]{};
     static u64 last_motion[2]{};
     static float last_step[2]{}; // how far its root moved the frame before (a steady lunge is no snap)
+    static float fade[2]{0.15f, 0.15f}; // how long this snap's difference takes to die away (s)
     const u64 motion = g_cvc_body[k].motion.load();
     const size_t n = size_t(count) * 16;
     std::memcpy(now, reinterpret_cast<const void*>(matrices), n * 4);
@@ -482,8 +487,12 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
         for (size_t i = 0; i < n; i++) {
             offset[k][i] = last[k][i] - now[i];
         }
+        // (The further the motion puts it, the longer: Basaran's death motion moves its root 13.8, which
+        // in 0.15 s still read as a jump; 0.15 s and 0.03 s a unit more, at most 0.7 s.)
+        const float moved_by = std::hypot(offset[k][12], offset[k][13], offset[k][14]);
+        fade[k] = std::min(0.15f + 0.03f * moved_by, 0.7f);
     } else {
-        const float keep = std::exp(-dt / 0.15f);
+        const float keep = std::exp(-dt / fade[k]);
         for (size_t i = 0; i < n; i++) {
             offset[k][i] *= keep;
         }
@@ -531,8 +540,10 @@ static void CvcReactWork(u64 image, float dt) {
             continue;
         }
         const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
-        if (matrices && Core::Memory::Instance()->IsValidMapping(matrices, 35 * 64)) {
-            const int count = Core::Memory::Instance()->IsValidMapping(matrices, 70 * 64) ? 70 : 35;
+        const auto* parents = Sotc::CvcPhysics::Parents(g_cvc_flex[k].kind);
+        const int bones = parents ? int(parents->size()) : 35;
+        if (matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(bones) * 64)) {
+            const int count = Core::Memory::Instance()->IsValidMapping(matrices, size_t(bones) * 128) ? 2 * bones : bones;
             CvcInertiaWork(k, matrices, count, dt);
             CvcFlexWork(k, matrices, count, dt);
         }
@@ -858,28 +869,34 @@ static void CvcPhysicsWork(u64 image, float dt) {
     };
     const u64 table = *reinterpret_cast<const volatile u64*>(image + 0x16d21f8 + 0x20);
     int kinds[2]{-1, -1};
-    static float bones[2][35 * 16];
+    static float bones[2][Sotc::CvcPhysics::MaxBones * 16];
+    int counts[2]{};
     float roots[2][3]{};
     u64 objects[2]{};
     for (int k = 0; k < 2; k++) {
         objects[k] = g_cvc_body[k].object.load();
         const u64 entry = *reinterpret_cast<const volatile u64*>(image + (k ? 0x1593b30 : 0x1593b28));
         u64 matrices = 0;
-        if (!objects[k] || *reinterpret_cast<const volatile u8*>(objects[k] + 0xc) != 9 || entry < table ||
-            !copy(objects[k] + 0x120 + 0x198, &matrices, 8) || !copy(matrices, bones[k], sizeof(bones[k])) ||
-            !copy(objects[k] + 0x130, roots[k], 12)) {
+        if (!objects[k] || *reinterpret_cast<const volatile u8*>(objects[k] + 0xc) != 9 || entry < table) {
             return;
         }
         kinds[k] = int((entry - table) / 0x1e8);
+        const auto* parents = Sotc::CvcPhysics::Parents(kinds[k]);
+        counts[k] = parents ? int(parents->size()) : 0;
+        if (!counts[k] || !copy(objects[k] + 0x120 + 0x198, &matrices, 8) ||
+            !copy(matrices, bones[k], size_t(counts[k]) * 64) || !copy(objects[k] + 0x130, roots[k], 12)) {
+            return;
+        }
     }
     // (As they are drawn: limbs bent where they gave, so a part bent out of the other is out of it.)
     for (int k = 0; k < 2; k++) {
-        std::array<std::array<float, 3>, 35> angle;
+        CvcAngles angle;
         {
             std::scoped_lock guard{g_cvc_flex[k].lock};
             angle = g_cvc_flex[k].angle;
+            g_cvc_flex[k].kind = kinds[k];
         }
-        CvcFlexBend(kinds[k], angle, bones[k], 35);
+        CvcFlexBend(kinds[k], angle, bones[k], counts[k]);
     }
     const float* bone_sets[2]{bones[0], bones[1]};
     const float* root_sets[2]{roots[0], roots[1]};
@@ -1056,7 +1073,7 @@ static void CvcProbeSkeleton(u64 image, int k, u64 object) {
     // bones; each hit on it (sample, point, the hit's word +0x28) to testrun/rays_<A|B>.bin.
     const u64 filter = *reinterpret_cast<const volatile u64*>(image + 0x1593ed8);
     const u64 other = g_cvc_body[1 - k].object.load();
-    if (filter && count >= 35) {
+    if (filter && count >= 20) {
         using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter, u32 single,
                                              u64 ignore);
         const auto test = reinterpret_cast<LineTest>(image + 0x7a7e40);
@@ -1065,7 +1082,7 @@ static void CvcProbeSkeleton(u64 image, int k, u64 object) {
         std::ofstream rays(fmt::format("D:/sotc-pc/testrun/rays_{}.bin", k ? "B" : "A"),
                            std::ios::binary | (samples[k] ? std::ios::app : std::ios::trunc));
         for (int r = 0; r < 48; r++) {
-            const float* b = &pose[(rng() % 35) * 16 + 12];
+            const float* b = &pose[(rng() % (count / 2)) * 16 + 12]; // (its bones are listed twice)
             float d[3];
             do {
                 d[0] = unit(rng), d[1] = unit(rng), d[2] = unit(rng);
@@ -3289,7 +3306,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // second part, begins reared up and started from a stand it jumps there.)
                         {8, {{{0x1d59230, 3500}},
                              {0x1d5a4b0}, {0x1d5a4b0}, {0x1d5a4b0},
-                             250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0, 1.7f, 0.9f, 10.0f, true, 0x1d59dc0, 0x1d59920,
+                             // (aim 0.8: it strikes with the other up to 37 degrees aside, its side slams)
+                             250.0f, 0x1d553c0, 3.0f, -2, 0x1d54f20, 0x1d54a80, 30.0f, 0x1d51e90, 0, 1.7f, 0.8f, 10.0f, true, 0x1d59dc0, 0x1d59920,
                              // both_hands_attack_1 > hands_attack_2 (middle); each hands_attack_2 > its _3
                              {{0x1d59230, 0x1d59480}, {0x1d59480, 0x1d596d0}, {0x1d59920, 0x1d59b70},
                               {0x1d59dc0, 0x1d5a010}}, true,
@@ -3297,6 +3315,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // overturned_loop (3 s on its back) > flip_over_stop_1 > _2; Turtle_Standing_1, _2
                              {{0x1d56640, 0}, {0x1d56890, 0}, {0x1d56f80, 0}, {0x1d571d0, 3000}, {0x1d57420, 0}, {0x1d57670, 0}},
                              {0x1d545e0, 0x1d54830}, 4.0f}},
+                        // Phaedra (Kirin): right / left foot attack_1 (stomps); chest (before), head
+                        // (small), chest behind right / left damage; Kirin_walking_loop; Standing left /
+                        // right rotation; Kirin_Tachi (standing); Kirin_recession. Its root faces along -z
+                        // (re/cvc forward axis: the high end of its body). No fall (untried: Gaius's own
+                        // crashed the game's effect update).
+                        {3, {{{0x1ce3c10, 4000}, {0x1ce4c40, 4000}},
+                             {0x1ce9640}, {0x1ce93f0}, {0x1ce9890, 0x1ce9ae0},
+                             250.0f, 0x1ce2990, 6.0f, -2, 0x1ce24f0, 0x1ce22a0, 0.0f, 0x1ce1e00, 0x1ce32d0, 1.0f, 0.85f, 8.0f, false, 0, 0,
+                             {}, false, {}, {}, 1.5f}},
                         // (straight: both_hands_attack_1 / hands_attack_2 (middle); to the left / right:
                         // hands_attack_2 (left) / (right))
                     };
@@ -3748,7 +3775,28 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // Against one that holds its ground: onto its place beside the other's head.
                                 float flank_spot[3]{};
                                 const bool flanking = flank(k, flank_spot);
-                                steer(k, 0.45f, flanking ? flank_spot : nullptr);
+                                // One that holds its ground (Basaran) comes on at an angle, its nose on a
+                                // point 12 beside the other on the side its nose is already: the other ends
+                                // up beside its head, where its side slams bring its head and hands down.
+                                float angled[3]{};
+                                const bool angling = moves->holds && [&] {
+                                    float nose[3]{};
+                                    if (!front(k, nose)) {
+                                        return false;
+                                    }
+                                    const float* me = k ? (const float*)rb : (const float*)ra;
+                                    const float* it = k ? (const float*)ra : (const float*)rb;
+                                    float dx = it[0] - me[0], dz = it[2] - me[2];
+                                    const float d = std::max(std::hypot(dx, dz), 0.001f);
+                                    dx /= d, dz /= d;
+                                    float px = -dz, pz = dx; // across the line to it
+                                    if ((nose[0] - me[0]) * px + (nose[2] - me[2]) * pz < 0.0f) {
+                                        px = -px, pz = -pz;
+                                    }
+                                    angled[0] = it[0] + px * 12.0f, angled[1] = it[1], angled[2] = it[2] + pz * 12.0f;
+                                    return true;
+                                }();
+                                steer(k, 0.45f, flanking ? flank_spot : angling ? angled : nullptr);
                                 if (flanking) {
                                     const float* me = k ? (const float*)rb : (const float*)ra;
                                     if (std::hypot(me[0] - flank_spot[0], me[2] - flank_spot[2]) < 5.0f || g_cvc_touch_now.load()) {

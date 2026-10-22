@@ -257,7 +257,7 @@ struct Part {
     std::vector<Vec3> local;
 };
 std::map<int, std::vector<Part>> g_parts;
-std::map<int, std::array<int, 35>> g_parents;
+std::map<int, std::vector<int>> g_parents;
 
 void Load() {
 #ifndef CVC_PHYSICS_SELF_CHECK
@@ -266,11 +266,11 @@ void Load() {
     for (std::string line; std::getline(text, line);) {
         std::istringstream in{line};
         int kind = 0, count = 0;
-        if (line.starts_with("P ")) { // a skeleton: P kind and its 35 parents
+        if (line.starts_with("P ")) { // a skeleton: P kind and its bones' parents
             in.ignore(2);
             auto& parents = g_parents[(in >> kind, kind)];
-            for (int& parent : parents) {
-                in >> parent;
+            for (int parent; parents.size() < size_t(MaxBones) && in >> parent;) {
+                parents.push_back(parent);
             }
             continue;
         }
@@ -307,7 +307,7 @@ bool Overlap(const std::vector<Vec3>& a, const std::vector<Vec3>& b, Vec3& norma
     return Epa(a, b, s, normal, depth);
 }
 
-const std::array<int, 35>* Parents(int kind) {
+const std::vector<int>* Parents(int kind) {
     Mass(kind); // (loaded)
     const auto it = g_parents.find(kind);
     return it == g_parents.end() ? nullptr : &it->second;
