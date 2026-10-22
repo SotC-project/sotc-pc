@@ -780,6 +780,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
             for (const int c : {0, 2}) {
                 result.shift[k][c] *= 0.8f * total / n;
                 result.shift[1 - k][c] *= 0.2f * total / m;
+                result.kick[1 - k][c] *= 0.2f; // (its feet take the push of the other coming on, too)
             }
             break;
         }
@@ -3699,7 +3700,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
                             const float damage = (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
-                                                 std::clamp(force, 0.1f, 2.0f);
+                                                 std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.1f, 2.0f) /* (past a full blow, half as much again) */;
                             *health = std::max(0.0f, *health - damage);
                             balance[1 - k] += force;
                             // The impact: both freeze for a moment, the view shakes, then the one hit
