@@ -23,6 +23,7 @@ struct Hit {
     Vec3 normal{};     // from the striker into the struck (unit)
     float closing = 0; // how fast they came together along it (units/s)
     float impulse = 0; // momentum exchanged (volume units x units/s)
+    float depth = 0;   // how far the two parts are inside each other (units)
     bool first = false; // these two parts just met (a blow), not resting against each other
 };
 

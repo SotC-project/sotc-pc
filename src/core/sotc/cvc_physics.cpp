@@ -422,6 +422,7 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             hit.first = met || touch->second + 1 != g_step;
             touch->second = g_step;
             hit.closing = std::max(closing, 0.0f);
+            hit.depth = depth;
             const float into_a = Dot(a.velocity, n), into_b = -Dot(b.velocity, n);
             hit.striker = into_a >= into_b ? 0 : 1;
             hit.bone = hit.striker ? b.bone : a.bone;

@@ -338,6 +338,24 @@ static void CvcFlexImpulse(int k, int kind, const float* bones, int bone, const 
     }
 }
 
+/// A part of colossus k inside the other: its bone turned at its joint so the point moves `by`
+/// along `dir` (unit), out of it (position, not speed: the joint's spring brings it back).
+static void CvcFlexShift(int k, int kind, const float* bones, int bone, const float* point, const float* dir, float by) {
+    if (!Sotc::CvcPhysics::Parents(kind) || bone <= 0 || bone >= 35) {
+        return;
+    }
+    auto& f = g_cvc_flex[k];
+    std::scoped_lock guard{f.lock};
+    f.kind = kind;
+    const float* m = bones + bone * 16;
+    const float r[3]{point[0] - m[12], point[1] - m[13], point[2] - m[14]};
+    const float r2 = std::max(r[0] * r[0] + r[1] * r[1] + r[2] * r[2], 4.0f);
+    auto& angle = f.angle[size_t(bone)];
+    angle[0] += (r[1] * dir[2] - r[2] * dir[1]) * by / r2;
+    angle[1] += (r[2] * dir[0] - r[0] * dir[2]) * by / r2;
+    angle[2] += (r[0] * dir[1] - r[1] * dir[0]) * by / r2;
+}
+
 /// Colossus k's limbs giving (CvcFlex) on its bone matrices: the springs stepped, then each bone
 /// with a turn turns itself and everything below it about its joint, parents first. Its matrices
 /// hold the 35 bones twice (35-69 repeat 0-34): both turned.
@@ -817,6 +835,21 @@ static void CvcPhysicsWork(u64 image, float dt) {
             CvcReactSpin(k, result.spin[k].data(), strongest->point.data(), dir, std::min(kicked * 6.0f, 40.0f),
                          std::min(kicked * 1.5f, 20.0f));
         }
+    }
+    // Parts inside each other bend out at their joints (half the depth a step, shared by inverse
+    // mass), so a head slammed into the other comes off it rather than both bodies sliding.
+    for (const auto& hit : result.hits) {
+        if (hit.depth < 0.5f) {
+            continue;
+        }
+        const int struck = 1 - hit.striker;
+        const float ma = Sotc::CvcPhysics::Mass(kinds[hit.striker]), mb = Sotc::CvcPhysics::Mass(kinds[struck]);
+        const float share = 1.0f / ma + 1.0f / mb, out = std::min(hit.depth * 0.5f, 1.0f);
+        const float back[3]{-hit.normal[0], -hit.normal[1], -hit.normal[2]};
+        CvcFlexShift(hit.striker, kinds[hit.striker], bones[hit.striker], hit.bone, hit.point.data(), back,
+                     out * (1.0f / ma) / share);
+        CvcFlexShift(struck, kinds[struck], bones[struck], hit.struck_bone, hit.point.data(), hit.normal.data(),
+                     out * (1.0f / mb) / share);
     }
     // Each new meeting with some weight bends the struck one's limb there (the region of it given
     // the impulse over about an eighth of its mass).
