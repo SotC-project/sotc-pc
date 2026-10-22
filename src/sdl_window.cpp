@@ -565,7 +565,10 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
     // the bodies and the view following them shook. Compared by length only, a second pop the next
     // frame, the other way, passed unsmoothed.)
     const float change = std::hypot(step[0] - last_step[k][0], step[1] - last_step[k][1], step[2] - last_step[k][2]);
-    const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || change > 0.6f);
+    // (Standing, any move of its root over 0.5 a frame is the game's: a stance has no root motion,
+    // and out of a retreat the game slid Quadratus 3 units over three frames.)
+    const bool standing = g_cvc_act_now[k].load() == 0 && std::hypot(step[0], step[1], step[2]) > 0.5f;
+    const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || change > 0.6f || standing);
     std::memcpy(last_step[k], step, sizeof(step));
     const auto unit = [](const float* v, float* u) {
         const float l = std::hypot(v[0], v[1], v[2]);
@@ -4367,6 +4370,34 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // (Basaran rears up for 1.6 s before its slam comes down: it can come on under it.)
                                 const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900) ||
                                                      (moves->charge && f.motion == moves->walk); // (a charge steers all the way)
+                                // Any attack driven 2.5 deep into the other for 0.15 s is stopped there by its
+                                // body and recovers (Gaius's slam brought his body 3.9 into Quadratus's head
+                                // for half a second).
+                                {
+                                    static Clock::time_point deep_at[2]{};
+                                    if (g_cvc_depth_now.load() <= 2.5f) {
+                                        deep_at[k] = {};
+                                    } else if (deep_at[k] == Clock::time_point{}) {
+                                        deep_at[k] = Clock::now();
+                                    } else if (Clock::now() > deep_at[k] + std::chrono::milliseconds(150) ||
+                                               g_cvc_depth_now.load() > 3.0f) { // (3 deep: at once)
+                                        deep_at[k] = {};
+                                        // (Back off it: recovering in place, they stayed 3.5 inside each other
+                                        // for 0.4 s.)
+                                        // (Quickly: crossfaded over 0.35 s the slam's own downswing went
+                                        // on into the other.)
+                                        if (moves->retreat) {
+                                            play(k, moves->retreat, Act::Retreat, 1500);
+                                            CvcPlayMotion(image, objects[k], moves->retreat, 0.12f);
+                                        } else {
+                                            stand(k);
+                                            if (moves->idle && fighter[k].motion == moves->idle) {
+                                                CvcPlayMotion(image, objects[k], moves->idle, 0.12f);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
                                 // A charge that has met the other stops there (its body is in the way).
                                 static Clock::time_point met_at[2]{};
                                 // (And it steps back off it: stood there, it stayed 3 units inside the other
