@@ -889,9 +889,17 @@ static void CvcPhysicsWork(u64 image, float dt) {
     }
     // Only a blow shoves a body (a new meeting with weight behind it, its flinch playing): bodies
     // resting against each other are only kept out of each other, gently.
+    // (One swing is one shove: a blade sweeping through several of the other's hull pieces met each
+    // anew; a shove for each slid the struck one along.)
     bool blow = false;
+    static auto last_shove = std::chrono::steady_clock::time_point{};
     for (const auto& hit : result.hits) {
         blow = blow || (hit.first && hit.impulse >= 8000.0f && hit.closing >= 40.0f);
+    }
+    if (blow && std::chrono::steady_clock::now() < last_shove + std::chrono::milliseconds(500)) {
+        blow = false;
+    } else if (blow) {
+        last_shove = std::chrono::steady_clock::now();
     }
     for (int k = 0; k < 2; k++) {
         if (result.shift[k][0] != 0.0f || result.shift[k][2] != 0.0f) {
