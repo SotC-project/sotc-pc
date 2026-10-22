@@ -444,10 +444,12 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // Out of each other (half the depth a step, by inverse mass), on the ground plane: bodies
     // pressed together firmly (up to 1.2 a step), a part swung into the other softly (0.3: a blade
     // swung deep into it is driven by its arm, not to be thrown out with the whole body).
-    if (deepest > 0.0f) {
+    // (Only deep: a shallow touch is taken by the limbs bending out; moving a whole standing body for
+    // it read as a glide.)
+    if (deepest > 2.0f) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
         // (Deeper than 3: no longer a blade's edge in it but a body inside the other, out firmly.)
-        const float out_by = std::min(deepest * 0.5f, deepest > 3.0f ? 1.5f : deep_speed > 30.0f ? 0.3f : 1.2f);
+        const float out_by = std::min(deepest * 0.5f, deepest > 3.0f ? 0.6f : deep_speed > 30.0f ? 0.2f : 0.4f);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }
@@ -459,8 +461,8 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             const bool striker = k == strong_striker;
             const Vec3 j = striker ? -strong_impulse : strong_impulse;
             out.kick[k] = Vec3{j[0], 0.0f, j[2]} * ((striker ? 0.15f : 1.0f) / mass[k]);
-            if (const float speed = Length(out.kick[k]); speed > 40.0f) {
-                out.kick[k] = out.kick[k] * (40.0f / speed); // (feet on the ground: shoved, never flung)
+            if (const float speed = Length(out.kick[k]); speed > 20.0f) {
+                out.kick[k] = out.kick[k] * (20.0f / speed); // (feet on the ground: a shove of a few units, never a glide)
             }
             const Vec3 r{strong_point[0] - roots[k][0], strong_point[1] - roots[k][1], strong_point[2] - roots[k][2]};
             out.spin[k] = Cross(r, j) * ((striker ? 0.3f : 1.0f) / (mass[k] * std::max(gyration[k], 1.0f)));

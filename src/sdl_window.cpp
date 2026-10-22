@@ -209,7 +209,8 @@ struct CvcBody {
     std::mutex lock;
     float push[2]{};            // knockback velocity, units/s in x and z (lock)
     float apart[2]{};           // easing apart from the other body, units/s (lock)
-    float step[2]{};            // stepping in to strike, units/s (lock)
+    float step[2]{};            // stepping in to strike, units/s (lock; unused: bodies walk in)
+    float ours = 0.0f;          // how far our code moved its root lately (no animation of its own: glides in the log)
     std::atomic<float> turn{0}; // yaw rate asked for (rad/s, + counter-clockwise from above)
     float turning = 0.0f;       // yaw rate now, eased toward `turn`
     // Read back: the motion it plays (static MotionKind record), its frame and last frame.
@@ -815,29 +816,21 @@ static void CvcPhysicsWork(u64 image, float dt) {
     if (!Sotc::CvcPhysics::Step(kinds, bone_sets, root_sets, dt, result)) {
         return;
     }
-    // A body stepping into the other meets one braced on its feet: the stepper is the one held back
-    // (all the way out), not the other pushed off (at 20% it was still shoved out of reach).
-    for (int k = 0; k < 2; k++) {
-        const bool stepping = g_cvc_body[k].step[0] != 0.0f || g_cvc_body[k].step[1] != 0.0f;
-        const bool braced = g_cvc_body[1 - k].step[0] == 0.0f && g_cvc_body[1 - k].step[1] == 0.0f;
-        if (stepping && braced) {
-            const float total = std::hypot(result.shift[0][0], result.shift[0][2]) + std::hypot(result.shift[1][0], result.shift[1][2]);
-            const float n = std::max(std::hypot(result.shift[k][0], result.shift[k][2]), 1e-6f);
-            const float m = std::max(std::hypot(result.shift[1 - k][0], result.shift[1 - k][2]), 1e-6f);
-            for (const int c : {0, 2}) {
-                result.shift[k][c] *= total / n;
-                result.shift[1 - k][c] *= 0.0f * total / m;
-                result.kick[1 - k][c] *= 0.1f; // (its feet take the push of the other coming on, too)
-            }
-            break;
-        }
+    // Only a blow shoves a body (a new meeting with weight behind it, its flinch playing): bodies
+    // resting against each other are only kept out of each other, gently.
+    bool blow = false;
+    for (const auto& hit : result.hits) {
+        blow = blow || (hit.first && hit.impulse >= 8000.0f && hit.closing >= 40.0f);
     }
     for (int k = 0; k < 2; k++) {
         if (result.shift[k][0] != 0.0f || result.shift[k][2] != 0.0f) {
             MoveCharacter(objects[k], result.shift[k].data());
+            g_cvc_body[k].ours += std::hypot(result.shift[k][0], result.shift[k][2]);
         }
-        std::scoped_lock guard{g_cvc_body[k].lock};
-        g_cvc_body[k].push[0] += result.kick[k][0], g_cvc_body[k].push[1] += result.kick[k][2];
+        if (blow) {
+            std::scoped_lock guard{g_cvc_body[k].lock};
+            g_cvc_body[k].push[0] += result.kick[k][0], g_cvc_body[k].push[1] += result.kick[k][2];
+        }
     }
     for (float was = g_cvc_gap.load(); result.gap < was && !g_cvc_gap.compare_exchange_weak(was, result.gap);) {
     }
@@ -1030,6 +1023,17 @@ static void CvcBodyWork(u64 image) {
         }
         if (delta[0] != 0.0f || delta[2] != 0.0f) {
             MoveCharacter(object, delta);
+            body.ours += std::hypot(delta[0], delta[2]);
+        }
+        {
+            static Clock::time_point since[2]{};
+            if (Clock::now() > since[k] + std::chrono::seconds(2)) {
+                if (body.ours > 0.5f) {
+                    LOG_INFO(Core, "cvcbody: {} moved by us {:.1f} in 2 s (motion {:#x})", k ? "B" : "A", body.ours,
+                             body.motion.load());
+                }
+                body.ours = 0.0f, since[k] = Clock::now();
+            }
         }
         // Turning eased toward the rate asked for (up to 2 rad/s² either way): no sudden swing.
         const float want = body.turn.load();
@@ -3292,6 +3296,30 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         return true;
                     };
+                    // Against one that holds its ground (Basaran: its head long before it, its slams coming
+                    // down under its forelegs), k's place is beside its head, 20 ahead of it and 12 to the
+                    // side k is on: each in the other's reach there. False when the other does not hold.
+                    const auto flank = [&](int k, float* spot) {
+                        const Moves* moves = kind_of(k);
+                        const Moves* other = kind_of(1 - k);
+                        float ahead[3]{};
+                        if (!moves || moves->holds || !other || !other->holds || !front(1 - k, ahead)) {
+                            return false;
+                        }
+                        const float* it = k ? (const float*)ra : (const float*)rb;
+                        const float* me = k ? (const float*)rb : (const float*)ra;
+                        const float fx = (ahead[0] - it[0]) / 25.0f, fz = (ahead[2] - it[2]) / 25.0f;
+                        const float side = (me[0] - it[0]) * -fz + (me[2] - it[2]) * fx >= 0.0f ? 1.0f : -1.0f;
+                        spot[0] = it[0] + fx * 20.0f - fz * 12.0f * side;
+                        spot[1] = it[1];
+                        spot[2] = it[2] + fz * 20.0f + fx * 12.0f * side;
+                        return true;
+                    };
+                    const auto at_flank = [&](int k) {
+                        float spot[3]{};
+                        const float* me = k ? (const float*)rb : (const float*)ra;
+                        return flank(k, spot) && std::hypot(me[0] - spot[0], me[2] - spot[2]) < 6.0f;
+                    };
                     // Crossfade per move: standing, walking and turning ease in; an attack and a
                     // flinch come in quicker.
                     const auto play = [&](int k, u64 motion, Act act, int ms) {
@@ -3430,6 +3458,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             } else {
                                 attacking = -1; // again shortly
                             }
+                        } else if (moves->holds && moves->walk && [&] {
+                                       const float* other = k ? (const float*)ra : (const float*)rb;
+                                       const float* me = k ? (const float*)rb : (const float*)ra;
+                                       return std::hypot(other[0] - me[0], other[2] - me[2]) > 26.0f;
+                                   }()) {
+                            // Its slam comes down about 22 ahead of its root: it walks on (its own walk)
+                            // until the other is there.
+                            play(k, moves->walk, Act::Walk, 6000);
+                            LOG_INFO(Core, "cvcbrawl: {} comes on into its reach", k ? "B" : "A");
+                        } else if (at_flank(k)) {
+                            attack(k); // (beside its head: in reach; it turns onto it as it winds up)
                         } else if (closest >= moves->strike && moves->walk && !moves->holds) {
                             // (As long as the way takes: blows push the bodies apart now.)
                             play(k, moves->walk, Act::Walk, int(std::clamp(closest * 400.0f, 7000.0f, 20000.0f)));
@@ -3499,25 +3538,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // (Basaran rears up for 1.6 s before its slam comes down: it can come on under it.)
                                 const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900);
                                 if (winding) {
-                                    steer(k, 0.5f);
+                                    steer(k, 0.3f);
                                 } else {
                                     g_cvc_body[k].turn = 0.0f;
                                 }
-                                // Stepping into it while winding up, until it is within striking distance (its
-                                // swing is in place: from where it stood it fell short; the bodies push back
-                                // where they meet).
-                                {
-                                    const float* me = k ? (const float*)rb : (const float*)ra;
-                                    const float* it = k ? (const float*)ra : (const float*)rb;
-                                    float to[2]{it[0] - me[0], it[2] - me[2]};
-                                    const float n = std::max(std::hypot(to[0], to[1]), 0.001f);
-                                    // (One that holds its ground slams down about 22 ahead of its root: in until
-                                    // the other is there; the rest until within their striking distance.)
-                                    const bool short_of = moves->holds ? std::hypot(to[0], to[1]) > 22.0f : closest > moves->strike;
-                                    const float pace = winding && short_of && g_cvc_gap_now.load() < 30.0f ? 14.0f : 0.0f;
-                                    std::scoped_lock guard{g_cvc_body[k].lock};
-                                    g_cvc_body[k].step[0] = to[0] / n * pace, g_cvc_body[k].step[1] = to[1] / n * pace;
-                                }
+                                // (No stepping in during the wind-up: a root moved under an attack's own pose
+                                // glides; it walks into reach first.)
                                 if (played(k)) {
                                     // Its next part: already begun by the game, or begun here; none left: it
                                     // stands (from the attack's own end pose, crossfaded).
@@ -3535,7 +3561,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                                 break;
                             }
-                            case Act::Walk:
+                            case Act::Walk: {
                                 if (f.bait) {
                                     // Onto the spot in front of the other's head, where its blows land; then
                                     // it is the other's move.
@@ -3544,7 +3570,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     steer(k, 0.45f, known_spot ? spot : nullptr);
                                     const float* me = k ? (const float*)rb : (const float*)ra;
                                     const bool there = known_spot && std::hypot(me[0] - spot[0], me[2] - spot[2]) < 6.0f;
-                                    if (there || closest < 2.0f) {
+                                    if (there || closest < 2.0f || g_cvc_touch_now.load()) {
                                         stand(k);
                                         engage(1 - k);
                                     } else if (Clock::now() > f.until) {
@@ -3553,8 +3579,36 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     }
                                     break;
                                 }
-                                steer(k, 0.45f);
-                                if (closest < moves->strike) {
+                                // Against one that holds its ground: onto its place beside the other's head.
+                                float flank_spot[3]{};
+                                const bool flanking = flank(k, flank_spot);
+                                steer(k, 0.45f, flanking ? flank_spot : nullptr);
+                                if (flanking) {
+                                    const float* me = k ? (const float*)rb : (const float*)ra;
+                                    if (std::hypot(me[0] - flank_spot[0], me[2] - flank_spot[2]) < 5.0f || g_cvc_touch_now.load()) {
+                                        stand(k);
+                                        engage(k); // (squares up to it, then strikes)
+                                    } else if (Clock::now() > f.until) {
+                                        stand(k);
+                                    }
+                                    break;
+                                }
+                                if (moves->holds) { // (in until the other is about 22 ahead of it, or met)
+                                    const float* other = k ? (const float*)ra : (const float*)rb;
+                                    const float* me = k ? (const float*)rb : (const float*)ra;
+                                    if (std::hypot(other[0] - me[0], other[2] - me[2]) <= 24.0f || g_cvc_touch_now.load()) {
+                                        stand(k);
+                                        attack(k);
+                                    } else if (Clock::now() > f.until) {
+                                        stand(k);
+                                    }
+                                    break;
+                                }
+                                if (g_cvc_touch_now.load()) {
+                                    // (Met: walking on would only push it off, a glide. It strikes from here.)
+                                    stand(k);
+                                    attack(k);
+                                } else if (closest < moves->strike) {
                                     engage(k); // square to it: the attack; else round first
                                 } else if (closest < moves->strike + 2.0f && known && cosine > moves->aim - 0.1f) {
                                     attack(k); // as good as there, roughly facing it
@@ -3567,6 +3621,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     stand(k);
                                 }
                                 break;
+                            }
                             case Act::Turn:
                                 steer(k, 0.5f);
                                 if (known && cosine > std::min(moves->aim + 0.03f, 0.97f)) {
@@ -3834,8 +3889,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float mass = Sotc::CvcPhysics::Mass(entry >= table ? int((entry - table) / 0x1e8) : -1);
                                 if (mass > 0.0f) {
                                     std::scoped_lock guard{g_cvc_body[1 - k].lock};
-                                    g_cvc_body[1 - k].push[0] += dir[0] * force * full_blow / mass;
-                                    g_cvc_body[1 - k].push[1] += dir[1] * force * full_blow / mass;
+                                    const float shove = std::min(force * full_blow / mass, 20.0f); // (a few units, as a blow)
+                                    g_cvc_body[1 - k].push[0] += dir[0] * shove;
+                                    g_cvc_body[1 - k].push[1] += dir[1] * shove;
                                 }
                             }
                             if (stagger) { // past its balance: its motors give, the blow carries it over
