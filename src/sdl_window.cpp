@@ -768,6 +768,22 @@ static void CvcPhysicsWork(u64 image, float dt) {
     if (!Sotc::CvcPhysics::Step(kinds, bone_sets, root_sets, dt, result)) {
         return;
     }
+    // A body stepping into the other meets one braced on its feet: the stepper is the one held back
+    // (80% of the way out), not the other pushed off.
+    for (int k = 0; k < 2; k++) {
+        const bool stepping = g_cvc_body[k].step[0] != 0.0f || g_cvc_body[k].step[1] != 0.0f;
+        const bool braced = g_cvc_body[1 - k].step[0] == 0.0f && g_cvc_body[1 - k].step[1] == 0.0f;
+        if (stepping && braced) {
+            const float total = std::hypot(result.shift[0][0], result.shift[0][2]) + std::hypot(result.shift[1][0], result.shift[1][2]);
+            const float n = std::max(std::hypot(result.shift[k][0], result.shift[k][2]), 1e-6f);
+            const float m = std::max(std::hypot(result.shift[1 - k][0], result.shift[1 - k][2]), 1e-6f);
+            for (const int c : {0, 2}) {
+                result.shift[k][c] *= 0.8f * total / n;
+                result.shift[1 - k][c] *= 0.2f * total / m;
+            }
+            break;
+        }
+    }
     for (int k = 0; k < 2; k++) {
         if (result.shift[k][0] != 0.0f || result.shift[k][2] != 0.0f) {
             MoveCharacter(objects[k], result.shift[k].data());
