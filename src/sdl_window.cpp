@@ -3342,6 +3342,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static std::vector<std::array<float, 3>> landing; // (test aid, below)
                     static float nearest_swing = 1e9f, nearest_any = 1e9f; // closest a moving / any bone came (misses in the log)
                     static Clock::time_point attack_from, next_attack = Clock::now();
+                    static Clock::time_point pulse_ready{}; // Basaran's pulse ready again (at most every 25 s)
                     static std::array<float, 2> attack_root{}, target_root{}; // where each stood when it began
                     static std::mt19937 rng{std::random_device{}()};
                     const bool over = *reinterpret_cast<const volatile u8*>(image + 0x1593efb) != 0;
@@ -3579,12 +3580,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // Its weapon well out of reach of its slam (beyond 50), at most every 30 s (each pulse
                             // knocks the other back out: more often it pinned it there); else
                             // reach it slams.
-                            static Clock::time_point last_pulse{};
+
                             const float* it = k ? (const float*)ra : (const float*)rb;
                             const float* self = k ? (const float*)rb : (const float*)ra;
-                            const bool out_of_reach = std::hypot(it[0] - self[0], it[2] - self[2]) > 50.0f;
-                            if (moves->pulse && out_of_reach && Clock::now() > last_pulse + std::chrono::seconds(30)) {
-                                last_pulse = Clock::now();
+                            const bool out_of_reach = std::hypot(it[0] - self[0], it[2] - self[2]) > 35.0f;
+                            if (moves->pulse && out_of_reach && Clock::now() > pulse_ready) {
+                                pulse_ready = Clock::now() + std::chrono::seconds(25);
                                 play(k, moves->idle, Act::Pulse, 6000);
                                 pulse_phase = 0, landed = false, attack_from = Clock::now();
                                 float mouth[3]{};
@@ -3613,9 +3614,25 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                        return std::hypot(other[0] - me[0], other[2] - me[2]) > 26.0f;
                                    }()) {
                             // Its slam comes down about 22 ahead of its root: it walks on (its own walk)
-                            // until the other is there.
-                            play(k, moves->walk, Act::Walk, 6000);
-                            LOG_INFO(Core, "cvcbrawl: {} comes on into its reach", k ? "B" : "A");
+                            // until the other is there; or, a third of the time its pulse is ready, fires that.
+                            if (moves->pulse && Clock::now() > pulse_ready && rng() % 3 == 0) {
+                                pulse_ready = Clock::now() + std::chrono::seconds(25);
+                                play(k, moves->idle, Act::Pulse, 6000);
+                                pulse_phase = 0, landed = false, attack_from = Clock::now();
+                                float mouth[3]{};
+                                mouth_of(k, mouth);
+                                CvcEffect("npe/torch_spark.npe", mouth);
+                                CvcEffect("npe/player_spark.npe", mouth);
+                                CvcSound(rng() % 2 ? "kmvo_pulse_c2" : "kmvo_pulse_c4", mouth);
+                                CvcSound("kame_pulse_c1", mouth);
+                                g_cvc_rays.pulse_object = objects[k];
+                                g_cvc_rays.image = image;
+                                g_cvc_rays.pulse = 1; // its own charge
+                                LOG_INFO(Core, "cvcbrawl: {} charges its pulse ({:.0f} apart)", k ? "B" : "A", closest);
+                            } else {
+                                play(k, moves->walk, Act::Walk, 6000);
+                                LOG_INFO(Core, "cvcbrawl: {} comes on into its reach", k ? "B" : "A");
+                            }
                         } else if (at_flank(k)) {
                             attack(k); // (beside its head: in reach; it turns onto it as it winds up)
                         } else if (closest >= moves->strike && moves->walk && !moves->holds) {
