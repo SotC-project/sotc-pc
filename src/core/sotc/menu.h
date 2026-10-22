@@ -28,6 +28,9 @@ void LeaveFreePlay();
 /// the decision made when that frame was drawn.
 void SetFrameCovered(bool covered);
 bool FrameCovered();
+/// True while a battle's setup holds the loading cover (colossus vs colossus: the guest brought in,
+/// the host's first-sight scene skipped); the game's sound is silent meanwhile.
+bool CoverHeld();
 /// 0 to 1: how far the title picture is drawn enlarged from its left side, to put open sky
 /// behind a page that stands in for the title menu. Call once per frame.
 float SceneShift();

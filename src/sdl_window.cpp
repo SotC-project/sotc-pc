@@ -549,22 +549,24 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
     static float was_off[2][most][3]{}; // each bone's offset from its parent at the snap, as it was drawn
     static bool have[2]{};
     static u64 last_motion[2]{};
-    static float last_step[2]{}; // how far its root moved the frame before (a steady lunge is no snap)
+    static float last_step[2][3]{}; // how its root moved the frame before (a steady lunge is no snap)
     static float fade[2]{0.15f, 0.15f}; // how long this snap's difference takes to die away (s)
     const u64 motion = g_cvc_body[k].motion.load();
     const size_t n = size_t(count) * 16;
     std::memcpy(now, reinterpret_cast<const void*>(matrices), n * 4);
-    float step = 0.0f;
+    float step[3]{};
     if (have[k]) {
-        step = std::hypot(now[12] - (last[k][12] - move[k][0][0] * amount[k]),
-                          now[13] - (last[k][13] - move[k][0][1] * amount[k]),
-                          now[14] - (last[k][14] - move[k][0][2] * amount[k]));
+        for (int c = 0; c < 3; c++) {
+            step[c] = now[12 + c] - (last[k][12 + c] - move[k][0][c] * amount[k]);
+        }
     }
-    // (A snap: its motion changed, or its root moved a unit more than it did the frame before; a
-    // steady lunge or walk is none: at a fixed 0.6 a frame, every frame of a lunge restarted it and the
-    // bodies and the view following them shook.)
-    const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || step > last_step[k] + 1.0f);
-    last_step[k] = step;
+    // (A snap: its motion changed, or its root's move changed by over 0.6 from the frame before's;
+    // a steady lunge or walk is none: at a fixed 0.6 a frame, every frame of a lunge restarted it and
+    // the bodies and the view following them shook. Compared by length only, a second pop the next
+    // frame, the other way, passed unsmoothed.)
+    const float change = std::hypot(step[0] - last_step[k][0], step[1] - last_step[k][1], step[2] - last_step[k][2]);
+    const bool snap = have[k] && motion && last_motion[k] && (motion != last_motion[k] || change > 0.6f);
+    std::memcpy(last_step[k], step, sizeof(step));
     const auto unit = [](const float* v, float* u) {
         const float l = std::hypot(v[0], v[1], v[2]);
         for (int c = 0; c < 3; c++) {
@@ -1593,6 +1595,25 @@ static void CvcBodyWork(u64 image) {
         // Turning eased toward the rate asked for (up to 2 rad/s² either way): no sudden swing.
         const float want = body.turn.load();
         body.turning += std::clamp(want - body.turning, -2.0f * dt, 2.0f * dt);
+        // The game's own turns kept to 4 rad/s: one faster is turned back by the excess, and comes round
+        // over the next frames. (Once a knockout set its target to Wander, the winner's heading snapped
+        // 2.2 rad in 0.12 s.)
+        {
+            static float last_heading[2]{};
+            static bool have_heading[2]{};
+            const auto heading_of = [&] {
+                const auto* h = reinterpret_cast<const float*>(object + 0x170);
+                return 2.0f * std::atan2(h[1], h[3]);
+            };
+            if (have_heading[k] && dt > 0.0f) {
+                const float turned = std::remainder(heading_of() - last_heading[k], 6.2831853f);
+                const float most = 4.0f * dt;
+                if (std::abs(turned) > most) {
+                    RotateCharacter(object, std::copysign(most, turned) - turned);
+                }
+            }
+            last_heading[k] = heading_of(), have_heading[k] = true;
+        }
         if (std::abs(body.turning) > 0.001f) {
             RotateCharacter(object, body.turning * dt);
         }
@@ -3796,7 +3817,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // that holds its ground, 12): Quadratus, whose head reaches past its forelegs
                         // but not past Gaius's sword held out in front, butts him from the side.
                         float angle_in = 0.0f;
-                        // Charges (two attacks in three): its walk at 2.5 times its pace for up to 2.2 s,
+                        // Charges (two attacks in three): its walk at 3.5 times its pace for up to 3 s,
                         // straight at the other, a blow when its body meets it (Quadratus: its own
                         // attacks are made for Wander under its head; its head swing is a shake).
                         bool charge = false;
@@ -3869,9 +3890,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // already touches; its head swing is a shake.
                         {1, {{{0x1d62810, 5000}},
                              {0x1d62120}, {0x1d62120}, {0x1d62120},
-                             // (strike 12: it charges from there, its head first; swing 12: its head meets
-                             // the other at 15-27 units/s; aim 0.7: it butts with the other off to one side)
-                             250.0f, 0x1d61590, 12.0f, -2, 0x1d60ea0, 0x1d60c50, 12.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.7f, 8.0f, false, 0, 0,
+                             // (strike 12: it charges from there, its head first; swing 6: its charge meets
+                             // the other at 5-17 units/s, its head counted as a limb; aim 0.7: from one side)
+                             250.0f, 0x1d61590, 12.0f, -2, 0x1d60ea0, 0x1d60c50, 6.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.7f, 8.0f, false, 0, 0,
                              {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f, 10.0f, true}},
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
@@ -4056,6 +4077,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             fighter[k].act = act, fighter[k].until = Clock::now() + std::chrono::milliseconds(ms);
                             return;
                         }
+                        // (Nor a stance the game has already gone on to by itself: started again over
+                        // it, Quadratus's root slid 5 units out of its retreat, then snapped back 4.)
+                        if (act == Act::Idle && g_cvc_body[k].motion.load() == motion) {
+                            fighter[k] = {act, motion, Clock::now(), Clock::now() + std::chrono::milliseconds(ms)};
+                            g_cvc_act_now[k] = int(act);
+                            return;
+                        }
                         const float blend = act == Act::Attack ? 0.4f : act == Act::Flinch ? 0.25f
                                           : act == Act::Idle ? 0.6f : 0.35f;
                         CvcPlayMotion(image, objects[k], motion, blend);
@@ -4130,8 +4158,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         (void)ms; // it ends when its last part does (Act::Attack below); 12 s at most
                         if (moves->charge && rng() % 3 != 0) {
                             motion = moves->walk;
-                            play(k, motion, Act::Attack, 2200);
-                            CvcQuicken(k, objects[k], 2200, 2.5f);
+                            // (3.5 times for 3 s: at 2.5 for 2.2 s it came on 5 units a second and stopped
+                            // short of the other.)
+                            play(k, motion, Act::Attack, 3000);
+                            CvcQuicken(k, objects[k], 3000, 3.5f);
                         } else {
                             play(k, motion, Act::Attack, 12000);
                         }
@@ -4311,7 +4341,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     touch_since[k] = at;
                                 }
                                 const bool locked = deep_since[k] != Clock::time_point{} &&
-                                                    at > deep_since[k] + std::chrono::milliseconds(600);
+                                                    at > deep_since[k] + std::chrono::milliseconds(f.act == Act::Idle ? 300 : 600);
                                 const bool pressed = touch_since[k] != Clock::time_point{} &&
                                                      at > touch_since[k] + std::chrono::milliseconds(3000);
                                 // (Standing in it too: both stood 1.4 s 3 units inside each other. An attack
@@ -4339,12 +4369,18 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                      (moves->charge && f.motion == moves->walk); // (a charge steers all the way)
                                 // A charge that has met the other stops there (its body is in the way).
                                 static Clock::time_point met_at[2]{};
+                                // (And it steps back off it: stood there, it stayed 3 units inside the other
+                                // for 0.6 s.)
                                 if (moves->charge && f.motion == moves->walk && g_cvc_touch_now.load()) {
                                     if (met_at[k] == Clock::time_point{}) {
                                         met_at[k] = Clock::now();
-                                    } else if (Clock::now() > met_at[k] + std::chrono::milliseconds(300)) {
+                                    } else if (Clock::now() > met_at[k] + std::chrono::milliseconds(100)) {
                                         met_at[k] = {};
-                                        stand(k);
+                                        if (moves->retreat) {
+                                            play(k, moves->retreat, Act::Retreat, 1500);
+                                        } else {
+                                            stand(k);
+                                        }
                                         break;
                                     }
                                 } else {

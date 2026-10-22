@@ -18,6 +18,7 @@
 #include "core/libraries/audio/audioout.h"
 #include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/kernel/threads.h"
+#include "core/sotc/menu.h"
 
 // SIMD support detection
 #if defined(__x86_64__) || defined(_M_X64)
@@ -98,9 +99,10 @@ public:
             ManageAudioQueue();
         }
 
-        // SOTC_MUTE=1 silences all output (automated test runs).
+        // SOTC_MUTE=1 silences all output (automated test runs); so does a battle's setup behind the
+        // loading cover (the intro and first-sight scenes it skips were heard under it).
         static const bool mute = std::getenv("SOTC_MUTE") != nullptr;
-        if (mute) {
+        if (mute || Sotc::Menu::CoverHeld()) {
             std::memset(internal_buffer, 0, internal_buffer_size);
         }
         if (!SDL_PutAudioStreamData(stream, internal_buffer, internal_buffer_size)) [[unlikely]] {
