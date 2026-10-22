@@ -36,7 +36,7 @@ struct Result {
 };
 
 /// The most bones a colossus has (each one's matrices hold them twice: their count, twice over).
-constexpr int MaxBones = 64;
+constexpr int MaxBones = 256;
 
 /// One step. kinds: each colossus's boss index (2 Gaius, 8 Basaran); bones: its bone matrices
 /// (4x4, row vectors: axes in rows 0-2, position in row 3); roots: its root position. False
@@ -52,6 +52,10 @@ std::vector<std::vector<Vec3>> Shapes(int k);
 /// A colossus's skeleton: each of its bones' parent (-1 the root; as many as it has bones), null
 /// when unknown.
 const std::vector<int>* Parents(int kind);
+
+/// How many matrices a colossus's list holds: its bones twice (most), or once (the Minotaurs:
+/// Valus, Argus); 0 when unknown.
+int Matrices(int kind);
 
 /// Two convex point sets overlapping: true with the direction to move b out of a (unit) and how
 /// far. (Exposed for the self-check.)

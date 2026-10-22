@@ -258,6 +258,7 @@ struct Part {
 };
 std::map<int, std::vector<Part>> g_parts;
 std::map<int, std::vector<int>> g_parents;
+std::map<int, int> g_matrices; // M lines: matrices in the list when not its bones twice
 
 void Load() {
 #ifndef CVC_PHYSICS_SELF_CHECK
@@ -272,6 +273,12 @@ void Load() {
             for (int parent; parents.size() < size_t(MaxBones) && in >> parent;) {
                 parents.push_back(parent);
             }
+            continue;
+        }
+        if (line.starts_with("M ")) { // M kind count
+            in.ignore(2);
+            in >> kind >> count;
+            g_matrices[kind] = count;
             continue;
         }
         Part p;
@@ -311,6 +318,12 @@ const std::vector<int>* Parents(int kind) {
     Mass(kind); // (loaded)
     const auto it = g_parents.find(kind);
     return it == g_parents.end() ? nullptr : &it->second;
+}
+
+int Matrices(int kind) {
+    const auto* parents = Parents(kind);
+    const auto it = g_matrices.find(kind);
+    return it != g_matrices.end() ? it->second : parents ? 2 * int(parents->size()) : 0;
 }
 
 std::vector<std::vector<Vec3>> Shapes(int k) {

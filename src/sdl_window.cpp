@@ -465,7 +465,8 @@ static void CvcFlexBend(int kind, const CvcAngles& angle, float* matrices, int c
 /// so a motion begun on a pose that does not join the last one (Gaius's sword at the start of his
 /// slam, Basaran's head into its walk, its root dropping into its slam) carries on from it.
 static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
-    static float last[2][70 * 16], offset[2][70 * 16], now[70 * 16];
+    static float last[2][2 * Sotc::CvcPhysics::MaxBones * 16], offset[2][2 * Sotc::CvcPhysics::MaxBones * 16],
+        now[2 * Sotc::CvcPhysics::MaxBones * 16];
     static bool have[2]{};
     static u64 last_motion[2]{};
     static float last_step[2]{}; // how far its root moved the frame before (a steady lunge is no snap)
@@ -540,10 +541,8 @@ static void CvcReactWork(u64 image, float dt) {
             continue;
         }
         const u64 matrices = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
-        const auto* parents = Sotc::CvcPhysics::Parents(g_cvc_flex[k].kind);
-        const int bones = parents ? int(parents->size()) : 35;
-        if (matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(bones) * 64)) {
-            const int count = Core::Memory::Instance()->IsValidMapping(matrices, size_t(bones) * 128) ? 2 * bones : bones;
+        const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
+        if (count && matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(count) * 64)) {
             CvcInertiaWork(k, matrices, count, dt);
             CvcFlexWork(k, matrices, count, dt);
         }
@@ -885,6 +884,12 @@ static void CvcPhysicsWork(u64 image, float dt) {
         counts[k] = parents ? int(parents->size()) : 0;
         if (!counts[k] || !copy(objects[k] + 0x120 + 0x198, &matrices, 8) ||
             !copy(matrices, bones[k], size_t(counts[k]) * 64) || !copy(objects[k] + 0x130, roots[k], 12)) {
+            static s64 told = 0;
+            if (const s64 now = SDL_GetTicks(); now > told + 5000) {
+                told = now;
+                LOG_INFO(Core, "cvcphys: {} (kind {}) not read: {} bones, matrices {:#x}", k ? "B" : "A", kinds[k],
+                         counts[k], matrices);
+            }
             return;
         }
     }
@@ -1133,6 +1138,17 @@ static void CvcTrace(int k, u64 object) {
     out.write(reinterpret_cast<const char*>(&r), sizeof(r));
 }
 
+/// A motion record (absolute) whose animation data is in: 0x6049e0 (its last frame, the game's own
+/// motion start too) reads [[[motion+0x128]]+0x28] and faults on a null there (Valus's, Buffalo_walk
+/// on Quadratus).
+static bool CvcMotionLoaded(u64 motion) {
+    const auto read = [](u64 at) {
+        return at && Core::Memory::Instance()->IsValidMapping(at, 8) ? *reinterpret_cast<const volatile u64*>(at) : u64(0);
+    };
+    const u64 table = motion ? read(read(motion + 0x128)) : 0;
+    return table && read(table + 0x28);
+}
+
 static void CvcBodyWork(u64 image) {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point before = Clock::now();
@@ -1159,8 +1175,9 @@ static void CvcBodyWork(u64 image) {
         const u64 motion = *reinterpret_cast<const volatile u64*>(component + 0x260);
         body.motion = motion ? motion - image : 0;
         body.frame = *reinterpret_cast<const volatile float*>(component + 0x274);
-        body.frames = motion ? float(reinterpret_cast<s32 PS4_SYSV_ABI (*)(u64)>(image + 0x6049e0)(motion + 0x128))
-                             : 0.0f;
+        body.frames = CvcMotionLoaded(motion)
+                          ? float(reinterpret_cast<s32 PS4_SYSV_ABI (*)(u64)>(image + 0x6049e0)(motion + 0x128))
+                          : 0.0f;
         if (dt <= 0.0f) {
             continue;
         }
@@ -1284,6 +1301,13 @@ static void CvcBodyWork(u64 image) {
 static std::mutex g_cvc_motion_lock;
 
 static void CvcPlayMotion(u64 image, u64 object, u64 motion, float blend = 0.0f) {
+    if (!CvcMotionLoaded(image + motion)) {
+        static std::set<u64> told;
+        if (told.insert(motion).second) {
+            LOG_INFO(Core, "cvcmotion: {:#x} not loaded, not played", motion);
+        }
+        return;
+    }
     std::scoped_lock guard{g_cvc_motion_lock};
     g_cvc_rays.image = image;
     for (auto& slot : g_cvc_rays.motions) {
@@ -2595,7 +2619,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             missing[slot == 0x1593b10] = 0;
                             continue; // fine, or cleared on purpose (defeat)
                         }
-                        if (current && ++missing[slot == 0x1593b10] < 30) {
+                        // Torn down (+0 cleared, as Barba's first-sight cutscene does) is no moment's
+                        // lapse: the other's target list points at freed memory (crash at 0x60541a).
+                        const bool torn = current && q(current) == 0 &&
+                                          (*reinterpret_cast<const volatile u32*>(current + 0xc) & 0x10000);
+                        if (current && !torn && ++missing[slot == 0x1593b10] < 30) {
                             if (missing[slot == 0x1593b10] == 1) {
                                 LOG_INFO(Core, "cvckeep: {} {:#x} unusable (type {}, flags {:#x}, +0 {:#x}, +0x1690 {:#x})",
                                          slot == 0x1593b08 ? "A" : "B", current,
@@ -3204,9 +3232,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         SIZE_T got = 0;
                         if (!ReadProcessMemory(GetCurrentProcess(),
                                                reinterpret_cast<const void*>(matrices + i * 64 + 0x30),
-                                               m, sizeof(m), &got) ||
-                            m[3] != 1.0f || std::hypot(m[0] - pos[0], m[2] - pos[2]) > 400.0f) {
+                                               m, sizeof(m), &got)) {
                             break;
+                        }
+                        // (A matrix that is no bone's, or far off, is passed over: stopping there left
+                        // Phaedra's list empty, its distance to the other unknown.)
+                        if (m[3] != 1.0f || std::hypot(m[0] - pos[0], m[2] - pos[2]) > 400.0f) {
+                            if (i >= 2 * Sotc::CvcPhysics::MaxBones) {
+                                break;
+                            }
+                            continue;
                         }
                         out.push_back({m[0], m[1], m[2]});
                     }
@@ -3324,6 +3359,35 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              {0x1ce9640}, {0x1ce93f0}, {0x1ce9890, 0x1ce9ae0},
                              250.0f, 0x1ce2990, 6.0f, -2, 0x1ce24f0, 0x1ce22a0, 0.0f, 0x1ce1e00, 0x1ce32d0, 1.0f, 0.85f, 8.0f, false, 0, 0,
                              {}, false, {}, {}, 1.5f}},
+                        // Valus (Minotaur): right / left foot attack (stomps), club_attack_2A (its club
+                        // brought down, 2A > 2B > 2C > 2D > 2E); right / left chest, head, back damage;
+                        // walking_loop_1; Standing left / right rotation; Standing; recession. Its root
+                        // faces along +y (re/cvc: the way it walks). No fall (untried).
+                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}},
+                             {0x1d0d3b0, 0x1d0d600}, {0x1d0ccc0}, {0x1d0dcf0},
+                             250.0f, 0x1d06ba0, 4.0f, 1, 0x1d06700, 0x1d064b0, 0.0f, 0x1d06010, 0x1d074e0, 1.2f, 0.85f, 8.0f, false, 0, 0,
+                             {{0x1d08070, 0x1d08510}, {0x1d08510, 0x1d08760}, {0x1d08760, 0x1d089b0}, {0x1d089b0, 0x1d08e50}},
+                             false, {}, {}, 1.4f}},
+                        // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
+                        {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}},
+                              {0x1cf7d20, 0x1cf7f70}, {0x1cf7630}, {0x1cf8660},
+                              250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 0.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
+                              {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
+                              false, {}, {}, 2.0f}},
+                        // Quadratus (Buffalo): comparable_foot_beginning > comparable_foot (its rearing
+                        // stomp); no damage motions: neck_fits (its shake) for all; walk; right / left
+                        // around; Standing_1; and_back_away. Its root faces along -z.
+                        {1, {{{0x1d7e660, 5000}},
+                             {0x1d84090}, {0x1d84090}, {0x1d84090},
+                             250.0f, 0x1d7e1c0, 4.0f, -2, 0x1d80470, 0x1d80220, 0.0f, 0x1d7d190, 0x1d7dad0, 1.4f, 0.85f, 8.0f, false, 0, 0,
+                             {{0x1d7e660, 0x1d7e8b0}}, false, {}, {}, 1.5f}},
+                        // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
+                        // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
+                        // left / right rotation; Standing; no stepping back. Its root faces along +z.
+                        {13, {{{0x1cd0b00, 3000}, {0x1cd0d50, 3000}, {0x1cd1440, 3000}},
+                              {0x1cd2b60}, {0x1cd2b60}, {0x1cd2b60},
+                              250.0f, 0x1ccb7c0, 3.0f, 2, 0x1cceaa0, 0x1cce850, 0.0f, 0x1cc84e0, 0, 0.5f, 0.85f, 5.0f, false, 0, 0,
+                              {{0x1cd0b00, 0x1cd0fa0}, {0x1cd0d50, 0x1cd11f0}}, false, {}, {}, 0.8f}},
                         // (straight: both_hands_attack_1 / hands_attack_2 (middle); to the left / right:
                         // hands_attack_2 (left) / (right))
                     };
