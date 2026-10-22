@@ -352,8 +352,9 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         for (size_t i = 0; i < placed[k].size(); i++) {
             if (body.before.size() == placed[k].size()) {
                 Vec3 v = (placed[k][i].center - body.before[i]) * (1.0f / dt);
-                if (Length(v) > 900.0f) {
-                    v = {}; // (a jump of the pose between motions, not a motion: no blow in it)
+                if (Length(v) > 450.0f) {
+                    v = {}; // (a jump of the pose between motions, not a motion: no blow in it; the fastest
+                            // real blow measured 218)
                 }
                 placed[k][i].velocity = v;
             }
@@ -436,6 +437,9 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             const bool striker = k == strong_striker;
             const Vec3 j = striker ? -strong_impulse : strong_impulse;
             out.kick[k] = Vec3{j[0], 0.0f, j[2]} * ((striker ? 0.15f : 1.0f) / mass[k]);
+            if (const float speed = Length(out.kick[k]); speed > 40.0f) {
+                out.kick[k] = out.kick[k] * (40.0f / speed); // (feet on the ground: shoved, never flung)
+            }
             const Vec3 r{strong_point[0] - roots[k][0], strong_point[1] - roots[k][1], strong_point[2] - roots[k][2]};
             out.spin[k] = Cross(r, j) * ((striker ? 0.3f : 1.0f) / (mass[k] * std::max(gyration[k], 1.0f)));
         }

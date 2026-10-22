@@ -3520,7 +3520,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // The blow's impulse from the physics, against a full blow's (1); its pulse lands
                             // as a full blow. Damage goes with it: a graze does little, the heaviest blow
                             // twice a full one.
-                            constexpr float full_blow = 40000.0f;
+                            constexpr float full_blow = 30000.0f; // (Gaius's solid slam)
                             const float force = pulsed ? 1.0f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
