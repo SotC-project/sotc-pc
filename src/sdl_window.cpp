@@ -233,6 +233,7 @@ struct CvcBlow {
     float point[3]{}, normal[3]{}, impulse = 0.0f, closing = 0.0f;
 };
 static CvcBlow g_cvc_blow;
+static std::atomic<float> g_cvc_gap{1e9f}; // least gap between the bodies since cvcbrawl reset it (misses in the log)
 
 struct CvcContact {
     std::atomic<int> attacker{-1};
@@ -640,6 +641,8 @@ static void CvcPhysicsWork(u64 image, float dt) {
         std::scoped_lock guard{g_cvc_body[k].lock};
         g_cvc_body[k].push[0] += result.kick[k][0], g_cvc_body[k].push[1] += result.kick[k][2];
     }
+    for (float was = g_cvc_gap.load(); result.gap < was && !g_cvc_gap.compare_exchange_weak(was, result.gap);) {
+    }
     const Sotc::CvcPhysics::Hit* strongest = nullptr;
     for (const auto& hit : result.hits) {
         if (!strongest || hit.impulse > strongest->impulse) {
@@ -663,9 +666,11 @@ static void CvcPhysicsWork(u64 image, float dt) {
         }
     }
     // A blow for cvcbrawl: the strongest new meeting with some weight behind it.
-    constexpr float least = 2000.0f; // (bodies settling against each other are not blows)
+    // (Bodies settling or resting against each other are not blows: a blow comes in at 40 units/s
+    // or more, with some weight.)
+    constexpr float least = 8000.0f, coming = 40.0f;
     for (const auto& hit : result.hits) {
-        if (!hit.first || hit.impulse < least) {
+        if (!hit.first || hit.impulse < least || hit.closing < coming) {
             continue;
         }
         std::scoped_lock guard{g_cvc_blow.lock};
@@ -2868,7 +2873,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Knight_retreat.
                         {2, {{{0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
-                             250.0f, 0x1d38340, 8.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
+                             // (strike 6: from 8-10 its sword passed short of the other's own collision)
+                             250.0f, 0x1d38340, 6.0f, 1, 0x1d37c50, 0x1d37a00, 0.0f, 0x1d377b0, 0x1d387e0, 1.0f, 0.85f, 8.0f, false, 0, 0,
                              // attack_1_Introduction > attack_one_stop_(success); attack_2_Introduction >
                              // _loop > _quit
                              {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}, false,
@@ -3075,8 +3081,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             landing.clear();
                             if (was_attacking && !landed) {
-                                LOG_INFO(Core, "cvcbrawl: {} missed (its moving bone {} came within {:.1f} of the other's bones)",
-                                         k ? "B" : "A", g_cvc_contact.closest_bone.load(), g_cvc_contact.closest.load());
+                                LOG_INFO(Core, "cvcbrawl: {} missed (the bodies came within {:.1f} of each other)", k ? "B" : "A",
+                                         g_cvc_gap.load());
                             }
                             attacking = -1;
                             next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
@@ -3093,7 +3099,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         (void)ms; // it ends when its last part does (Act::Attack below); 12 s at most
                         play(k, motion, Act::Attack, 12000);
                         attacking = k, landed = false, attack_from = Clock::now();
-                        g_cvc_contact.closest = 1e9f, g_cvc_contact.closest_bone = -1;
+                        g_cvc_gap = 1e9f;
                         nearest_swing = nearest_any = 1e9f;
                         LOG_INFO(Core, "cvcbrawl: {} attacks ({:#x}, bodies {:.0f} apart)", k ? "B" : "A", motion,
                                  closest);
@@ -3142,7 +3148,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 attacking = -1; // again shortly
                             }
                         } else if (closest >= moves->strike && moves->walk && !moves->holds) {
-                            play(k, moves->walk, Act::Walk, 7000);
+                            // (As long as the way takes: blows push the bodies apart now.)
+                            play(k, moves->walk, Act::Walk, int(std::clamp(closest * 400.0f, 7000.0f, 20000.0f)));
                             LOG_INFO(Core, "cvcbrawl: {} closes in (bodies {:.0f} apart)", k ? "B" : "A", closest);
                         } else {
                             attack(k);
@@ -3246,6 +3253,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     engage(k); // square to it: the attack; else round first
                                 } else if (closest < moves->strike + 2.0f && known && cosine > moves->aim - 0.1f) {
                                     attack(k); // as good as there, roughly facing it
+                                } else if (Clock::now() > f.until && closest < moves->strike + 4.0f && known &&
+                                           cosine > moves->aim - 0.1f) {
+                                    attack(k); // as near as it gets (the bodies meet): strike from there
                                 } else if (Clock::now() > f.until) {
                                     LOG_INFO(Core, "cvcbrawl: {} stops short ({:.0f} apart, facing {:.2f})", k ? "B" : "A",
                                              closest, cosine);

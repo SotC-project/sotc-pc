@@ -30,6 +30,7 @@ struct Result {
     Vec3 shift[2]{}; // move each root by this now (out of the other; ground plane only)
     Vec3 kick[2]{};  // each root's change of velocity (units/s; ground plane only)
     Vec3 spin[2]{};  // each body's change of angular velocity about its root (rad/s, world axis)
+    float gap = 1e9f; // how near the two came: the least gap between the boxes of a part of each (0: met)
 };
 
 /// One step. kinds: each colossus's boss index (2 Gaius, 8 Basaran); bones: its 35 bone matrices

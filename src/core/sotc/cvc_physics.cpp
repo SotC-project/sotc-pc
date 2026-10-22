@@ -352,8 +352,8 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         for (size_t i = 0; i < placed[k].size(); i++) {
             if (body.before.size() == placed[k].size()) {
                 Vec3 v = (placed[k][i].center - body.before[i]) * (1.0f / dt);
-                if (const float speed = Length(v); speed > 2000.0f) {
-                    v = v * (2000.0f / speed); // (a jump of the pose, not a motion)
+                if (Length(v) > 900.0f) {
+                    v = {}; // (a jump of the pose between motions, not a motion: no blow in it)
                 }
                 placed[k][i].velocity = v;
             }
@@ -382,8 +382,12 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
         const Placed& a = placed[0][i];
         for (size_t j = 0; j < placed[1].size(); j++) {
             const Placed& b = placed[1][j];
-            if (a.high[0] < b.low[0] || b.high[0] < a.low[0] || a.high[1] < b.low[1] || b.high[1] < a.low[1] ||
-                a.high[2] < b.low[2] || b.high[2] < a.low[2]) {
+            float apart = 0.0f;
+            for (int c = 0; c < 3; c++) {
+                apart = std::max({apart, b.low[c] - a.high[c], a.low[c] - b.high[c]});
+            }
+            out.gap = std::min(out.gap, apart);
+            if (apart > 0.0f) {
                 continue;
             }
             Vec3 n{};
