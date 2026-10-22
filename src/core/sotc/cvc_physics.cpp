@@ -445,7 +445,8 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // swung deep into it is driven by its arm, not to be thrown out with the whole body).
     if (deepest > 0.0f) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
-        const float out_by = std::min(deepest * 0.5f, deep_speed > 30.0f ? 0.3f : 1.2f);
+        // (Deeper than 3: no longer a blade's edge in it but a body inside the other, out firmly.)
+        const float out_by = std::min(deepest * 0.5f, deepest > 3.0f ? 1.5f : deep_speed > 30.0f ? 0.3f : 1.2f);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }
