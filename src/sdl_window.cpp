@@ -1890,6 +1890,42 @@ extern "C" __attribute__((naked)) void CvcSoundNameThunk() {
                  "pop %rdi\n pop %rsi\n pop %rdx\n pop %rcx\n pop %rax\n popfq\n push %rbp\n mov %rsp, %rbp\n push %r15\n push %r14\n push %rbx\n push %rax\n mov %rsi, %rbx\n jmp *g_cvc_sound_back(%rip)\n");
 }
 
+/// Lines tested for another thread (the fight's placement): queued with CvcProbeLines, run on the
+/// game thread with the camera's collision filter (CvcRayWork).
+struct CvcProbe {
+    std::mutex lock; // one batch at a time
+    int count = 0;
+    float from[40][4], to[40][4], hit[40][4]; // hit: where the line stops (to when clear)
+    u64 ignore[40]{};
+    std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
+};
+static CvcProbe g_cvc_probe;
+
+/// Tests up to 40 lines on the game thread; false when they were not run within `wait_ms` (the
+/// camera's filter not captured yet).
+static bool CvcProbeLines(int count, const float (*from)[4], const float (*to)[4], const u64* ignore, float (*hit)[4],
+                          int wait_ms = 2000) {
+    auto& p = g_cvc_probe;
+    std::scoped_lock guard{p.lock};
+    p.count = std::min(count, 40);
+    for (int i = 0; i < p.count; i++) {
+        std::memcpy(p.from[i], from[i], 16), std::memcpy(p.to[i], to[i], 16);
+        p.ignore[i] = ignore ? ignore[i] : 0;
+    }
+    p.state.store(1);
+    for (int waited = 0; p.state.load() != 2 && waited < wait_ms; waited += 5) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const bool done = p.state.load() == 2;
+    if (done) {
+        for (int i = 0; i < p.count; i++) {
+            std::memcpy(hit[i], p.hit[i], 16);
+        }
+    }
+    p.state.store(0);
+    return done;
+}
+
 extern "C" PS4_SYSV_ABI void CvcRayWork() {
     auto& r = g_cvc_rays;
     if (r.image) {
@@ -1933,7 +1969,7 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
             request.name.store(nullptr);
         }
     }
-    if (r.state.load() != 1 || !r.image) {
+    if ((r.state.load() != 1 && g_cvc_probe.state.load() != 1) || !r.image) {
         return;
     }
     // The camera's collision filter, captured at its own line test (0 until that has run once).
@@ -1946,6 +1982,24 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
     using LineTest = u8 PS4_SYSV_ABI (*)(void* hit, const float* from, const float* to, u64 filter,
                                          u32 single, u64 ignore);
     const auto test = reinterpret_cast<LineTest>(r.image + 0x7a7e40);
+    if (auto& p = g_cvc_probe; p.state.load() == 1) {
+        for (int i = 0; i < p.count; i++) {
+            std::memcpy(p.hit[i], p.to[i], 16);
+            for (const u32 single : {1u, 0u}) {
+                alignas(16) float hit[12]{};
+                const auto distance = [&](const float* q) {
+                    return std::hypot(q[0] - p.from[i][0], q[1] - p.from[i][1], q[2] - p.from[i][2]);
+                };
+                if (!test(hit, p.from[i], p.to[i], filter, single, p.ignore[i]) && distance(hit) < distance(p.hit[i])) {
+                    std::memcpy(p.hit[i], hit, 16);
+                }
+            }
+        }
+        p.state.store(2);
+    }
+    if (r.state.load() != 1) {
+        return;
+    }
     // Both of the filter's masks (r8b 1 [filter+0x18], the camera's; 0 [filter+0x19]): the camera's
     // alone lets lines through some boulders. The nearer hit counts.
     for (int i = 0; i < r.count; i++) {
@@ -2727,6 +2781,58 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         float dx = (has_open ? open[0] : pw[0]) - pb[0], dz = (has_open ? open[1] : pw[2]) - pb[2];
                         const float len = std::max(std::hypot(dx, dz), 0.001f);
                         dx /= len, dz /= len;
+                        // Open ground: of 16 directions around the host, the one nearest that way whose
+                        // spot has ground near the host's floor and a clear line from the host to past
+                        // it (sent toward Wander alone, Gaius came down on a ledge, in a wall or over a
+                        // drop: Valus's plateau edge, the rim of Argus's courtyard).
+                        if (!has_open) {
+                            float from[32][4], to[32][4], hit[32][4];
+                            u64 ignore[32];
+                            for (int i = 0; i < 16; i++) {
+                                const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
+                                const float spot[3]{pb[0] + ux * dist, pb[1], pb[2] + uz * dist};
+                                const float down_from[4]{spot[0], pb[1] + 40.0f, spot[2], 1.0f};
+                                const float down_to[4]{spot[0], pb[1] - 60.0f, spot[2], 1.0f};
+                                const float out_from[4]{pb[0], pb[1] + 12.0f, pb[2], 1.0f};
+                                const float out_to[4]{spot[0] + ux * 20.0f, pb[1] + 12.0f, spot[2] + uz * 20.0f, 1.0f};
+                                std::memcpy(from[2 * i], down_from, 16), std::memcpy(to[2 * i], down_to, 16);
+                                std::memcpy(from[2 * i + 1], out_from, 16), std::memcpy(to[2 * i + 1], out_to, 16);
+                                ignore[2 * i] = ignore[2 * i + 1] = b;
+                            }
+                            bool tested = false; // (the camera's filter is captured a few seconds in)
+                            for (int tries = 0; !tested && tries < 6; tries++) {
+                                tested = CvcProbeLines(32, from, to, ignore, hit);
+                            }
+                            if (tested) {
+                                float best = -1e9f, bx = dx, bz = dz;
+                                int open_count = 0;
+                                for (int i = 0; i < 16; i++) {
+                                    const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
+                                    const float ground = hit[2 * i][1];
+                                    const bool floored = std::abs(hit[2 * i][1] - to[2 * i][1]) > 0.05f &&
+                                                         std::abs(ground - pb[1]) < 8.0f;
+                                    const float along = std::hypot(hit[2 * i + 1][0] - from[2 * i + 1][0],
+                                                                   hit[2 * i + 1][2] - from[2 * i + 1][2]);
+                                    const bool clear = along > dist + 5.0f; // (to just past the spot: walled arenas)
+                                    open_count += floored && clear;
+                                    const float score = (floored ? 2.0f : 0.0f) + (clear ? 2.0f : 0.0f) - (1.0f - (ux * dx + uz * dz));
+                                    if (score > best) {
+                                        best = score, bx = ux, bz = uz;
+                                    }
+                                }
+                                std::string each;
+                                for (int i = 0; i < 16; i++) {
+                                    each += fmt::format(" {:.0f}/{:.0f}", hit[2 * i][1] - pb[1],
+                                                        std::hypot(hit[2 * i + 1][0] - from[2 * i + 1][0],
+                                                                   hit[2 * i + 1][2] - from[2 * i + 1][2]));
+                                }
+                                LOG_INFO(Core, "cvcplace: {} of 16 directions open; to {:.2f} {:.2f} (toward Wander {:.2f} {:.2f}); "
+                                         "ground/clear:{}", open_count, bx, bz, dx, dz, each);
+                                dx = bx, dz = bz;
+                            } else {
+                                LOG_INFO(Core, "cvcplace: no line tests yet: toward Wander");
+                            }
+                        }
                         const float to[3]{pb[0] + dx * dist, pb[1] + 3.0f, pb[2] + dz * dist};
                         // In steps of 10 units a frame: one jump of hundreds of units while the host
                         // was already awake (its first-sight cutscene played before the setup) crashed
