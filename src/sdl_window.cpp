@@ -3288,8 +3288,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // The ground under each spot (a line 300 down), above the fight's floor: the rock
                         // pillars on the rim of Argus's courtyard have no collision for the lines across,
                         // so a spot above that rim reads as clear while its rocks fill the picture. Over
-                        // ground well above the fight's floor (a rim, a cliff top), far below it (the chasm
-                        // around Argus's fortress, pillars rising out of it) or none at all (outside the
+                        // ground well above the fight's floor (12: a rim, a cliff top), far below it (90: the chasm,
+                        // 185 around Argus's fortress, its lower courtyards 50-70) or none at all (outside the
                         // world as loaded) is no spot to film from.
                         static float ground[12];
                         static float tested_angle = 0.0f;
@@ -3297,9 +3297,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
                         const float centre[3]{mid[0], mid[1] + 20.0f, mid[2]};
                         // Close (the arena is foggy): both in view while fighting, the body after.
-                        const float reach = winner == 1 || winner == 2
-                                                ? std::max(dist, 60.0f)
-                                                : std::clamp(1.3f * sep + 50.0f, dist, 170.0f); // both whole in the picture, not out of the arena
+                        // In closer (to 65 %) where few spots around are over ground near the fight's floor
+                        // (Argus's courtyard, ringed by chasm: at full distance nearly every spot was out
+                        // over it).
+                        static float reach_scale = 1.0f;
+                        const float reach = (winner == 1 || winner == 2
+                                                 ? std::max(dist, 60.0f)
+                                                 : std::clamp(1.3f * sep + 50.0f, dist, 170.0f)) * reach_scale; // both whole in the picture, not out of the arena
                         if (sep < 200.0f) {
                             // They have closed in: the fight has begun (cvc_arena.sh FILM starts here).
                             *reinterpret_cast<volatile u8*>(image + 0x1593b60) = 1;
@@ -3374,6 +3378,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float *f = rays.from[38 + k], *h = rays.hit[38 + k];
                                 ground[k] = f[1] - h[1] < 299.0f ? h[1] - mid[1] : -1e9f;
                             }
+                            {
+                                int floored = 0;
+                                for (const float g : ground) {
+                                    floored += g > -90.0f && g < 12.0f;
+                                }
+                                const float want = floored < 4 ? 0.65f : floored >= 6 ? 1.0f : reach_scale;
+                                reach_scale += (want - reach_scale) * 0.25f;
+                            }
                             for (int k = 0; k < 12; k++) {
                                 visible[k] = true;
                                 for (const int j : {13 + 2 * k, 14 + 2 * k, 51 + 2 * k, 52 + 2 * k}) {
@@ -3381,7 +3393,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
                                 }
                             }
-                            g_cvc_view_now = (visible[0] ? 1u : 0u) | (ground[0] > -40.0f && ground[0] < 12.0f ? 2u : 0u);
+                            g_cvc_view_now = (visible[0] ? 1u : 0u) | (ground[0] > -90.0f && ground[0] < 12.0f ? 2u : 0u);
                             tested = true;
                             rays.state.store(0);
                         }
@@ -3402,7 +3414,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // shows that rock in the corner of the picture.
                                 return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
                                        (after ? 0.8f * std::cos(at - away) : 1.5f * std::abs(std::cos(at - axis))) -
-                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -40.0f && ground[k] < 12.0f ? 0.0f : 1.5f);
+                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -90.0f && ground[k] < 12.0f ? 0.0f : 3.0f); // (at 1.5 it stayed over Argus's chasm)
                             };
                             int pick = 0;
                             for (int k = 1; k < 12; k++) {
@@ -3505,12 +3517,19 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         for (int k = 0; k < 3; k++) {
                             look[k] += (want_look[k] - look[k]) * ease;
                         }
-                        placed = true;
+                        placed = tested; // (until the first line tests, it goes straight to their pick: eased from a guess, it sat over Argus's rim rocks for seconds)
                         // One second on: the picture has settled (cvc_arena.sh lifts the loading
                         // screen then).
                         // Counted only once the fight is placed and while no cutscene plays.
                         static int settled = 0;
-                        settled = cvc_placed && !Sotc::Screens::Letterboxed() ? settled + 1 : 0;
+                        // (And with the camera over ground near the fight's floor, or 10 s on: lifted
+                        // sooner, the first seconds were filmed from over Argus's chasm.)
+                        static int placed_frames = 0;
+                        placed_frames = cvc_placed ? placed_frames + 1 : 0;
+                        settled = cvc_placed && !Sotc::Screens::Letterboxed() &&
+                                          ((g_cvc_view_now.load() & 2) || placed_frames > 600)
+                                      ? settled + 1
+                                      : 0;
                         if (settled == 60) {
                             *reinterpret_cast<volatile u64*>(image + 0x1593ae8) = 1;
                         }
