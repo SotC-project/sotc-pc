@@ -164,6 +164,7 @@ static u64 PlayerObject(u64 image) {
 /// way, else the hit position at +0 of its 0x30-byte result) and sets the state to 2.
 struct CvcRays {
     float from[52][4], to[52][4], hit[52][4]; // hit: where the line stops (to when clear)
+    u64 ignore[52]{}; // an object the line passes through (the colossus a line starts in)
     int count = 0;
     std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
     u64 image = 0;
@@ -251,6 +252,9 @@ static std::atomic<float> g_cvc_blend_now[2]{};
 // How fast each colossus's striking part must meet the other for a blow (cvcbrawl: its moves' swing;
 // 40 the default): slow heavy strikers (Quadratus's head, Basaran's slams) meet slower than a sword.
 static std::atomic<float> g_cvc_coming[2]{40.0f, 40.0f};
+// ... and how fast a part must meet colossus k to be a blow on it (its moves' struck; 40 the default):
+// a blade reaches Argus's shins only at the bottom of its swing, slowly.
+static std::atomic<float> g_cvc_struck[2]{40.0f, 40.0f};
 // The ground under colossus A (the game's line test from just above its feet, 40 down; cvccam's ray
 // batch), and the steady-clock second it was measured; NaN: nothing there.
 static std::atomic<float> g_cvc_ground_a{std::numeric_limits<float>::quiet_NaN()};
@@ -1412,7 +1416,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
         return true;
     };
     for (const auto& hit : result.hits) {
-        const float need = std::min(coming, g_cvc_coming[hit.striker].load());
+        const float need = std::min({coming, g_cvc_coming[hit.striker].load(), g_cvc_struck[1 - hit.striker].load()});
         if (!hit.first || hit.impulse < least * need / coming || hit.closing < need) {
             continue;
         }
@@ -1941,7 +1945,7 @@ extern "C" PS4_SYSV_ABI void CvcRayWork() {
             const auto distance = [&](const float* p) {
                 return std::hypot(p[0] - r.from[i][0], p[1] - r.from[i][1], p[2] - r.from[i][2]);
             };
-            if (!test(hit, r.from[i], r.to[i], filter, single, 0) && distance(hit) < distance(r.hit[i])) {
+            if (!test(hit, r.from[i], r.to[i], filter, single, r.ignore[i]) && distance(hit) < distance(r.hit[i])) {
                 std::memcpy(r.hit[i], hit, 16);
             }
         }
@@ -3432,10 +3436,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 std::memcpy(rays.to[38 + k], rays.from[13 + 2 * k], 16);
                                 rays.to[38 + k][1] -= 300.0f;
                             }
-                            { // the ground under A (its feet: the object's position)
+                            { // the ground under A (its feet: the object's position), through A itself
+                                // (its own body was taken for ground under its feet: the net held it up on
+                                // a slope and its walk crawled)
                                 const float from[4]{pa[0], pa[1] + 0.5f, pa[2], 1.0f};
                                 const float to[4]{pa[0], pa[1] - 40.0f, pa[2], 1.0f};
                                 std::memcpy(rays.from[50], from, 16), std::memcpy(rays.to[50], to, 16);
+                                for (int r = 0; r < 52; r++) {
+                                    rays.ignore[r] = 0;
+                                }
+                                rays.ignore[50] = *reinterpret_cast<const volatile u64*>(image + 0x1593b08);
                             }
                             rays.count = 51, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
@@ -3828,6 +3838,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // straight at the other, a blow when its body meets it (Quadratus: its own
                         // attacks are made for Wander under its head; its head swing is a shake).
                         bool charge = false;
+                        // How fast a part must meet it to be a blow on it (0: 40): a huge one is struck
+                        // low, where a swing is slow (Argus, 20).
+                        float struck = 0.0f;
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -3884,9 +3897,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
                         {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}},
                               {0x1cf7d20, 0x1cf7f70}, {0x1cf7630}, {0x1cf8660},
-                              250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 0.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
+                              // (swing 25: its stomps and club come down slow and heavy)
+                              250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 25.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
                               {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
-                              false, {}, {}, 2.0f}},
+                              false, {}, {}, 2.0f, 0.0f, false, 20.0f}},
                         // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
                         // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
@@ -4318,6 +4332,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             g_cvc_act_now[k] = int(f.act); // (the quality log; a flinch is set without play)
                             const Moves* moves = kind_of(k);
                             g_cvc_coming[k] = moves && moves->swing > 0.0f ? moves->swing : 40.0f;
+                            g_cvc_struck[k] = moves && moves->struck > 0.0f ? moves->struck : 40.0f;
                             if (!moves) {
                                 continue;
                             }

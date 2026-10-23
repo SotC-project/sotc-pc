@@ -79,7 +79,7 @@ bool max_damage = false;
 bool versus = false; // colossus vs colossus: watch Gaius fight another colossus
 // The colossi Gaius can be watched fighting, each in its own arena (boss table index): only pairs
 // whose fights pass re/cvc/quality.py (no snapping, deforming, locking or clipping) are offered.
-constexpr int VersusOpponents[]{8, 1};
+constexpr int VersusOpponents[]{8, 1, 14};
 int versus_opponent = 0;
 
 constexpr std::array<const char*, 3> Difficulties{"Easy", "Normal", "Hard"};
