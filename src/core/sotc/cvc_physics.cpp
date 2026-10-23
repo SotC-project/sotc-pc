@@ -306,6 +306,8 @@ std::uint64_t g_step = 0;
 
 } // namespace
 
+std::atomic<unsigned long long> g_watch_lo{0}, g_watch_hi{0};
+
 bool Overlap(const std::vector<Vec3>& a, const std::vector<Vec3>& b, Vec3& normal, float& depth) {
     Simplex s;
     if (a.empty() || b.empty() || !Gjk(a, b, s) || s.n < 4) {

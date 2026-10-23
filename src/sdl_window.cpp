@@ -916,6 +916,46 @@ static void CvcReactWork(u64 image, float dt) {
         const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
         if (count && matrices && Core::Memory::Instance()->IsValidMapping(matrices, size_t(count) * 64)) {
             CvcFlexWork(k, matrices, count, dt);
+            // Research (CVC_COLLAPSE_B="leaves" or bone numbers "12,40,..."): colossus B's chosen bones
+            // shrunk to nothing about their joints, to see which parts of its mesh hang on them alone
+            // (a plate with its own bone could be hidden this way).
+            if (const char* collapse = k == 1 ? std::getenv("CVC_COLLAPSE_B") : nullptr) {
+                const auto* parents = Sotc::CvcPhysics::Parents(g_cvc_flex[k].kind);
+                const int bones = parents ? int(parents->size()) : 0;
+                std::vector<bool> pick(size_t(bones), false);
+                if (std::string_view{collapse} == "leaves") {
+                    std::vector<bool> has_child(size_t(bones), false);
+                    for (int b = 0; b < bones; b++) {
+                        if (const int q = (*parents)[size_t(b)]; q >= 0 && q < bones) {
+                            has_child[size_t(q)] = true;
+                        }
+                    }
+                    for (int b = 0; b < bones; b++) {
+                        pick[size_t(b)] = !has_child[size_t(b)];
+                    }
+                } else {
+                    for (const char* c = collapse; *c;) {
+                        const int b = std::atoi(c);
+                        if (b >= 0 && b < bones) {
+                            pick[size_t(b)] = true;
+                        }
+                        while (*c && *c != ',') {
+                            c++;
+                        }
+                        if (*c == ',') {
+                            c++;
+                        }
+                    }
+                }
+                for (int i = 0; i < count; i++) {
+                    if (bones && pick[size_t(i % bones)]) {
+                        auto* m = reinterpret_cast<volatile float*>(matrices + u64(i) * 64);
+                        for (int r = 0; r < 12; r++) {
+                            m[r] = 0.0f;
+                        }
+                    }
+                }
+            }
         }
     }
     for (int k = 0; k < 2; k++) {
@@ -1575,6 +1615,13 @@ static void CvcBodyWork(u64 image) {
         const u64 motion = *reinterpret_cast<const volatile u64*>(component + 0x260);
         body.motion = motion ? motion - image : 0;
         body.frame = *reinterpret_cast<const volatile float*>(component + 0x274);
+        if (k == 0 && std::getenv("CVC_WATCH")) {
+            const u64 mats = *reinterpret_cast<const volatile u64*>(object + 0x120 + 0x198);
+            const int count = Sotc::CvcPhysics::Matrices(g_cvc_flex[0].kind);
+            if (mats && count) {
+                Sotc::CvcPhysics::g_watch_lo = mats, Sotc::CvcPhysics::g_watch_hi = mats + u64(count) * 64;
+            }
+        }
         body.frames = CvcMotionLoaded(motion)
                           ? float(reinterpret_cast<s32 PS4_SYSV_ABI (*)(u64)>(image + 0x6049e0)(motion + 0x128))
                           : 0.0f;
@@ -2786,37 +2833,59 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // spot has ground near the host's floor and a clear line from the host to past
                         // it (sent toward Wander alone, Gaius came down on a ledge, in a wall or over a
                         // drop: Valus's plateau edge, the rim of Argus's courtyard).
+                        // Nearer in, ring by ring (55, 45, 35, 25), where no direction has ground at the
+                        // host's level that far out (Gaius stands on a raised platform: at 55 every
+                        // direction fell 60 to the ground below, and Basaran brought in landed down there).
+                        float use_dist = dist;
+                        // The host's floor: its lowest bone (Gaius's position is 13 above his feet).
+                        float feet = pb[1];
+                        if (const u64 mats = *reinterpret_cast<const volatile u64*>(b + 0x120 + 0x198)) {
+                            for (int i = 0; i < 64 && Core::Memory::Instance()->IsValidMapping(mats + u64(i) * 64, 64); i++) {
+                                const auto* m = reinterpret_cast<const volatile float*>(mats + u64(i) * 64);
+                                if (m[15] == 1.0f && std::hypot(m[12] - pb[0], m[14] - pb[2]) < 60.0f) {
+                                    feet = std::min(feet, float(m[13]));
+                                }
+                            }
+                        }
                         if (!has_open) {
-                            float from[32][4], to[32][4], hit[32][4];
-                            u64 ignore[32];
-                            for (int i = 0; i < 16; i++) {
-                                const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
-                                const float spot[3]{pb[0] + ux * dist, pb[1], pb[2] + uz * dist};
-                                // (from just above the floor: from 40 up, an overhang over Phaedra's canyon read as ground)
-                                const float down_from[4]{spot[0], pb[1] + 10.0f, spot[2], 1.0f};
-                                const float down_to[4]{spot[0], pb[1] - 60.0f, spot[2], 1.0f};
-                                const float out_from[4]{pb[0], pb[1] + 12.0f, pb[2], 1.0f};
-                                const float out_to[4]{spot[0] + ux * 20.0f, pb[1] + 12.0f, spot[2] + uz * 20.0f, 1.0f};
-                                std::memcpy(from[2 * i], down_from, 16), std::memcpy(to[2 * i], down_to, 16);
-                                std::memcpy(from[2 * i + 1], out_from, 16), std::memcpy(to[2 * i + 1], out_to, 16);
-                                ignore[2 * i] = ignore[2 * i + 1] = b;
-                            }
-                            bool tested = false; // (the camera's filter is captured a few seconds in)
-                            for (int tries = 0; !tested && tries < 6; tries++) {
-                                tested = CvcProbeLines(32, from, to, ignore, hit);
-                            }
-                            if (tested) {
+                            bool done = false;
+                            for (const float ring : {dist, dist - 10.0f, dist - 20.0f, dist - 30.0f}) {
+                                if (done || ring < 20.0f) {
+                                    break;
+                                }
+                                float from[32][4], to[32][4], hit[32][4];
+                                u64 ignore[32];
+                                for (int i = 0; i < 16; i++) {
+                                    const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
+                                    const float spot[3]{pb[0] + ux * ring, pb[1], pb[2] + uz * ring};
+                                    // (from just above the floor: from 40 up, an overhang over Phaedra's canyon read as ground)
+                                    const float down_from[4]{spot[0], feet + 10.0f, spot[2], 1.0f};
+                                    const float down_to[4]{spot[0], feet - 60.0f, spot[2], 1.0f};
+                                    const float out_from[4]{pb[0], pb[1] + 12.0f, pb[2], 1.0f};
+                                    const float out_to[4]{spot[0] + ux * 20.0f, pb[1] + 12.0f, spot[2] + uz * 20.0f, 1.0f};
+                                    std::memcpy(from[2 * i], down_from, 16), std::memcpy(to[2 * i], down_to, 16);
+                                    std::memcpy(from[2 * i + 1], out_from, 16), std::memcpy(to[2 * i + 1], out_to, 16);
+                                    ignore[2 * i] = ignore[2 * i + 1] = b;
+                                }
+                                bool tested = false; // (the camera's filter is captured a few seconds in)
+                                for (int tries = 0; !tested && tries < 6; tries++) {
+                                    tested = CvcProbeLines(32, from, to, ignore, hit);
+                                }
+                                if (!tested) {
+                                    LOG_INFO(Core, "cvcplace: no line tests yet: toward Wander");
+                                    break;
+                                }
                                 float best = -1e9f, bx = dx, bz = dz;
-                                int open_count = 0;
+                                int open_count = 0, floored_count = 0;
                                 for (int i = 0; i < 16; i++) {
                                     const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
                                     const float ground = hit[2 * i][1];
                                     const bool floored = std::abs(hit[2 * i][1] - to[2 * i][1]) > 0.05f &&
-                                                         std::abs(ground - pb[1]) < 8.0f;
+                                                         std::abs(ground - feet) < 8.0f;
                                     const float along = std::hypot(hit[2 * i + 1][0] - from[2 * i + 1][0],
                                                                    hit[2 * i + 1][2] - from[2 * i + 1][2]);
-                                    const bool clear = along > dist + 5.0f; // (to just past the spot: walled arenas)
-                                    open_count += floored && clear;
+                                    const bool clear = along > ring + 5.0f; // (to just past the spot: walled arenas)
+                                    open_count += floored && clear, floored_count += floored;
                                     const float score = (floored ? 2.0f : 0.0f) + (clear ? 2.0f : 0.0f) - (1.0f - (ux * dx + uz * dz));
                                     if (score > best) {
                                         best = score, bx = ux, bz = uz;
@@ -2824,18 +2893,18 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                                 std::string each;
                                 for (int i = 0; i < 16; i++) {
-                                    each += fmt::format(" {:.0f}/{:.0f}", hit[2 * i][1] - pb[1],
+                                    each += fmt::format(" {:.0f}/{:.0f}", hit[2 * i][1] - feet,
                                                         std::hypot(hit[2 * i + 1][0] - from[2 * i + 1][0],
                                                                    hit[2 * i + 1][2] - from[2 * i + 1][2]));
                                 }
-                                LOG_INFO(Core, "cvcplace: {} of 16 directions open; to {:.2f} {:.2f} (toward Wander {:.2f} {:.2f}); "
-                                         "ground/clear:{}", open_count, bx, bz, dx, dz, each);
-                                dx = bx, dz = bz;
-                            } else {
-                                LOG_INFO(Core, "cvcplace: no line tests yet: toward Wander");
+                                LOG_INFO(Core, "cvcplace: at {:.0f}, {} of 16 directions open; to {:.2f} {:.2f} (toward Wander "
+                                         "{:.2f} {:.2f}); ground/clear:{}", ring, open_count, bx, bz, dx, dz, each);
+                                if (floored_count > 0 || ring - 10.0f < 20.0f) {
+                                    dx = bx, dz = bz, use_dist = ring, done = true;
+                                }
                             }
                         }
-                        const float to[3]{pb[0] + dx * dist, pb[1] + 3.0f, pb[2] + dz * dist};
+                        const float to[3]{pb[0] + dx * use_dist, pb[1] + 3.0f, pb[2] + dz * use_dist};
                         // In steps of 10 units a frame: one jump of hundreds of units while the host
                         // was already awake (its first-sight cutscene played before the setup) crashed
                         // the game at once in its per-frame list processing (unlink at 0x5fbfcc).
@@ -2854,11 +2923,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             std::this_thread::sleep_for(std::chrono::milliseconds(16));
                         }
                         auto* centre = reinterpret_cast<volatile float*>(image + 0x1593b78);
-                        centre[0] = pb[0] + dx * dist / 2, centre[1] = pb[2] + dz * dist / 2;
+                        centre[0] = pb[0] + dx * use_dist / 2, centre[1] = pb[2] + dz * use_dist / 2;
                         floor_y = pb[1] - 3.0f;
                         cvc_guest_beside = true;
                         LOG_INFO(Core, "cvcplace: B at {:.0f} {:.0f} {:.0f}, A to {:.0f} {:.0f} {:.0f} ({:.0f} from B), kept "
-                                 "above {:.0f}", pb[0], pb[1], pb[2], to[0], to[1], to[2], dist, floor_y);
+                                 "above {:.0f}", pb[0], pb[1], pb[2], to[0], to[1], to[2], use_dist, floor_y);
                     };
                     place();
                     // The host walked out toward the open side, two units a frame (it must be awake:

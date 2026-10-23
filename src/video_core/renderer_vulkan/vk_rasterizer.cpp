@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "core/sotc/cvc_physics.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
@@ -2335,6 +2336,28 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
+            {
+                // Research (CVC_WATCH): a shader reading colossus A's bone matrices (its skinning
+                // pass or its draws): its hash and all its buffers, once per shader and binding.
+                const u64 lo = Sotc::CvcPhysics::g_watch_lo.load(), hi = Sotc::CvcPhysics::g_watch_hi.load();
+                if (lo && vsharp.GetSize() < (64ull << 20) && u64(vsharp.base_address) < hi &&
+                    u64(vsharp.base_address) + vsharp.GetSize() > lo) { // (not a whole-memory raw buffer)
+                    static std::unordered_set<u64> seen;
+                    if (seen.insert(stage.pgm_hash * 131 + u64(&desc - stage.buffers.data())).second) {
+                        std::string all;
+                        for (const auto& other : stage.buffers) {
+                            if (!other.IsSpecial()) {
+                                const auto sharp = other.GetSharp(stage);
+                                all += fmt::format(" [{:#x} size {:#x} stride {}{}]", u64(sharp.base_address),
+                                                   sharp.GetSize(), sharp.GetStride(), other.is_written ? " written" : "");
+                            }
+                        }
+                        LOG_ERROR(Render, "cvcwatch: stage {} shader {:#x} reads A's bones at {:#x} (+{:#x}); buffers:{}",
+                                  u32(stage.sw_stage), stage.pgm_hash, u64(vsharp.base_address),
+                                  lo - u64(vsharp.base_address), all);
+                    }
+                }
+            }
             {
                 // Temporary: SOTC_BUFLOG=<shader hash> describes that shader's buffers and
                 // compares their GPU copies with guest memory (first few binds, after 90 s).

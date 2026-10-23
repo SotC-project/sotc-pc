@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <vector>
 
 /// Colossus vs colossus as two physical bodies: each colossus is the game's own collision
@@ -56,6 +57,10 @@ const std::vector<int>* Parents(int kind);
 /// How many matrices a colossus's list holds: its bones twice (most), or once (the Minotaurs:
 /// Valus, Argus); 0 when unknown.
 int Matrices(int kind);
+
+/// Research (CVC_WATCH): colossus A's bone matrices, [lo, hi) in guest memory, published by the CvC
+/// code so the renderer can log the shaders that read them (its skinning, its draws).
+extern std::atomic<unsigned long long> g_watch_lo, g_watch_hi;
 
 /// Two convex point sets overlapping: true with the direction to move b out of a (unit) and how
 /// far. (Exposed for the self-check.)
