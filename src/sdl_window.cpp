@@ -2791,7 +2791,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             for (int i = 0; i < 16; i++) {
                                 const float a = float(i) * 0.39269908f, ux = std::cos(a), uz = std::sin(a);
                                 const float spot[3]{pb[0] + ux * dist, pb[1], pb[2] + uz * dist};
-                                const float down_from[4]{spot[0], pb[1] + 40.0f, spot[2], 1.0f};
+                                // (from just above the floor: from 40 up, an overhang over Phaedra's canyon read as ground)
+                                const float down_from[4]{spot[0], pb[1] + 10.0f, spot[2], 1.0f};
                                 const float down_to[4]{spot[0], pb[1] - 60.0f, spot[2], 1.0f};
                                 const float out_from[4]{pb[0], pb[1] + 12.0f, pb[2], 1.0f};
                                 const float out_to[4]{spot[0] + ux * 20.0f, pb[1] + 12.0f, spot[2] + uz * 20.0f, 1.0f};
@@ -2924,7 +2925,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         } else if (!measured) {
                             catch_at = floor_y - 6.0f; // (not measured yet: only a long fall)
                         }
-                        if (y < catch_at && put_at - y < (measured ? 6.0f : 1e9f)) {
+                        // (A reading of ground caps a lift at 6: one off something else; no ground under it
+                        // never does: capped, Gaius fell through Phaedra's canyon for good.)
+                        const bool on_ground = measured && !std::isnan(ground);
+                        if (y < catch_at && put_at - y < (on_ground ? 6.0f : 1e9f)) {
                             const float lift[3]{0.0f, put_at - y, 0.0f};
                             MoveCharacter(a, lift);
                         }
