@@ -258,6 +258,9 @@ static std::atomic<float> g_cvc_coming[2]{40.0f, 40.0f};
 // ... and how fast a part must meet colossus k to be a blow on it (its moves' struck; 40 the default):
 // a blade reaches Argus's shins only at the bottom of its swing, slowly (14-21 units/s).
 static std::atomic<float> g_cvc_struck[2]{40.0f, 40.0f};
+// ... and the impulse colossus k's blow needs (its moves' least; 0: by its swing speed): Valus's arms,
+// small fur hulls, meet at 650 where a sword meets at 8000.
+static std::atomic<float> g_cvc_least[2]{};
 // The ground under colossus A (the game's line test from just above its feet, 40 down; cvccam's ray
 // batch), and the steady-clock second it was measured; NaN: nothing there.
 static std::atomic<float> g_cvc_ground_a{std::numeric_limits<float>::quiet_NaN()};
@@ -1467,7 +1470,8 @@ static void CvcPhysicsWork(u64 image, float dt) {
     };
     for (const auto& hit : result.hits) {
         const float need = std::min({coming, g_cvc_coming[hit.striker].load(), g_cvc_struck[1 - hit.striker].load()});
-        if (!hit.first || hit.impulse < least * need / coming || hit.closing < need) {
+        const float floor = g_cvc_least[hit.striker].load();
+        if (!hit.first || hit.impulse < (floor > 0.0f ? floor : least * need / coming) || hit.closing < need) {
             continue;
         }
         float point[3]{hit.point[0], hit.point[1], hit.point[2]};
@@ -4080,6 +4084,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Close-in blows, used when the bodies are within 2 (its shake-off swings: a limb
                         // or the body thrown about itself, reaching only what is against it).
                         std::vector<std::pair<u64, int>> close = {};
+                        float least = 0.0f; // the impulse its blow needs (0: by its swing speed)
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -4123,22 +4128,36 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // right rotation; Kirin_Tachi (standing); Kirin_recession. Its root faces along -z
                         // (re/cvc forward axis: the high end of its body). No fall (untried: Gaius's own
                         // crashed the game's effect update).
-                        {3, {{{0x1ce3c10, 4000}, {0x1ce4c40, 4000}},
+                        // (Its stomps come down 25 short of Gaius, whose body meets its neck: 0 of 11
+                        // landed. So mostly its body and chest swings, which throw the neck about;
+                        // swing 8: its neck meets him at 8-21 units/s.)
+                        {3, {{{0x1ce3c10, 4000}, {0x1ce4c40, 4000}, {0x1ce7390, 3000}, {0x1ce75e0, 3000}, {0x1ce7390, 3000},
+                              {0x1ce75e0, 3000}},
                              {0x1ce9640}, {0x1ce93f0}, {0x1ce9890, 0x1ce9ae0},
-                             250.0f, 0x1ce2990, 6.0f, -2, 0x1ce24f0, 0x1ce22a0, 0.0f, 0x1ce1e00, 0x1ce32d0, 1.0f, 0.85f, 8.0f, false, 0, 0,
-                             {}, false, {}, {}, 1.5f}},
+                             250.0f, 0x1ce2990, -1.0f, -2, 0x1ce24f0, 0x1ce22a0, 8.0f, 0x1ce1e00, 0x1ce32d0, 1.0f, 0.85f, 8.0f, false, 0, 0,
+                             // (angle 12: met head on, only its neck touches him; from beside, its forelegs;
+                             // at 20 its neck went into him, 4 deep)
+                             {}, false, {}, {}, 1.5f, 12.0f, false, 0.0f, {{0x1ce7390, 3000}, {0x1ce75e0, 3000}}}},
                         // Valus (Minotaur): right / left foot attack (stomps), club_attack_2A (its club
                         // brought down, 2A > 2B > 2C > 2D > 2E); right / left chest, head, back damage;
                         // walking_loop_1; Standing left / right rotation; Standing; recession. Its root
                         // faces along +y (re/cvc: the way it walks). No fall (untried).
                         // (And its right / left arm, shoulder and foot swings, its shake-offs.)
-                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}},
+                        // (Its stomps come down 5 ahead of its root, Gaius's legs 21-29 ahead: 0 of 6
+                        // landed. So its club and its shake-offs, which throw its arms and shoulders
+                        // about what is against it; swing 8, least 400: against him its arms met him at 5-12 units/s, impulse
+                        // 300-650, its fur hulls small.)
+                        {0, {{{0x1d08070, 7000}, {0x1d0bee0, 2500}, {0x1d0c130, 2500}, {0x1d0ba40, 2500}, {0x1d0bc90, 2500}},
                              {0x1d0d3b0, 0x1d0d600}, {0x1d0ccc0}, {0x1d0dcf0},
-                             250.0f, 0x1d06ba0, 4.0f, 1, 0x1d06700, 0x1d064b0, 0.0f, 0x1d06010, 0x1d074e0, 1.2f, 0.85f, 8.0f, false, 0, 0,
+                             // (strike -1: half Gaius's height, its arms reach him only from against him;
+                             // from 2-6 apart all 9 of its swings passed short)
+                             250.0f, 0x1d06ba0, -1.0f, 1, 0x1d06700, 0x1d064b0, 8.0f, 0x1d06010, 0x1d074e0, 1.2f, 0.85f, 8.0f, false, 0, 0,
                              {{0x1d08070, 0x1d08510}, {0x1d08510, 0x1d08760}, {0x1d08760, 0x1d089b0}, {0x1d089b0, 0x1d08e50}},
                              // (close in: its arm, shoulder and foot swings)
-                             false, {}, {}, 1.4f, 0.0f, false, 0.0f,
-                             {{0x1d0bee0, 2500}, {0x1d0c130, 2500}, {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}}}},
+                             // (angle 12: met head on, its arms swing beside him; from beside, into him)
+                             false, {}, {}, 1.4f, 12.0f, false, 0.0f,
+                             {{0x1d0bee0, 2500}, {0x1d0c130, 2500}, {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}},
+                             400.0f}},
                         // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
                         // (And its special and both-feet stomps, and right / left arm swings.)
                         {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}, {0x1cf0980, 4000}, {0x1cf0bd0, 4000},
@@ -4582,6 +4601,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const Moves* moves = kind_of(k);
                             g_cvc_coming[k] = moves && moves->swing > 0.0f ? moves->swing : 40.0f;
                             g_cvc_struck[k] = moves && moves->struck > 0.0f ? moves->struck : 40.0f;
+                            g_cvc_least[k] = moves ? moves->least : 0.0f;
                             if (!moves) {
                                 continue;
                             }
