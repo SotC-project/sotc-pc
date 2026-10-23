@@ -195,6 +195,12 @@ public:
         return slot_image_views[id];
     }
 
+    /// Whether the image with this id is still the one with this uid (not freed and reused).
+    bool IsImageLive(ImageId id, u64 uid) {
+        return id && slot_images.IsAllocated(id) && slot_images[id].image_uid == uid &&
+               (slot_images[id].flags & ImageFlagBits::Registered);
+    }
+
     /// Get the associated depth stencil image if it is still valid.
     ImageId GetAssociatedDepth(Image& image) {
         if (!image.depth_id) {

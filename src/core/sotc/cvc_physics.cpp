@@ -307,6 +307,12 @@ std::uint64_t g_step = 0;
 } // namespace
 
 std::atomic<unsigned long long> g_watch_lo{0}, g_watch_hi{0};
+std::atomic<bool> g_depth_want{false};
+std::atomic<unsigned> g_depth_seq{0};
+std::array<std::atomic<float>, DepthCols * DepthRows> g_depth{};
+std::atomic<unsigned> g_scene_depth_id{~0u};
+std::atomic<unsigned long long> g_scene_depth_uid{0};
+std::atomic<unsigned> g_scene_depth_area{0};
 
 bool Overlap(const std::vector<Vec3>& a, const std::vector<Vec3>& b, Vec3& normal, float& depth) {
     Simplex s;

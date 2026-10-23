@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "core/sotc/challenge.h"
+#include "core/sotc/cvc_physics.h"
 #include "core/sotc/loading.h"
 #include "core/sotc/menu.h"
 #include "core/sotc/perf_hud.h"
@@ -919,6 +920,43 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         runtime.DownloadImage(&image, &readback.buffer, std::span{&copy_region, 1});
     }
 
+    // The CvC camera's depth probe: the scene's depth on a grid over the screen, one texel a cell.
+    std::optional<ScreenshotReadback> pending_depth;
+    vk::Format depth_format{};
+    {
+        namespace Cvc = Sotc::CvcPhysics;
+        const VideoCore::ImageId depth_id{Cvc::g_scene_depth_id.load()};
+        if (Cvc::g_depth_want.exchange(false) &&
+            texture_cache.IsImageLive(depth_id, Cvc::g_scene_depth_uid.load())) {
+            auto& depth = texture_cache.GetImage(depth_id);
+            depth_format = depth.info.pixel_format;
+            // (8 bytes a texel: a depth and stencil format's depth aspect is 4 at most)
+            auto& readback = pending_depth.emplace(instance, ScreenshotKind::GameOnly,
+                                                   std::vector<std::filesystem::path>{},
+                                                   Cvc::DepthCols * Cvc::DepthRows * 2, 1, depth_format, false);
+            std::array<vk::BufferImageCopy, Cvc::DepthCols * Cvc::DepthRows> copies{};
+            for (int i = 0; i < Cvc::DepthCols * Cvc::DepthRows; i++) {
+                const u32 col = i % Cvc::DepthCols, row = i / Cvc::DepthCols;
+                copies[i] = vk::BufferImageCopy{
+                    .bufferOffset = u64(i) * 8,
+                    .bufferRowLength = 0,
+                    .bufferImageHeight = 0,
+                    .imageSubresource{
+                        .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                        .mipLevel = 0,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1,
+                    },
+                    .imageOffset = {s32((col * 2 + 1) * depth.info.size.width / (2 * Cvc::DepthCols)),
+                                    s32((row * 2 + 1) * depth.info.size.height / (2 * Cvc::DepthRows)), 0},
+                    .imageExtent = {1, 1, 1},
+                };
+            }
+            runtime.DownloadImage(&depth, &readback.buffer, copies);
+        }
+        Cvc::g_scene_depth_area = 0; // (the next frame's largest)
+    }
+
     // The game's loading animation is recorded once, from the corner it is drawn in.
     std::optional<ScreenshotReadback> pending_loading_shot;
     if (Sotc::Loading::WantsCapture()) {
@@ -1046,6 +1084,32 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             if (shot.has_value() && ConvertReadbackToRgba8(shot.value(), rgba)) {
                 Sotc::Loading::OnCapture(rgba, shot->width, shot->height);
             }
+        });
+    }
+    if (pending_depth.has_value()) {
+        draw_scheduler.DeferPriorityOperation([probe = std::move(pending_depth), depth_format]() {
+            namespace Cvc = Sotc::CvcPhysics;
+            const u8* data = probe->buffer.mapped_data.data();
+            for (int i = 0; i < Cvc::DepthCols * Cvc::DepthRows; i++) {
+                u32 raw = 0;
+                std::memcpy(&raw, data + i * 8, 4);
+                float value = 0.0f;
+                switch (depth_format) {
+                case vk::Format::eD16Unorm:
+                case vk::Format::eD16UnormS8Uint:
+                    value = float(raw & 0xffff) / 65535.0f;
+                    break;
+                case vk::Format::eD24UnormS8Uint:
+                case vk::Format::eX8D24UnormPack32:
+                    value = float(raw & 0xffffff) / 16777215.0f;
+                    break;
+                default:
+                    value = std::bit_cast<float>(raw);
+                    break;
+                }
+                Cvc::g_depth[i] = value;
+            }
+            Cvc::g_depth_seq++;
         });
     }
     if (pending_hud_strip.has_value()) {

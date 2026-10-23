@@ -3479,6 +3479,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         static float tested_angle = 0.0f;
                         static bool tested = false;
                         const auto offset = [](int k) { return (k <= 6 ? k : k - 12) * 0.5235988f; };
+                        // The twelve directions around the fight (as the spots), each one's view lately
+                        // found blocked in the picture's depth (1, fading over 20 s), and the share of
+                        // the picture's middle covered now (below).
+                        static float blocked[12]{};
+                        static float covered_part = 0.0f;
+                        const auto sector = [](float a) {
+                            const float turns = a / 6.2831853f;
+                            return (int(std::lround((turns - std::floor(turns)) * 12.0f)) % 12 + 12) % 12;
+                        };
                         const float centre[3]{mid[0], mid[1] + 20.0f, mid[2]};
                         // Close (the arena is foggy): both in view while fighting, the body after.
                         // In closer (to 65 %) where few spots around are over ground near the fight's floor
@@ -3577,7 +3586,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
                                 }
                             }
-                            g_cvc_view_now = (visible[0] ? 1u : 0u) | (ground[0] > -90.0f && ground[0] < 12.0f ? 2u : 0u);
+                            g_cvc_view_now = (visible[0] && covered_part < 0.35f ? 1u : 0u) |
+                                             (ground[0] > -90.0f && ground[0] < 12.0f ? 2u : 0u);
                             tested = true;
                             rays.state.store(0);
                         }
@@ -3598,7 +3608,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // shows that rock in the corner of the picture.
                                 return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
                                        (after ? 0.8f * std::cos(at - away) : 1.5f * std::abs(std::cos(at - axis))) -
-                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -90.0f && ground[k] < 12.0f ? 0.0f : 3.0f); // (at 1.5 it stayed over Argus's chasm)
+                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -90.0f && ground[k] < 12.0f ? 0.0f : 3.0f) - // (at 1.5 it stayed over Argus's chasm)
+                                       3.0f * blocked[sector(at)]; // (trees in the way: Phaedra's fight filmed through them)
                             };
                             int pick = 0;
                             for (int k = 1; k < 12; k++) {
@@ -3697,8 +3708,54 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             reach_now += (radius - reach_now) * (radius < reach_now ? 0.15f : 0.03f);
                             rise_now += (rise - rise_now) * (rise < rise_now ? 0.1f : 0.03f);
                         }
-                        cam[0] = mid[0] + reach_now * std::cos(angle), cam[1] = mid[1] + rise_now;
-                        cam[2] = mid[2] + reach_now * std::sin(angle);
+                        // Over what covers the picture (trees round Phaedra's ruins): in closer and higher,
+                        // looking down past it, eased over a few seconds.
+                        static float over = 0.0f;
+                        over += ((covered_part > 0.2f ? 1.0f : 0.0f) - over) * 0.01f;
+                        cam[0] = mid[0] + reach_now * (1.0f - 0.25f * over) * std::cos(angle);
+                        cam[1] = mid[1] + rise_now * (1.0f + 0.6f * over);
+                        cam[2] = mid[2] + reach_now * (1.0f - 0.25f * over) * std::sin(angle);
+                        {
+                            // What the picture shows, from its depth: the share of the middle of the
+                            // screen (where the fight is) covered by something nearer than the fight,
+                            // trees and foliage the line tests pass through, or rock the camera is in.
+                            // (Reversed depth, far plane at infinity: distance = 0.04 / depth; with the
+                            // view clear the middle read about as far as the fight, through Phaedra's
+                            // trees 15-30 at 60.) The direction it looked from is remembered as blocked
+                            // for a while, and the spots that way lose out.
+                            namespace Cvc = Sotc::CvcPhysics;
+                            static unsigned seen = 0;
+                            static int asked = 0;
+                            if (++asked % 30 == 0) {
+                                Cvc::g_depth_want = true;
+                            }
+                            const float now_s = std::chrono::duration<float>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+                            static float last_s = now_s;
+                            for (float& b : blocked) {
+                                b *= std::exp(-(now_s - last_s) / 20.0f);
+                            }
+                            last_s = now_s;
+                            if (const unsigned seq = Cvc::g_depth_seq.load(); seq != seen) {
+                                seen = seq;
+                                const float away = std::hypot(look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]);
+                                const float nearer = std::min(0.6f * away, away - 25.0f);
+                                int covered = 0, cells = 0;
+                                for (int r = 2; r <= 6; r++) {
+                                    for (int c = 4; c <= 11; c++, cells++) {
+                                        covered += 0.04f / std::max(Cvc::g_depth[r * Cvc::DepthCols + c].load(), 1e-7f) < nearer;
+                                    }
+                                }
+                                covered_part = float(covered) / float(cells);
+                                float& here = blocked[sector(angle)];
+                                here = covered_part > 0.2f ? 1.0f : std::min(here, covered_part);
+                                static int reports = 0;
+                                if (covered_part > 0.2f || reports++ % 20 == 0) {
+                                    LOG_INFO(Core, "cvcdepth: {:.0f} % of the middle nearer than {:.0f} (looking from "
+                                             "{:.0f} away, sector {})", covered_part * 100.0f, nearer, away, sector(angle));
+                                }
+                            }
+                        }
                         const float want_look[3]{mid[0], mid[1] + 6.0f, mid[2]};
                         const float ease = placed ? 0.03f : 1.0f;
                         for (int k = 0; k < 3; k++) {
@@ -4666,12 +4723,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // body and recovers (Gaius's slam brought his body 3.9 into Quadratus's head
                                 // for half a second).
                                 {
+                                    // (Once its blow has landed, 1.5 deep at once: Phaedra's neck, its chest
+                                    // swing landed, went on 2.4-3.1 into Gaius for 0.4-0.5 s.)
                                     static Clock::time_point deep_at[2]{};
-                                    if (g_cvc_depth_now.load() <= 2.0f) {
+                                    const bool done = landed && attacking == k;
+                                    if (g_cvc_depth_now.load() <= (done ? 1.5f : 2.0f)) {
                                         deep_at[k] = {};
-                                    } else if (deep_at[k] == Clock::time_point{}) {
+                                    } else if (deep_at[k] == Clock::time_point{} && !done) {
                                         deep_at[k] = Clock::now();
-                                    } else if (Clock::now() > deep_at[k] + std::chrono::milliseconds(200) ||
+                                    } else if (done || Clock::now() > deep_at[k] + std::chrono::milliseconds(200) ||
                                                g_cvc_depth_now.load() > 3.0f) { // (3 deep: at once)
                                         deep_at[k] = {};
                                         LOG_INFO(Core, "cvcbrawl: {} stopped by the other's body ({:.1f} deep)", k ? "B" : "A",

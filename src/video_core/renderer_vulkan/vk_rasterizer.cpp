@@ -2836,6 +2836,15 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         }
 
         image.usage.depth_target = true;
+        // The scene's depth for the CvC camera: the largest depth target written this frame.
+        if (regs.depth_control.depth_write_enable && image.info.size.width >= 640) {
+            const u32 area = image.info.size.width * image.info.size.height;
+            if (area >= Sotc::CvcPhysics::g_scene_depth_area.load(std::memory_order_relaxed)) {
+                Sotc::CvcPhysics::g_scene_depth_area = area;
+                Sotc::CvcPhysics::g_scene_depth_id = image_id.index;
+                Sotc::CvcPhysics::g_scene_depth_uid = image.image_uid;
+            }
+        }
     } else {
         state.depth_stencil_attachment = {};
     }

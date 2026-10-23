@@ -36,6 +36,18 @@ struct Result {
     float gap = 1e9f; // how near the two came: the least gap between the boxes of a part of each (0: met)
 };
 
+/// The spectator camera's picture in depth: the scene's depth buffer (the largest one a frame draws
+/// with, recorded by the rasterizer) read back on a DepthCols x DepthRows grid over the screen when
+/// asked (g_depth_want), as stored, 0-1; g_depth_seq counts the readings. What hides the fight that
+/// the game's line tests cannot see (trees, foliage) shows as depth nearer than the fight.
+constexpr int DepthCols = 16, DepthRows = 9;
+extern std::atomic<bool> g_depth_want;
+extern std::atomic<unsigned> g_depth_seq;
+extern std::array<std::atomic<float>, DepthCols * DepthRows> g_depth;
+extern std::atomic<unsigned> g_scene_depth_id;        // texture cache ImageId index (~0u: none)
+extern std::atomic<unsigned long long> g_scene_depth_uid;
+extern std::atomic<unsigned> g_scene_depth_area;      // its width x height (the largest this frame)
+
 /// The most bones a colossus has (each one's matrices hold them twice: their count, twice over).
 constexpr int MaxBones = 256;
 
