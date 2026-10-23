@@ -931,6 +931,11 @@ static void CvcReactWork(u64 image, float dt) {
             if (dt > 0.0f) {
                 const float now_s = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
                 const bool weak = now_s < r.weak_until;
+                // (At most 1.5 rad/s: a heavy blow tipped a body 17 degrees in four frames, its hips
+                // thrown 1.4 units a frame.)
+                if (const float rate = std::hypot(r.tilt_v[0], r.tilt_v[1]); rate > 1.5f) {
+                    r.tilt_v[0] *= 1.5f / rate, r.tilt_v[1] *= 1.5f / rate;
+                }
                 spring(r.tilt[0], r.tilt_v[0], weak ? 2.2f : 6.0f, weak ? 0.5f : 0.32f);
                 spring(r.tilt[1], r.tilt_v[1], weak ? 2.2f : 6.0f, weak ? 0.5f : 0.32f);
                 spring(r.dent, r.dent_v, 12.0f, 0.45f);
