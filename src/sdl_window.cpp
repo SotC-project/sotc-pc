@@ -4386,6 +4386,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     } else if (Clock::now() > deep_at[k] + std::chrono::milliseconds(200) ||
                                                g_cvc_depth_now.load() > 3.0f) { // (3 deep: at once)
                                         deep_at[k] = {};
+                                        LOG_INFO(Core, "cvcbrawl: {} stopped by the other's body ({:.1f} deep)", k ? "B" : "A",
+                                                 g_cvc_depth_now.load());
                                         // (Back off it: recovering in place, they stayed 3.5 inside each other
                                         // for 0.4 s.)
                                         // (Quickly: crossfaded over 0.35 s the slam's own downswing went
