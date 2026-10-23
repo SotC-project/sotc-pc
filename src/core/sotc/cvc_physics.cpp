@@ -483,9 +483,12 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // it read as a glide. And gently, at most 1.5 units a second, never while a part swings through:
     // up to 0.6 a step, 36 a second, the bodies snapped in and out of each other; at 3 a second they
     // still glided. A body pressed in for long breaks off itself: cvcbrawl.)
-    if (deepest > 1.0f && deep_speed < 30.0f) {
+    // (Over 3 deep, faster and swinging or not, for the moment it lasts: backing off a slam stopped
+    // 3.1 inside Quadratus, Gaius went on to 4.2 for 0.2 s.)
+    const bool very_deep = deepest > 3.0f;
+    if (deepest > 1.0f && (deep_speed < 30.0f || very_deep)) {
         const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
-        const float out_by = std::min(deepest - 0.5f, 1.5f * dt);
+        const float out_by = std::min(deepest - 0.5f, (very_deep ? 4.0f : 1.5f) * dt);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }

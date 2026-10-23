@@ -2818,17 +2818,86 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
             const u64 image = module ? module->GetBaseAddress() : 0;
             float dist = 0.0f, open[2]{}, walk_out = 0.0f;
-            const bool has_open =
+            bool has_open =
                 sscanf(action.c_str() + 9, "%f@%f/%f+%f", &dist, &open[0], &open[1], &walk_out) >= 3;
             const u64 a = image ? *reinterpret_cast<const u64*>(image + 0x1593b08) : 0;
             const u64 b = image ? *reinterpret_cast<const u64*>(image + 0x1593b10) : 0;
             const u64 wander = image ? PlayerObject(image) : 0;
             if (a && b && wander) {
-                std::thread([image, a, b, wander, dist, has_open, open, walk_out] {
+                std::thread([image, a, b, wander, dist, has_open, open, walk_out]() mutable {
                     const auto* pb = reinterpret_cast<const volatile float*>(b + 0x130);
                     const auto* pa = reinterpret_cast<const volatile float*>(a + 0x130);
                     const auto* pw = reinterpret_cast<const volatile float*>(wander + 0x130);
                     float floor_y = 0.0f;
+                    // The host's floor: its lowest bone (Gaius's position is 13 above his feet).
+                    const auto host_feet = [&] {
+                        float feet = pb[1];
+                        if (const u64 mats = *reinterpret_cast<const volatile u64*>(b + 0x120 + 0x198)) {
+                            for (int i = 0; i < 64 && Core::Memory::Instance()->IsValidMapping(mats + u64(i) * 64, 64); i++) {
+                                const auto* m = reinterpret_cast<const volatile float*>(mats + u64(i) * 64);
+                                if (m[15] == 1.0f && std::hypot(m[12] - pb[0], m[14] - pb[2]) < 60.0f) {
+                                    feet = std::min(feet, float(m[13]));
+                                }
+                            }
+                        }
+                        return feet;
+                    };
+                    // Open ground for the fight near the host, where it was not given one: of the host's
+                    // spot and 8 directions at 30, 60 and 90 from it (each reached by a clear line from
+                    // the host), the one with the most floor at the host's level under it and on a ring
+                    // 55 around it (where Gaius and the camera go). Better by 3 of 13 than where the host
+                    // stands, the host walks there. (Valus fought against its cliff wall: the camera
+                    // looked down past the edge at two small dark figures.)
+                    const auto find_open = [&] {
+                        const float feet = host_feet();
+                        struct Spot { float x, z; int floor = -1; bool reached = false; };
+                        std::vector<Spot> spots{{pb[0], pb[2]}};
+                        for (const float r : {30.0f, 60.0f, 90.0f}) {
+                            for (int d = 0; d < 8; d++) {
+                                const float a8 = float(d) * 0.78539816f;
+                                spots.push_back({pb[0] + r * std::cos(a8), pb[2] + r * std::sin(a8)});
+                            }
+                        }
+                        for (auto& spot : spots) {
+                            float from[14][4], to[14][4], hit[14][4];
+                            u64 ignore[14];
+                            for (int i = 0; i < 13; i++) {
+                                const float a12 = float(i) * 0.52359878f, r = i == 12 ? 0.0f : 55.0f;
+                                const float x = spot.x + r * std::cos(a12), z = spot.z + r * std::sin(a12);
+                                const float f[4]{x, feet + 10.0f, z, 1.0f}, t[4]{x, feet - 60.0f, z, 1.0f};
+                                std::memcpy(from[i], f, 16), std::memcpy(to[i], t, 16), ignore[i] = b;
+                            }
+                            const float pf[4]{pb[0], feet + 12.0f, pb[2], 1.0f}, pt[4]{spot.x, feet + 12.0f, spot.z, 1.0f};
+                            std::memcpy(from[13], pf, 16), std::memcpy(to[13], pt, 16), ignore[13] = b;
+                            if (!CvcProbeLines(14, from, to, ignore, hit)) {
+                                LOG_INFO(Core, "cvcplace: no line tests for open ground");
+                                return;
+                            }
+                            spot.floor = 0;
+                            for (int i = 0; i < 13; i++) {
+                                spot.floor += std::abs(hit[i][1] - to[i][1]) > 0.05f && std::abs(hit[i][1] - feet) < 8.0f;
+                            }
+                            spot.reached = &spot == &spots[0] ||
+                                           std::hypot(hit[13][0] - to[13][0], hit[13][2] - to[13][2]) < 1.0f;
+                        }
+                        const Spot* best = &spots[0];
+                        std::string each;
+                        for (const auto& spot : spots) {
+                            each += fmt::format(" {}{}", spot.floor, spot.reached ? "" : "x");
+                            if (spot.reached && spot.floor > best->floor) {
+                                best = &spot;
+                            }
+                        }
+                        LOG_INFO(Core, "cvcplace: floor around the host and 24 spots near:{}", each);
+                        if (best != &spots[0] && best->floor >= spots[0].floor + 3) {
+                            const float dx = best->x - pb[0], dz = best->z - pb[2], d = std::hypot(dx, dz);
+                            // (Toward a point past it, so the way still points on once the host is there.)
+                            open[0] = pb[0] + dx / d * (d + 100.0f), open[1] = pb[2] + dz / d * (d + 100.0f);
+                            walk_out = d, has_open = true;
+                            LOG_INFO(Core, "cvcplace: open ground {:.0f} away ({} of 13 floored, here {}): the host "
+                                     "walks there", d, best->floor, spots[0].floor);
+                        }
+                    };
                     const auto place = [&] {
                         float dx = (has_open ? open[0] : pw[0]) - pb[0], dz = (has_open ? open[1] : pw[2]) - pb[2];
                         const float len = std::max(std::hypot(dx, dz), 0.001f);
@@ -2841,16 +2910,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // host's level that far out (Gaius stands on a raised platform: at 55 every
                         // direction fell 60 to the ground below, and Basaran brought in landed down there).
                         float use_dist = dist;
-                        // The host's floor: its lowest bone (Gaius's position is 13 above his feet).
-                        float feet = pb[1];
-                        if (const u64 mats = *reinterpret_cast<const volatile u64*>(b + 0x120 + 0x198)) {
-                            for (int i = 0; i < 64 && Core::Memory::Instance()->IsValidMapping(mats + u64(i) * 64, 64); i++) {
-                                const auto* m = reinterpret_cast<const volatile float*>(mats + u64(i) * 64);
-                                if (m[15] == 1.0f && std::hypot(m[12] - pb[0], m[14] - pb[2]) < 60.0f) {
-                                    feet = std::min(feet, float(m[13]));
-                                }
-                            }
-                        }
+                        const float feet = host_feet();
                         if (!has_open) {
                             bool done = false;
                             for (const float ring : {dist, dist - 10.0f, dist - 20.0f, dist - 30.0f}) {
@@ -2937,6 +2997,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     // The host walked out toward the open side, two units a frame (it must be awake:
                     // moved before or during its first-sight cutscene the game puts it back).
                     const auto walk_host_out = [&] {
+                        if (!has_open) {
+                            find_open();
+                        }
                         float moved = 0.0f;
                         while (moved < walk_out && *reinterpret_cast<const volatile u64*>(b) != 0) {
                             const float dx = open[0] - pb[0], dz = open[1] - pb[2];
@@ -3588,20 +3651,26 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 for (const int j : {13 + 2 * k, 14 + 2 * k, 51 + 2 * k, 52 + 2 * k}) {
                                     const float *t = rays.to[j], *h = rays.hit[j];
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
-                                    // ... and on that colossus, not the other in front of it (Valus, half
-                                    // Gaius's height, was filmed from behind Gaius for 40 s: the line met
-                                    // Gaius's back, within 25 of Valus). Not after a knockout (both lines
-                                    // go to the loser, the winner beside it).
+                                    // ... and not through the other colossus: two of its bones within 5 of the
+                                    // line, short of the last 15 % (Valus, half Gaius's height, was filmed from
+                                    // behind Gaius for 40 s). Not after a knockout (both lines go to the loser,
+                                    // the winner beside it). (Not by where the line test stops: Quadratus's
+                                    // bones lie deep in its body, a line meeting its flank read as on Gaius.)
                                     if (!(winner == 1 || winner == 2) && a_points > 0 && a_points < body_points.size()) {
                                         const bool to_a = j % 2 == 1;
-                                        float own = 1e9f, other = 1e9f;
-                                        for (size_t i = 0; i < body_points.size(); i++) {
+                                        const float* f = rays.from[j];
+                                        const float seg[3]{t[0] - f[0], t[1] - f[1], t[2] - f[2]};
+                                        const float len2 = std::max(seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2], 1e-3f);
+                                        int in_way = 0;
+                                        for (size_t i = to_a ? a_points : 0; i < (to_a ? body_points.size() : a_points); i++) {
                                             const auto& bp = body_points[i];
-                                            const float d = std::hypot(bp[0] - h[0], bp[1] - h[1], bp[2] - h[2]);
-                                            float& near_one = (i < a_points) == to_a ? own : other;
-                                            near_one = std::min(near_one, d);
+                                            const float u = ((bp[0] - f[0]) * seg[0] + (bp[1] - f[1]) * seg[1] + (bp[2] - f[2]) * seg[2]) / len2;
+                                            if (u > 0.0f && u < 0.85f &&
+                                                std::hypot(f[0] + seg[0] * u - bp[0], f[1] + seg[1] * u - bp[1], f[2] + seg[2] * u - bp[2]) < 5.0f) {
+                                                in_way++;
+                                            }
                                         }
-                                        visible[k] &= own <= other + 2.0f;
+                                        visible[k] &= in_way < 2;
                                     }
                                 }
                             }
@@ -3627,7 +3696,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // shows that rock in the corner of the picture.
                                 return 2.0f * clear_part[k] - 0.2f * std::abs(offset(k)) -
                                        (after ? 0.8f * std::cos(at - away) : 1.5f * std::abs(std::cos(at - axis))) -
-                                       (visible[k] ? 0.0f : 1.5f) - (ground[k] > -90.0f && ground[k] < 12.0f ? 0.0f : 3.0f) - // (at 1.5 it stayed over Argus's chasm)
+                                       (visible[k] ? 0.0f : 3.0f) - (ground[k] > -90.0f && ground[k] < 12.0f ? 0.0f : 3.0f) - // (at 1.5 it stayed over Argus's chasm)
                                        3.0f * blocked[sector(at)]; // (trees in the way: Phaedra's fight filmed through them)
                             };
                             int pick = 0;
@@ -3792,8 +3861,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // sooner, the first seconds were filmed from over Argus's chasm.)
                         static int placed_frames = 0;
                         placed_frames = cvc_placed ? placed_frames + 1 : 0;
+                        // (And with both in sight, clear in the picture's depth: lifted sooner, Valus's
+                        // fight opened with 9 s of searching past the rock beside it.)
                         settled = cvc_placed && !Sotc::Screens::Letterboxed() &&
-                                          ((g_cvc_view_now.load() & 2) || placed_frames > 600)
+                                          ((g_cvc_view_now.load() & 3) == 3 || placed_frames > 600)
                                       ? settled + 1
                                       : 0;
                         if (settled == 60) {
