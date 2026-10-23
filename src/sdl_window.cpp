@@ -3363,7 +3363,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static float last[2][3];
                     static bool seen[2];
                     std::vector<std::array<float, 3>> body_points; // both skeletons, this tick
+                    size_t a_points = 0; // A's bones first, then B's
                     for (int k = 0; k < 2; k++) {
+                        if (k == 1) {
+                            a_points = body_points.size();
+                        }
                         // A knocked-out colossus is followed through the loser slot (0x1593b38) once
                         // its own is cleared: its body still falls some way.
                         const u8 won = *reinterpret_cast<const volatile u8*>(image + 0x1593efb);
@@ -3584,6 +3588,21 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 for (const int j : {13 + 2 * k, 14 + 2 * k, 51 + 2 * k, 52 + 2 * k}) {
                                     const float *t = rays.to[j], *h = rays.hit[j];
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
+                                    // ... and on that colossus, not the other in front of it (Valus, half
+                                    // Gaius's height, was filmed from behind Gaius for 40 s: the line met
+                                    // Gaius's back, within 25 of Valus). Not after a knockout (both lines
+                                    // go to the loser, the winner beside it).
+                                    if (!(winner == 1 || winner == 2) && a_points > 0 && a_points < body_points.size()) {
+                                        const bool to_a = j % 2 == 1;
+                                        float own = 1e9f, other = 1e9f;
+                                        for (size_t i = 0; i < body_points.size(); i++) {
+                                            const auto& bp = body_points[i];
+                                            const float d = std::hypot(bp[0] - h[0], bp[1] - h[1], bp[2] - h[2]);
+                                            float& near_one = (i < a_points) == to_a ? own : other;
+                                            near_one = std::min(near_one, d);
+                                        }
+                                        visible[k] &= own <= other + 2.0f;
+                                    }
                                 }
                             }
                             g_cvc_view_now = (visible[0] && covered_part < 0.35f ? 1u : 0u) |
@@ -3696,7 +3715,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         // (Over a rim or a drop itself, it swings on faster: on Valus's plateau, eased at
                         // 0.03 between two good spots it hung over the edge 1.1-1.9 s.)
-                        const float swing_ease = (g_cvc_view_now.load() & 2) ? 0.03f : 0.08f;
+                        // (And out of cover the same: Phaedra's fight opened 20 s behind a tree.)
+                        const float swing_ease = (g_cvc_view_now.load() & 2) && covered_part <= 0.2f ? 0.03f : 0.08f;
                         angle = placed ? angle + wrap(target_angle - angle) * swing_ease : target_angle;
                         // Eased around the fight (angle, distance, height) rather than in a straight
                         // line: a change of view swings round or comes in, it does not cut through the
@@ -3711,7 +3731,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Over what covers the picture (trees round Phaedra's ruins): in closer and higher,
                         // looking down past it, eased over a few seconds.
                         static float over = 0.0f;
-                        over += ((covered_part > 0.2f ? 1.0f : 0.0f) - over) * 0.01f;
+                        over += ((covered_part > 0.2f ? 1.0f : 0.0f) - over) * 0.03f;
                         cam[0] = mid[0] + reach_now * (1.0f - 0.25f * over) * std::cos(angle);
                         cam[1] = mid[1] + rise_now * (1.0f + 0.6f * over);
                         cam[2] = mid[2] + reach_now * (1.0f - 0.25f * over) * std::sin(angle);
@@ -3741,8 +3761,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float away = std::hypot(look[0] - cam[0], look[1] - cam[1], look[2] - cam[2]);
                                 const float nearer = std::min(0.6f * away, away - 25.0f);
                                 int covered = 0, cells = 0;
-                                for (int r = 2; r <= 6; r++) {
-                                    for (int c = 4; c <= 11; c++, cells++) {
+                                // (Most of the picture: in the middle half only, trees over Gaius at its
+                                // left went unseen.)
+                                for (int r = 1; r <= 7; r++) {
+                                    for (int c = 2; c <= 13; c++, cells++) {
                                         covered += 0.04f / std::max(Cvc::g_depth[r * Cvc::DepthCols + c].load(), 1e-7f) < nearer;
                                     }
                                 }
