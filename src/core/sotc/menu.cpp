@@ -79,9 +79,11 @@ bool max_damage = false;
 bool versus = false; // colossus vs colossus: watch Gaius fight another colossus
 // The colossi Gaius can be watched fighting, each in its own arena (boss table index): only pairs
 // whose fights pass re/cvc/quality.py (no snapping, deforming, locking or clipping) are offered.
-// In the game's order (Valus, Quadratus, Phaedra, Basaran, Argus); Basaran first.
-constexpr int VersusOpponents[]{0, 1, 3, 8, 14};
-int versus_opponent = 3;
+// In the game's order; Basaran first. (Valus and Phaedra pass the gate but not on film: the camera
+// went through rock on Valus's plateau and filmed Phaedra's fight through trees, which have no
+// collision for its line tests.)
+constexpr int VersusOpponents[]{1, 8, 14};
+int versus_opponent = 1;
 
 constexpr std::array<const char*, 3> Difficulties{"Easy", "Normal", "Hard"};
 constexpr std::array<const char*, 3> DifficultyIds{"easy", "normal", "hard"};
