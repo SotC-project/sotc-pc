@@ -234,7 +234,7 @@ static CvcBody g_cvc_body[2];
 struct CvcBlow {
     std::mutex lock;
     bool ready = false;
-    int striker = 0, bone = -1;
+    int striker = 0, bone = -1, struck_bone = -1;
     float point[3]{}, normal[3]{}, impulse = 0.0f, closing = 0.0f;
 };
 static CvcBlow g_cvc_blow;
@@ -1440,6 +1440,7 @@ static void CvcPhysicsWork(u64 image, float dt) {
         std::scoped_lock guard{g_cvc_blow.lock};
         if (!g_cvc_blow.ready || hit.impulse > g_cvc_blow.impulse) {
             g_cvc_blow.ready = true, g_cvc_blow.striker = hit.striker, g_cvc_blow.bone = hit.bone;
+            g_cvc_blow.struck_bone = hit.struck_bone;
             std::memcpy(g_cvc_blow.point, point, 12), std::memcpy(g_cvc_blow.normal, hit.normal.data(), 12);
             g_cvc_blow.impulse = hit.impulse, g_cvc_blow.closing = hit.closing;
         }
@@ -4912,7 +4913,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                           motion == 0x1d39370 || motion == 0x1d395c0; // Knight_died_early, _loop
                         // A blow: the physics found k's body striking the other's, hard enough (any
                         // part, any move: a body driven into the other hurts it as hard as it lands).
-                        int hit_bone = -1;
+                        int hit_bone = -1, struck_bone = -1;
                         float hit_speed = 0.0f, impulse = 0.0f;
                         std::array<float, 3> contact{};
                         {
@@ -4927,6 +4928,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 last_blow[k] = Clock::now();
                                 g_cvc_blow.ready = false;
                                 hit_bone = g_cvc_blow.bone, hit_speed = g_cvc_blow.closing, impulse = g_cvc_blow.impulse;
+                                struck_bone = g_cvc_blow.struck_bone;
                                 std::memcpy(contact.data(), g_cvc_blow.point, 12);
                             }
                         }
@@ -4975,6 +4977,26 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     region = 1.0f, region_name = "limb";
                                 } else {
                                     region = 0.5f, region_name = "armor";
+                                }
+                            }
+                            // Its plates, one per region (head, back, limbs, trunk): each wears with the blows
+                            // it takes (1 to start, 0.15 and six tenths of a blow's force each: two or three
+                            // blows); worn through, it breaks (chips and dust where it was struck, the colossus
+                            // staggers) and what was under it takes half as much again from then on. (Stage
+                            // (b); the plate's mesh vanishing and falling is stages (c) and (d). Per bone, no
+                            // bone took enough blows in a fight to break.)
+                            static std::map<std::string, float> plates[2];
+                            if (!pulsed && struck_bone >= 0) {
+                                auto& plate = plates[1 - k].try_emplace(region_name, 1.0f).first->second;
+                                if (plate <= 0.0f) {
+                                    region *= 1.5f;
+                                    LOG_INFO(Core, "cvcbrawl: {} struck where its {} plate was", k == 0 ? "B" : "A", region_name);
+                                } else if ((plate -= 0.15f + 0.6f * force) <= 0.0f) {
+                                    LOG_INFO(Core, "cvcbrawl: {}'s {} plate breaks (bone {})", k == 0 ? "B" : "A", region_name, struck_bone);
+                                    CvcEffect("npe/knight_metal_chip.npe", contact.data());
+                                    CvcEffect("npe/player_stone_dust.npe", contact.data());
+                                    CvcEffect("npe/knight_add_chip.npe", contact.data());
+                                    balance[1 - k] += 1.0f; // (a heavy stagger: its own, by the balance rule below)
                                 }
                             }
                             const float damage = region *
