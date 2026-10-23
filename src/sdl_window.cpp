@@ -3683,7 +3683,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             rays.count = 75, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
-                        angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
+                        // (Over a rim or a drop itself, it swings on faster: on Valus's plateau, eased at
+                        // 0.03 between two good spots it hung over the edge 1.1-1.9 s.)
+                        const float swing_ease = (g_cvc_view_now.load() & 2) ? 0.03f : 0.08f;
+                        angle = placed ? angle + wrap(target_angle - angle) * swing_ease : target_angle;
                         // Eased around the fight (angle, distance, height) rather than in a straight
                         // line: a change of view swings round or comes in, it does not cut through the
                         // rock between two spots. In quickly, out slowly.
