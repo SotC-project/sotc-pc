@@ -4007,6 +4007,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // How fast a part must meet it to be a blow on it (0: 40): a huge one is struck
                         // low, where a swing is slow (Argus, 15: a blade meets its shins at 14-21 units/s).
                         float struck = 0.0f;
+                        // Close-in blows, used when the bodies are within 2 (its shake-off swings: a limb
+                        // or the body thrown about itself, reaching only what is against it).
+                        std::vector<std::pair<u64, int>> close = {};
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -4016,8 +4019,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // beside or under a colossus's own collision.)
                         // (And his right / left arm and body swings, made to shake Wander off: backhand and
                         // shoulder blows at a colossus beside him.)
-                        {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000},
-                             {0x1d3c1b0, 2500}, {0x1d3c400, 2500}, {0x1d3bf60, 3000}},
+                        {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
                              // (strike 3: its slam met the other's own collision from 2-5 apart, passed
                              // short from 8; it steps in to there)
@@ -4027,7 +4029,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              {{0x1d3a5f0, 0x1d3a840}, {0x1d3b620, 0x1d3b870}, {0x1d3b870, 0x1d3bac0}}, false,
                              // (no knockdown: Knight_fall's own effects crash the game's effect update,
                              // 0x693f57); Knight_Search
-                             {}, {0x1d38ed0}}}, // a wide sword sweep
+                             // (close in: his right / left arm and body swings, his shake-offs)
+                             {}, {0x1d38ed0}, 1.0f, 0.0f, false, 0.0f, {{0x1d3c1b0, 2500}, {0x1d3c400, 2500}, {0x1d3bf60, 3000}}}}, // a wide sword sweep
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; no stepping back (out
                         // in the field it is held to its spot: Turtle_retreat_1 slid it off, then the game
@@ -4059,21 +4062,22 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // walking_loop_1; Standing left / right rotation; Standing; recession. Its root
                         // faces along +y (re/cvc: the way it walks). No fall (untried).
                         // (And its right / left arm, shoulder and foot swings, its shake-offs.)
-                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}, {0x1d0bee0, 2500}, {0x1d0c130, 2500},
-                             {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}},
+                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}},
                              {0x1d0d3b0, 0x1d0d600}, {0x1d0ccc0}, {0x1d0dcf0},
                              250.0f, 0x1d06ba0, 4.0f, 1, 0x1d06700, 0x1d064b0, 0.0f, 0x1d06010, 0x1d074e0, 1.2f, 0.85f, 8.0f, false, 0, 0,
                              {{0x1d08070, 0x1d08510}, {0x1d08510, 0x1d08760}, {0x1d08760, 0x1d089b0}, {0x1d089b0, 0x1d08e50}},
-                             false, {}, {}, 1.4f}},
+                             // (close in: its arm, shoulder and foot swings)
+                             false, {}, {}, 1.4f, 0.0f, false, 0.0f,
+                             {{0x1d0bee0, 2500}, {0x1d0c130, 2500}, {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}}}},
                         // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
                         // (And its special and both-feet stomps, and right / left arm swings.)
                         {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}, {0x1cf0980, 4000}, {0x1cf0bd0, 4000},
-                              {0x1cf12c0, 4000}, {0x1cf63b0, 2500}, {0x1cf6600, 2500}},
+                              {0x1cf12c0, 4000}},
                               {0x1cf7d20, 0x1cf7f70}, {0x1cf7630}, {0x1cf8660},
                               // (swing 25: its stomps and club come down slow and heavy)
                               250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 25.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
                               {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
-                              false, {}, {}, 2.0f, 0.0f, false, 15.0f}},
+                              false, {}, {}, 2.0f, 0.0f, false, 15.0f, {{0x1cf63b0, 2500}, {0x1cf6600, 2500}}}},
                         // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
                         // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
@@ -4082,12 +4086,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Mostly it charges (below): its forelegs come down 10 ahead of its root, its own
                         // head 20 ahead, so against a standing colossus a stomp only reaches what its head
                         // already touches; its head swing is a shake.
-                        {1, {{{0x1d62810, 5000}, {0x1d63a90, 2500}, {0x1d63ce0, 2500}}, // (its foreleg swings too)
+                        {1, {{{0x1d62810, 5000}},
                              {0x1d62120}, {0x1d62120}, {0x1d62120},
                              // (strike 12: it charges from there, its head first; swing 6: its charge meets
                              // the other at 5-17 units/s, its head counted as a limb; aim 0.7: from one side)
                              250.0f, 0x1d61590, 12.0f, -2, 0x1d60ea0, 0x1d60c50, 6.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.7f, 8.0f, false, 0, 0,
-                             {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f, 10.0f, true}},
+                             {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f, 10.0f, true, 0.0f,
+                             {{0x1d63a90, 2500}, {0x1d63ce0, 2500}}}}, // (close in: its foreleg swings)
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
                         // left / right rotation; Standing; no stepping back. Its root faces along +z.
@@ -4341,7 +4346,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     };
                     const auto attack = [&](int k) {
                         const Moves* moves = kind_of(k);
-                        auto [motion, ms] = moves->attacks[rng() % moves->attacks.size()];
+                        const auto& list = closest < 2.0f && !moves->close.empty() ? moves->close : moves->attacks;
+                        auto [motion, ms] = list[rng() % list.size()];
                         // The other off to one side: the attack to that side, if it has one.
                         float cosine = 1.0f, side = 0.0f;
                         // (Its side slams bring its head down on the other; its middle one mostly lands
