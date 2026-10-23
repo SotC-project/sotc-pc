@@ -163,8 +163,8 @@ static u64 PlayerObject(u64 image) {
 /// thread the camera calls CvcRayThunk, which runs 0x7a7e40 for each (true when nothing is in the
 /// way, else the hit position at +0 of its 0x30-byte result) and sets the state to 2.
 struct CvcRays {
-    float from[52][4], to[52][4], hit[52][4]; // hit: where the line stops (to when clear)
-    u64 ignore[52]{}; // an object the line passes through (the colossus a line starts in)
+    float from[80][4], to[80][4], hit[80][4]; // hit: where the line stops (to when clear)
+    u64 ignore[80]{}; // an object the line passes through (the colossus a line starts in)
     int count = 0;
     std::atomic<int> state{0}; // 0 idle, 1 queued, 2 done
     u64 image = 0;
@@ -249,11 +249,14 @@ static std::array<std::atomic<float>, 6> g_cvc_cam_now{};
 static std::atomic<int> g_cvc_act_now[2]{};
 // How much of the last snap's difference each colossus still carries (CvcInertiaWork), for the log.
 static std::atomic<float> g_cvc_blend_now[2]{};
+// The spectator camera's view as last tested: bit 0 both colossi in sight from it, bit 1 over ground
+// near the fight's floor (for the quality log).
+static std::atomic<u32> g_cvc_view_now{3};
 // How fast each colossus's striking part must meet the other for a blow (cvcbrawl: its moves' swing;
 // 40 the default): slow heavy strikers (Quadratus's head, Basaran's slams) meet slower than a sword.
 static std::atomic<float> g_cvc_coming[2]{40.0f, 40.0f};
 // ... and how fast a part must meet colossus k to be a blow on it (its moves' struck; 40 the default):
-// a blade reaches Argus's shins only at the bottom of its swing, slowly.
+// a blade reaches Argus's shins only at the bottom of its swing, slowly (14-21 units/s).
 static std::atomic<float> g_cvc_struck[2]{40.0f, 40.0f};
 // The ground under colossus A (the game's line test from just above its feet, 40 down; cvccam's ray
 // batch), and the steady-clock second it was measured; NaN: nothing there.
@@ -775,6 +778,7 @@ static void CvcQuality(int k, u64 object, const float* anim, const float* drawn,
         float give, tilt, blend;
         float low_anim[3]; // the lowest bone where its animation has it
         float root_anim[3], root_drawn[3]; // bone 0 where its animation has it, and as drawn
+        u32 view; // g_cvc_view_now
     } r{};
 #pragma pack(pop)
     auto& body = g_cvc_body[k];
@@ -853,6 +857,7 @@ static void CvcQuality(int k, u64 object, const float* anim, const float* drawn,
         std::memcpy(r.low_anim, anim + r.low_bone * 16 + 12, 12);
     }
     std::memcpy(r.root_anim, anim + 12, 12), std::memcpy(r.root_drawn, drawn + 12, 12);
+    r.view = g_cvc_view_now.load();
     {
         std::scoped_lock guard{g_cvc_flex[k].lock};
         for (const auto& a : g_cvc_flex[k].angle) {
@@ -2954,24 +2959,30 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             float seconds = 0;
             int pick = 0;
             const bool picked = action.find('#') != std::string::npos;
-            // An optional last field: how many 200 ms checks in a row without a cinematic (15).
-            int calm_needed = 15;
+            // An optional field: how many 200 ms checks in a row without a cinematic (15); after it,
+            // seconds to wait for its intro cinematic to have played first (0: none needed); and after
+            // that, seconds after which it counts as ready unmoved (0: never; Argus stands on guard
+            // until Wander comes near, and the battle hung waiting for it to move).
+            int calm_needed = 15, intro_wait = 0, still_ok = 0;
             if (picked) {
-                sscanf(action.c_str() + 11, "%llx#%d:%f:%llx:%d", &field, &pick, &seconds, &flag, &calm_needed);
+                sscanf(action.c_str() + 11, "%llx#%d:%f:%llx:%d:%d:%d", &field, &pick, &seconds, &flag, &calm_needed, &intro_wait,
+                       &still_ok);
             } else {
-                sscanf(action.c_str() + 11, "%llx:%f:%llx:%d", &field, &seconds, &flag, &calm_needed);
+                sscanf(action.c_str() + 11, "%llx:%f:%llx:%d:%d:%d", &field, &seconds, &flag, &calm_needed, &intro_wait, &still_ok);
             }
             if (image) {
                 DWORD old = 0;
                 VirtualProtect(reinterpret_cast<void*>((image + flag) & ~u64(0xfff)), 0x1000,
                                PAGE_EXECUTE_READWRITE, &old);
             }
-            std::thread([image, field, pick, seconds, flag, calm_needed] {
+            std::thread([image, field, pick, seconds, flag, calm_needed, intro_wait, still_ok] {
                 const auto q = [](u64 a) { return *reinterpret_cast<const volatile u64*>(a); };
                 const auto end = std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(u64(seconds * 1000));
                 u64 first_object = 0;
                 float first[3]{};
+                auto found_at = std::chrono::steady_clock::now();
+                bool intro_seen = false;
                 while (image && std::chrono::steady_clock::now() < end) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     const u64 world = q(image + 0x15fe570), base = q(image + 0x2f3b8c0);
@@ -2991,6 +3002,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     if (object != first_object) {
                         first_object = object;
                         first[0] = p[0], first[1] = p[1], first[2] = p[2];
+                        found_at = std::chrono::steady_clock::now(), intro_seen = false;
                         LOG_INFO(Core, "awaitmoved: object {:#x} found (at {} ms)", object, SDL_GetTicks());
                         continue;
                     }
@@ -3003,7 +3015,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         LOG_INFO(Core, "awaitmoved: cinematic {} (at {} ms)", cinematic == 0.0f ? "off" : "on", SDL_GetTicks());
                     }
                     calm = cinematic == 0.0f ? calm + 1 : 0;
-                    if (std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f && calm >= calm_needed) {
+                    intro_seen |= cinematic != 0.0f;
+                    // (Its intro first: Gaius's starts 1-3 s after he appears, and a jump made before it
+                    // began never arrived.)
+                    const bool intro_done = intro_wait <= 0 || intro_seen ||
+                                            std::chrono::steady_clock::now() > found_at + std::chrono::seconds(intro_wait);
+                    // (Unmoved but found long enough: ready even while its first-sight scene plays,
+                    // which the placement waits out and the setup skips.)
+                    const bool waited = still_ok > 0 && std::chrono::steady_clock::now() > found_at + std::chrono::seconds(still_ok);
+                    const bool moved = std::hypot(p[0] - first[0], p[2] - first[2]) > 2.0f;
+                    if ((moved && calm >= calm_needed && intro_done) || waited) {
                         *reinterpret_cast<volatile u8*>(image + flag) = 1;
                         LOG_INFO(Core, "awaitmoved: object {:#x} moved, flag {:#x} set (at {} ms)", object, flag, SDL_GetTicks());
                         return;
@@ -3355,11 +3376,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             for (int k = 0; k < 12; k++) {
                                 visible[k] = true;
-                                for (int j = 13 + 2 * k; j < 15 + 2 * k; j++) {
+                                for (const int j : {13 + 2 * k, 14 + 2 * k, 51 + 2 * k, 52 + 2 * k}) {
                                     const float *t = rays.to[j], *h = rays.hit[j];
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
                                 }
                             }
+                            g_cvc_view_now = (visible[0] ? 1u : 0u) | (ground[0] > -40.0f && ground[0] < 12.0f ? 2u : 0u);
                             tested = true;
                             rays.state.store(0);
                         }
@@ -3423,6 +3445,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // colossi, 10 units up their bodies.
                             const float* loser_at = winner == 1 ? pb : winner == 2 ? pa : nullptr;
                             const float* subjects[2]{loser_at ? loser_at : pa, loser_at ? loser_at : pb};
+                            float top = -1e9f; // the highest bone of the two
+                            for (const auto& b : body_points) {
+                                top = std::max(top, b[1]);
+                            }
                             for (int k = 0; k < 12; k++) {
                                 const float at = angle + offset(k);
                                 const float spot[4]{k == 0 ? cam[0] : centre[0] + reach * std::cos(at),
@@ -3432,6 +3458,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     const float target[4]{subjects[j][0], subjects[j][1] + 10.0f, subjects[j][2], 1.0f};
                                     std::memcpy(rays.from[13 + 2 * k + j], spot, 16);
                                     std::memcpy(rays.to[13 + 2 * k + j], target, 16);
+                                    // ... and to its upper body (seven tenths up): low lines passed under
+                                    // the arch of Argus's bridge while the bridge hid the colossus above.
+                                    const float upper[4]{subjects[j][0], subjects[j][1] + 0.7f * std::max(top - subjects[j][1], 10.0f),
+                                                         subjects[j][2], 1.0f};
+                                    std::memcpy(rays.from[51 + 2 * k + j], spot, 16);
+                                    std::memcpy(rays.to[51 + 2 * k + j], upper, 16);
                                 }
                             }
                             std::memcpy(rays.from[37], centre, 12), rays.from[37][3] = 1.0f;
@@ -3447,12 +3479,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float from[4]{pa[0], pa[1] + 0.5f, pa[2], 1.0f};
                                 const float to[4]{pa[0], pa[1] - 40.0f, pa[2], 1.0f};
                                 std::memcpy(rays.from[50], from, 16), std::memcpy(rays.to[50], to, 16);
-                                for (int r = 0; r < 52; r++) {
+                                for (int r = 0; r < 80; r++) {
                                     rays.ignore[r] = 0;
                                 }
                                 rays.ignore[50] = *reinterpret_cast<const volatile u64*>(image + 0x1593b08);
                             }
-                            rays.count = 51, rays.image = image, tested_angle = angle;
+                            rays.count = 75, rays.image = image, tested_angle = angle;
                             rays.state.store(1);
                         }
                         angle = placed ? angle + wrap(target_angle - angle) * 0.03f : target_angle;
@@ -3844,7 +3876,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // attacks are made for Wander under its head; its head swing is a shake).
                         bool charge = false;
                         // How fast a part must meet it to be a blow on it (0: 40): a huge one is struck
-                        // low, where a swing is slow (Argus, 20).
+                        // low, where a swing is slow (Argus, 15: a blade meets its shins at 14-21 units/s).
                         float struck = 0.0f;
                     };
                     static const std::unordered_map<int, Moves> kinds{
@@ -3905,7 +3937,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                               // (swing 25: its stomps and club come down slow and heavy)
                               250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 25.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
                               {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
-                              false, {}, {}, 2.0f, 0.0f, false, 20.0f}},
+                              false, {}, {}, 2.0f, 0.0f, false, 15.0f}},
                         // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
                         // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
