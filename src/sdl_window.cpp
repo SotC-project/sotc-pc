@@ -633,7 +633,7 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
         // (The further the motion puts it, the longer: Basaran's death motion moves its root 13.8, which
         // in 0.15 s still read as a jump; 0.15 s and 0.03 s a unit more, at most 0.7 s.)
         const float moved_by = std::hypot(move[k][0][0], move[k][0][1], move[k][0][2]);
-        fade[k] = std::min(0.25f + 0.03f * moved_by, 0.7f); // (0.15 at least: a planted foot slid 0.8 a frame)
+        fade[k] = std::min(0.25f + 0.03f * moved_by, 0.7f); // (from 0.15, a planted foot slid 0.8 a frame)
     } else {
         amount[k] *= std::exp(-dt / fade[k]);
     }
