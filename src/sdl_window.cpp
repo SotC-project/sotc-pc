@@ -4014,7 +4014,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Knight_retreat.
                         // (The slam three times in four: the sweep, made against Wander, mostly passes
                         // beside or under a colossus's own collision.)
-                        {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000}},
+                        // (And his right / left arm and body swings, made to shake Wander off: backhand and
+                        // shoulder blows at a colossus beside him.)
+                        {2, {{{0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3a5f0, 4500}, {0x1d3b620, 6000},
+                             {0x1d3c1b0, 2500}, {0x1d3c400, 2500}, {0x1d3bf60, 3000}},
                              {0x1d3cd40, 0x1d3d1e0}, {0x1d3c650, 0x1d3c8a0}, {0x1d3cf90, 0x1d3caf0},
                              // (strike 3: its slam met the other's own collision from 2-5 apart, passed
                              // short from 8; it steps in to there)
@@ -4055,13 +4058,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // brought down, 2A > 2B > 2C > 2D > 2E); right / left chest, head, back damage;
                         // walking_loop_1; Standing left / right rotation; Standing; recession. Its root
                         // faces along +y (re/cvc: the way it walks). No fall (untried).
-                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}},
+                        // (And its right / left arm, shoulder and foot swings, its shake-offs.)
+                        {0, {{{0x1d07bd0, 4000}, {0x1d07e20, 4000}, {0x1d08070, 7000}, {0x1d0bee0, 2500}, {0x1d0c130, 2500},
+                             {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}},
                              {0x1d0d3b0, 0x1d0d600}, {0x1d0ccc0}, {0x1d0dcf0},
                              250.0f, 0x1d06ba0, 4.0f, 1, 0x1d06700, 0x1d064b0, 0.0f, 0x1d06010, 0x1d074e0, 1.2f, 0.85f, 8.0f, false, 0, 0,
                              {{0x1d08070, 0x1d08510}, {0x1d08510, 0x1d08760}, {0x1d08760, 0x1d089b0}, {0x1d089b0, 0x1d08e50}},
                              false, {}, {}, 1.4f}},
                         // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
-                        {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}},
+                        // (And its special and both-feet stomps, and right / left arm swings.)
+                        {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}, {0x1cf0980, 4000}, {0x1cf0bd0, 4000},
+                              {0x1cf12c0, 4000}, {0x1cf63b0, 2500}, {0x1cf6600, 2500}},
                               {0x1cf7d20, 0x1cf7f70}, {0x1cf7630}, {0x1cf8660},
                               // (swing 25: its stomps and club come down slow and heavy)
                               250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 25.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
@@ -4075,7 +4082,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // Mostly it charges (below): its forelegs come down 10 ahead of its root, its own
                         // head 20 ahead, so against a standing colossus a stomp only reaches what its head
                         // already touches; its head swing is a shake.
-                        {1, {{{0x1d62810, 5000}},
+                        {1, {{{0x1d62810, 5000}, {0x1d63a90, 2500}, {0x1d63ce0, 2500}}, // (its foreleg swings too)
                              {0x1d62120}, {0x1d62120}, {0x1d62120},
                              // (strike 12: it charges from there, its head first; swing 6: its charge meets
                              // the other at 5-17 units/s, its head counted as a limb; aim 0.7: from one side)
@@ -4935,8 +4942,39 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             const float force = pulsed ? 1.0f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
-                            const float damage = (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
+                            // Where it landed: the head (its top fifth: every colossus's sigil is there or
+                            // near) 2.5 times, its back (struck from behind; Gaius's own reaction to it is
+                            // "back damage (weak)") 1.5, a limb's flesh at its joints 1, plain armor (the
+                            // rest of its trunk) half. (No weak-point table read from the game yet: these are
+                            // the regions the colossi share.)
+                            float region = 1.0f;
+                            const char* region_name = "pulse";
+                            if (!pulsed && !now[1 - k].empty()) {
+                                float low = 1e9f, high = -1e9f, nearest = 1e9f;
+                                int bone = -1;
+                                for (size_t i = 0; i < now[1 - k].size(); i++) {
+                                    const auto& b = now[1 - k][i];
+                                    low = std::min(low, b[1]), high = std::max(high, b[1]);
+                                    const float d = std::hypot(b[0] - contact[0], b[1] - contact[1], b[2] - contact[2]);
+                                    if (d < nearest) {
+                                        nearest = d, bone = int(i);
+                                    }
+                                }
+                                float cosine = 0.0f, side = 0.0f;
+                                if (contact[1] > low + 0.8f * (high - low)) {
+                                    region = 2.5f, region_name = "head";
+                                } else if (face(1 - k, cosine, side) && cosine < -0.2f) {
+                                    region = 1.5f, region_name = "back";
+                                } else if (CvcLimb(g_cvc_flex[1 - k].kind, bone)) {
+                                    region = 1.0f, region_name = "limb";
+                                } else {
+                                    region = 0.5f, region_name = "armor";
+                                }
+                            }
+                            const float damage = region *
+                                                 (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
                                                  std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.1f, 2.0f) /* (past a full blow, half as much again) */;
+                            LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f})", k == 0 ? "B" : "A", region_name, region);
                             *health = std::max(0.0f, *health - damage);
                             balance[1 - k] += force;
                             // The impact: both freeze for a moment, the view shakes, then the one hit
