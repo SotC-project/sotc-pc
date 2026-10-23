@@ -4361,6 +4361,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                              locked ? "locked into" : "leaning on");
                                     if (moves->retreat) {
                                         play(k, moves->retreat, Act::Retreat, 2500);
+                                        CvcPlayMotion(image, objects[k], moves->retreat, 0.12f); // (out quickly)
                                     } else {
                                         stand(k);
                                     }
