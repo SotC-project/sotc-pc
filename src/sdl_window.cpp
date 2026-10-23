@@ -2867,7 +2867,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const float f[4]{x, feet + 10.0f, z, 1.0f}, t[4]{x, feet - 60.0f, z, 1.0f};
                                 std::memcpy(from[i], f, 16), std::memcpy(to[i], t, 16), ignore[i] = b;
                             }
-                            const float pf[4]{pb[0], feet + 12.0f, pb[2], 1.0f}, pt[4]{spot.x, feet + 12.0f, spot.z, 1.0f};
+                            // (From 20 out toward it: past the host's own body and weapon, Argus's club.)
+                            const float sd = std::max(std::hypot(spot.x - pb[0], spot.z - pb[2]), 0.001f);
+                            const float pf[4]{pb[0] + (spot.x - pb[0]) / sd * 20.0f, feet + 12.0f,
+                                              pb[2] + (spot.z - pb[2]) / sd * 20.0f, 1.0f};
+                            const float pt[4]{spot.x, feet + 12.0f, spot.z, 1.0f};
                             std::memcpy(from[13], pf, 16), std::memcpy(to[13], pt, 16), ignore[13] = b;
                             if (!CvcProbeLines(14, from, to, ignore, hit)) {
                                 LOG_INFO(Core, "cvcplace: no line tests for open ground");
@@ -2925,7 +2929,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     // (from just above the floor: from 40 up, an overhang over Phaedra's canyon read as ground)
                                     const float down_from[4]{spot[0], feet + 10.0f, spot[2], 1.0f};
                                     const float down_to[4]{spot[0], feet - 60.0f, spot[2], 1.0f};
-                                    const float out_from[4]{pb[0], pb[1] + 12.0f, pb[2], 1.0f};
+                                    // (From 20 out: from the host's middle, the line toward Wander met Argus's own
+                                    // club 11 out, and Gaius went to the chasm's edge instead of the courtyard.)
+                                    const float out_from[4]{pb[0] + ux * 20.0f, pb[1] + 12.0f, pb[2] + uz * 20.0f, 1.0f};
                                     const float out_to[4]{spot[0] + ux * 20.0f, pb[1] + 12.0f, spot[2] + uz * 20.0f, 1.0f};
                                     std::memcpy(from[2 * i], down_from, 16), std::memcpy(to[2 * i], down_to, 16);
                                     std::memcpy(from[2 * i + 1], out_from, 16), std::memcpy(to[2 * i + 1], out_to, 16);
@@ -2948,7 +2954,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                          std::abs(ground - feet) < 8.0f;
                                     const float along = std::hypot(hit[2 * i + 1][0] - from[2 * i + 1][0],
                                                                    hit[2 * i + 1][2] - from[2 * i + 1][2]);
-                                    const bool clear = along > ring + 5.0f; // (to just past the spot: walled arenas)
+                                    const bool clear = along > ring - 20.0f + 5.0f; // (to just past the spot: walled arenas)
                                     open_count += floored && clear, floored_count += floored;
                                     const float score = (floored ? 2.0f : 0.0f) + (clear ? 2.0f : 0.0f) - (1.0f - (ux * dx + uz * dz));
                                     if (score > best) {
@@ -3651,6 +3657,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 for (const int j : {13 + 2 * k, 14 + 2 * k, 51 + 2 * k, 52 + 2 * k}) {
                                     const float *t = rays.to[j], *h = rays.hit[j];
                                     visible[k] &= std::hypot(h[0] - t[0], h[2] - t[2]) < 25.0f;
+                                    // (Stopped well above or below it, only on the colossus itself: Argus under
+                                    // its courtyard's bridge, the line stopped on the bridge, 25 across from it.)
+                                    if (std::abs(h[1] - t[1]) > 25.0f && a_points > 0 && a_points < body_points.size()) {
+                                        const bool to_a = j % 2 == 1;
+                                        float own = 1e9f;
+                                        for (size_t i = to_a ? 0 : a_points; i < (to_a ? a_points : body_points.size()); i++) {
+                                            const auto& bp = body_points[i];
+                                            own = std::min(own, std::hypot(bp[0] - h[0], bp[1] - h[1], bp[2] - h[2]));
+                                        }
+                                        visible[k] &= own < 10.0f;
+                                    }
                                     // ... and not through the other colossus: two of its bones within 5 of the
                                     // line, short of the last 15 % (Valus, half Gaius's height, was filmed from
                                     // behind Gaius for 40 s). Not after a knockout (both lines go to the loser,
@@ -4589,7 +4606,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     const auto attack = [&](int k) {
                         const Moves* moves = kind_of(k);
                         const auto& list = closest < 2.0f && !moves->close.empty() ? moves->close : moves->attacks;
-                        auto [motion, ms] = list[rng() % list.size()];
+                        // In turn, all of them (the user: Argus used one or two of its six).
+                        static size_t turn[2]{};
+                        auto [motion, ms] = list[turn[k]++ % list.size()];
                         // The other off to one side: the attack to that side, if it has one.
                         float cosine = 1.0f, side = 0.0f;
                         // (Its side slams bring its head down on the other; its middle one mostly lands
@@ -5246,7 +5265,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             const float damage = region *
                                                  (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
-                                                 std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.1f, 2.0f) /* (past a full blow, half as much again) */;
+                                                 // (At least half a full blow's: at 0.1, glancing blows did next to nothing
+                                                 // and a fight never ended, the user's verdict on a take.)
+                                                 std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.5f, 2.0f) /* (past a full blow, half as much again) */;
                             LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f})", k == 0 ? "B" : "A", region_name, region);
                             *health = std::max(0.0f, *health - damage);
                             balance[1 - k] += force;
