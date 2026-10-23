@@ -633,7 +633,7 @@ static void CvcInertiaWork(int k, u64 matrices, int count, float dt) {
         // (The further the motion puts it, the longer: Basaran's death motion moves its root 13.8, which
         // in 0.15 s still read as a jump; 0.15 s and 0.03 s a unit more, at most 0.7 s.)
         const float moved_by = std::hypot(move[k][0][0], move[k][0][1], move[k][0][2]);
-        fade[k] = std::min(0.15f + 0.03f * moved_by, 0.7f);
+        fade[k] = std::min(0.25f + 0.03f * moved_by, 0.7f); // (0.15 at least: a planted foot slid 0.8 a frame)
     } else {
         amount[k] *= std::exp(-dt / fade[k]);
     }
@@ -1571,8 +1571,12 @@ static void CvcBodyWork(u64 image) {
             std::scoped_lock guard{body.lock};
             // A blow's push dies away over about a third of a second (friction on the ground).
             const float keep = std::exp(-dt / 0.3f);
+            // Only a body that reels (flinching, going down, stepping back) is carried by it: a graze
+            // too light for a flinch slid a standing colossus 3 units with no step of its own.
+            const int act = g_cvc_act_now[k].load();
+            const bool reels = act == 4 || act == 5 || act == 7;
             for (int c = 0; c < 2; c++) {
-                delta[c * 2] = (body.push[c] + body.apart[c] + body.step[c]) * dt;
+                delta[c * 2] = ((reels ? body.push[c] : 0.0f) + body.apart[c] + body.step[c]) * dt;
                 body.push[c] *= keep;
                 if (std::abs(body.push[c]) < 0.05f) {
                     body.push[c] = 0.0f;
@@ -4370,16 +4374,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 // (Basaran rears up for 1.6 s before its slam comes down: it can come on under it.)
                                 const bool winding = Clock::now() < attack_from + std::chrono::milliseconds(moves->holds ? 1600 : 900) ||
                                                      (moves->charge && f.motion == moves->walk); // (a charge steers all the way)
-                                // Any attack driven 2.5 deep into the other for 0.15 s is stopped there by its
+                                // Any attack driven 2 deep into the other for 0.2 s is stopped there by its
                                 // body and recovers (Gaius's slam brought his body 3.9 into Quadratus's head
                                 // for half a second).
                                 {
                                     static Clock::time_point deep_at[2]{};
-                                    if (g_cvc_depth_now.load() <= 2.5f) {
+                                    if (g_cvc_depth_now.load() <= 2.0f) {
                                         deep_at[k] = {};
                                     } else if (deep_at[k] == Clock::time_point{}) {
                                         deep_at[k] = Clock::now();
-                                    } else if (Clock::now() > deep_at[k] + std::chrono::milliseconds(150) ||
+                                    } else if (Clock::now() > deep_at[k] + std::chrono::milliseconds(200) ||
                                                g_cvc_depth_now.load() > 3.0f) { // (3 deep: at once)
                                         deep_at[k] = {};
                                         // (Back off it: recovering in place, they stayed 3.5 inside each other
