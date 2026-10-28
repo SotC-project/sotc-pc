@@ -1079,6 +1079,10 @@ float g_cvc_hold_scale[2]{1.0f, 1.0f};
 u64 g_cvc_motion_back = 0; // image + 0x63665d: the motion update after its replaced prologue
 }
 static std::atomic<s64> g_cvc_hold_until[2]{}; // steady clock ticks the hit-stop lasts until
+// A quickening's full speed and when it began (0: none): it builds up over 0.4 s, its feet not dragged
+// along by a walk sped up at once (a 0.84-unit slide at a charge's start, gate 2026-10-23).
+static float g_cvc_quicken_to[2]{};
+static std::atomic<s64> g_cvc_quicken_from[2]{};
 
 extern "C" __attribute__((naked)) void CvcMotionThunk() {
     asm volatile("cmpq g_cvc_hold_obj(%rip), %rdi\n jne 1f\n"
@@ -1118,6 +1122,7 @@ static bool CvcInstallMotionHook(u64 image) {
 static void CvcHitStop(u64 a, u64 b, int ms, float scale) {
     const s64 until = (std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)).time_since_epoch().count();
     g_cvc_hold_scale[0] = scale, g_cvc_hold_scale[1] = scale;
+    g_cvc_quicken_to[0] = g_cvc_quicken_to[1] = 0.0f;
     g_cvc_hold_obj[0] = a, g_cvc_hold_obj[1] = b;
     g_cvc_hold_until[0] = until, g_cvc_hold_until[1] = until;
 }
@@ -1125,7 +1130,8 @@ static void CvcHitStop(u64 a, u64 b, int ms, float scale) {
 /// Plays one colossus's animation `scale` times as fast for `ms` milliseconds (a charge: its walk,
 /// quickened). A blow's hit-stop takes over both meanwhile.
 static void CvcQuicken(int k, u64 object, int ms, float scale) {
-    g_cvc_hold_scale[k] = scale, g_cvc_hold_obj[k] = object;
+    g_cvc_hold_scale[k] = 1.0f, g_cvc_hold_obj[k] = object, g_cvc_quicken_to[k] = scale;
+    g_cvc_quicken_from[k] = std::chrono::steady_clock::now().time_since_epoch().count();
     g_cvc_hold_until[k] = (std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)).time_since_epoch().count();
 }
 
@@ -1605,7 +1611,10 @@ static void CvcBodyWork(u64 image) {
     const s64 now = Clock::now().time_since_epoch().count();
     for (int k = 0; k < 2; k++) {
         if (g_cvc_hold_obj[k] && now > g_cvc_hold_until[k].load()) {
-            g_cvc_hold_obj[k] = 0, g_cvc_hold_scale[k] = 1.0f;
+            g_cvc_hold_obj[k] = 0, g_cvc_hold_scale[k] = 1.0f, g_cvc_quicken_to[k] = 0.0f;
+        } else if (g_cvc_hold_obj[k] && g_cvc_quicken_to[k] > 0.0f) {
+            const float ramp = std::chrono::duration<float>(Clock::duration(now - g_cvc_quicken_from[k].load())).count() / 0.4f;
+            g_cvc_hold_scale[k] = 1.0f + (g_cvc_quicken_to[k] - 1.0f) * std::clamp(ramp, 0.0f, 1.0f);
         }
     }
     for (int k = 0; k < 2; k++) {
@@ -2169,24 +2178,30 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         std::vector<Step> out;
         // "@<path>": the script is in that file (Windows caps an environment variable at 32 KB).
         std::string text = std::getenv("SOTC_SCRIPT");
+        int guest = 2;
         if (text.starts_with("@res:")) {
             // A script built into the program (the Free Play colossus-vs-colossus battle).
-            // "?host=N": Gaius against that colossus, in its arena, instead of Basaran.
+            // "?host=N": Gaius against that colossus, in its arena, instead of Basaran; "&guest=N":
+            // that colossus brought in instead of Gaius (the program started with +boss=N).
             int host = 8;
+            if (const auto g = text.find("&guest="); g != std::string::npos) {
+                guest = std::atoi(text.c_str() + g + 7);
+                text.resize(g);
+            }
             if (const auto q = text.find("?host="); q != std::string::npos) {
                 host = std::atoi(text.c_str() + q + 6);
                 text.resize(q);
             }
             const auto file = cmrc::res::get_filesystem().open("src/resources/" + text.substr(5));
             text.assign(file.begin(), file.end());
-            if (host != 8) {
+            if (host != 8 || guest != 2) {
                 const auto replace_all = [&](const std::string& from, const std::string& to) {
                     for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size()) {
                         text.replace(at, from.size(), to);
                     }
                 };
                 replace_all(":poke=325e8b4:8,", fmt::format(":poke=325e8b4:{},", host));
-                replace_all("cvctarget=238#0:238#1:2:8", fmt::format("cvctarget=238#0:238#1:2:{}", host));
+                replace_all("cvctarget=238#0:238#1:2:8", fmt::format("cvctarget=238#0:238#1:{}:{}", guest, host));
                 replace_all("cvcplace=55@930/-900+230", "cvcplace=55"); // (Basaran's open ground)
             }
         } else if (text.starts_with('@')) {
@@ -2199,7 +2214,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
         std::stringstream ss{text};
         for (std::string item; std::getline(ss, item, ',');) {
             const auto colon = item.find(':');
-            out.push_back({std::stod(item.substr(0, colon)), item.substr(colon + 1)});
+            std::string action = item.substr(colon + 1);
+            if (guest != 2 && action.find(":pokeb=3026330>") != std::string::npos) {
+                // Gaius's packages pinned for the jump: another guest pins whatever is loaded, once
+                // (re/cvc_arena.sh's pinloaded).
+                if (action.find(">f8:+1") == std::string::npos) {
+                    continue;
+                }
+                action = action.substr(0, action.find("pokeb=")) + "pinloaded";
+            }
+            out.push_back({std::stod(item.substr(0, colon)), action});
         }
         // Steps run in order, one per tick: a step listed after a later one would wait for it.
         std::stable_sort(out.begin(), out.end(),
@@ -4255,6 +4279,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // or the body thrown about itself, reaching only what is against it).
                         std::vector<std::pair<u64, int>> close = {};
                         float least = 0.0f; // the impulse its blow needs (0: by its swing speed)
+                        // Its threats and roars: one now and then after a blow of its own lands (the user:
+                        // taunts between exchanges).
+                        std::vector<u64> taunts = {};
+                        // Its ground pounds (stomps, slams; any part): one that comes down near the other
+                        // without striking it shakes it off its stance all the same (a shockwave).
+                        std::vector<u64> pounds = {};
                     };
                     static const std::unordered_map<int, Moves> kinds{
                         // Gaius: Knight_attack_1 (slam), _2; chest / belly, head / face, back / neck
@@ -4275,7 +4305,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // (no knockdown: Knight_fall's own effects crash the game's effect update,
                              // 0x693f57); Knight_Search
                              // (close in: his right / left arm and body swings, his shake-offs)
-                             {}, {0x1d38ed0}, 1.0f, 0.0f, false, 0.0f, {{0x1d3c1b0, 2500}, {0x1d3c400, 2500}, {0x1d3bf60, 3000}}}}, // a wide sword sweep
+                             // (Knight_Search, looking about: his taunt)
+                             {}, {0x1d38ed0}, 1.0f, 0.0f, false, 0.0f, {{0x1d3c1b0, 2500}, {0x1d3c400, 2500}, {0x1d3bf60, 3000}},
+                             0.0f, {0x1d38ed0}, {0x1d3a5f0, 0x1d3a840}}}, // a wide sword sweep; his slam a pound
                         // Basaran: hand attacks (slow slams); Turtle_shudder; Turtle_walking_1;
                         // Turtle_Standing_left/right_rotation_1; Turtle_Standing; no stepping back (out
                         // in the field it is held to its spot: Turtle_retreat_1 slid it off, then the game
@@ -4292,7 +4324,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // Turtle_overturn_the_beginning_(right) > turned_over_the_first_two > turned_over >
                              // overturned_loop (3 s on its back) > flip_over_stop_1 > _2; Turtle_Standing_1, _2
                              {{0x1d56640, 0}, {0x1d56890, 0}, {0x1d56f80, 0}, {0x1d571d0, 3000}, {0x1d57420, 0}, {0x1d57670, 0}},
-                             {0x1d545e0, 0x1d54830}, 4.0f}},
+                             {0x1d545e0, 0x1d54830}, 4.0f, 0.0f, false, 0.0f, {}, 0.0f, {},
+                             {0x1d59230, 0x1d59480, 0x1d596d0, 0x1d59920, 0x1d59b70, 0x1d59dc0, 0x1d5a010}}}, // (its slams pound)
                         // Phaedra (Kirin): right / left foot attack_1 (stomps); chest (before), head
                         // (small), chest behind right / left damage; Kirin_walking_loop; Standing left /
                         // right rotation; Kirin_Tachi (standing); Kirin_recession. Its root faces along -z
@@ -4307,7 +4340,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              250.0f, 0x1ce2990, -1.0f, -2, 0x1ce24f0, 0x1ce22a0, 8.0f, 0x1ce1e00, 0x1ce32d0, 1.0f, 0.85f, 8.0f, false, 0, 0,
                              // (angle 12: met head on, only its neck touches him; from beside, its forelegs;
                              // at 20 its neck went into him, 4 deep)
-                             {}, false, {}, {}, 1.5f, 12.0f, false, 0.0f, {{0x1ce7390, 3000}, {0x1ce75e0, 3000}}}},
+                             {}, false, {}, {}, 1.5f, 12.0f, false, 0.0f, {{0x1ce7390, 3000}, {0x1ce75e0, 3000}},
+                             0.0f, {0x1ce7140}, {0x1ce3c10, 0x1ce4c40}}}, // (Kirin_threat; its stomps pound)
                         // Valus (Minotaur): right / left foot attack (stomps), club_attack_2A (its club
                         // brought down, 2A > 2B > 2C > 2D > 2E); right / left chest, head, back damage;
                         // walking_loop_1; Standing left / right rotation; Standing; recession. Its root
@@ -4327,16 +4361,26 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // (angle 12: met head on, its arms swing beside him; from beside, into him)
                              false, {}, {}, 1.4f, 12.0f, false, 0.0f,
                              {{0x1d0bee0, 2500}, {0x1d0c130, 2500}, {0x1d0ba40, 2500}, {0x1d0bc90, 2500}, {0x1d0c380, 2500}, {0x1d0c5d0, 2500}},
-                             400.0f}},
+                             400.0f, {0x1d0aa10}, {0x1d08510, 0x1d08760, 0x1d089b0, 0x1d08e50, 0x1d0c380, 0x1d0c5d0}}}, // (its head shaking: its taunt; club and foot swings pound)
                         // Argus (Minotaur_C): as Valus, its own set; heart damage among the front ones.
                         // (And its special and both-feet stomps, and right / left arm swings.)
-                        {14, {{{0x1cf04e0, 4000}, {0x1cf0730, 4000}, {0x1cf1510, 7000}, {0x1cf0980, 4000}, {0x1cf0bd0, 4000},
-                              {0x1cf12c0, 4000}},
+                        // (And its intimidation attack (high): introduction > attack > quit, a blow brought down
+                        // from overhead.)
+                        // (Its stomps come down 2-5 ahead of its root, Gaius 22-29 ahead: from 5-8 apart 0 of 11
+                        // blows landed (gate 2026-10-23). As Valus: strike from against him, swing 8, least 400,
+                        // at an angle; its club, overhead blow and shake-offs, its stomps close in.)
+                        {14, {{{0x1cf1510, 7000}, {0x1cfa220, 6000}, {0x1cf5f10, 2500}, {0x1cf6160, 2500}, {0x1cf63b0, 2500},
+                              {0x1cf6600, 2500}, {0x1cf04e0, 4000}, {0x1cf0730, 4000}},
                               {0x1cf7d20, 0x1cf7f70}, {0x1cf7630}, {0x1cf8660},
-                              // (swing 25: its stomps and club come down slow and heavy)
-                              250.0f, 0x1cef010, 6.0f, 1, 0x1ceeb70, 0x1cee920, 25.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
-                              {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0}},
-                              false, {}, {}, 2.0f, 0.0f, false, 15.0f, {{0x1cf63b0, 2500}, {0x1cf6600, 2500}}}},
+                              250.0f, 0x1cef010, -1.0f, 1, 0x1ceeb70, 0x1cee920, 8.0f, 0x1cee480, 0x1cefdf0, 3.0f, 0.85f, 10.0f, false, 0, 0,
+                              {{0x1cf1510, 0x1cf19b0}, {0x1cf19b0, 0x1cf1c00}, {0x1cf1c00, 0x1cf1e50}, {0x1cf1e50, 0x1cf20a0},
+                               {0x1cfa220, 0x1cfa470}, {0x1cfa470, 0x1cfa6c0}},
+                              false, {}, {}, 2.0f, 12.0f, false, 15.0f,
+                              {{0x1cf63b0, 2500}, {0x1cf6600, 2500}, {0x1cf5f10, 2500}, {0x1cf6160, 2500}, {0x1cf0980, 4000},
+                               {0x1cf0bd0, 4000}, {0x1cf12c0, 4000}},
+                              400.0f, {0x1cf4ee0, 0x1cf4c90},
+                              {0x1cf04e0, 0x1cf0730, 0x1cf0980, 0x1cf0bd0, 0x1cf12c0, 0x1cf19b0, 0x1cf1c00, 0x1cf1e50, 0x1cf20a0, 0x1cfa470}}},
+                              // (its head shaking and its anger: its taunts; stomps, club and overhead blow pound)
                         // Quadratus (Boss_A): right arm attack started > attack > stop, left arm attack >
                         // stop (foreleg stomps); no damage motions: its shudder, head swing for the head;
                         // walk; left / right rotation; Standing; recession. Its root faces along -z.
@@ -4351,7 +4395,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                              // the other at 5-17 units/s, its head counted as a limb; aim 0.7: from one side)
                              250.0f, 0x1d61590, 12.0f, -2, 0x1d60ea0, 0x1d60c50, 6.0f, 0x1d607b0, 0x1d61ed0, 1.4f, 0.7f, 8.0f, false, 0, 0,
                              {{0x1d62810, 0x1d62cb0}, {0x1d62f00, 0x1d633a0}}, false, {}, {}, 2.5f, 10.0f, true, 0.0f,
-                             {{0x1d63a90, 2500}, {0x1d63ce0, 2500}}}}, // (close in: its foreleg swings)
+                             {{0x1d63a90, 2500}, {0x1d63ce0, 2500}, {0x1d63840, 2500}, {0x1d63f30, 2500}, {0x1d64180, 2500}},
+                             0.0f, {0x1d62370}, {0x1d62810, 0x1d62cb0, 0x1d62f00, 0x1d633a0}}}, // (its stomps pound; close in: its foreleg, head and hind leg swings; A_boss_anger its roar)
                         // Cenobia (Cerberus): close range attack started (right) / beginning (left) >
                         // its attack, and (vertical); back_damage for all; walk_1_loop; Standing Fast
                         // left / right rotation; Standing; no stepping back. Its root faces along +z.
@@ -4381,10 +4426,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
+                    static bool shook = false; // this attack's ground pound has shaken the other
                     // Balance lost to blows (impulses add up, it drains back slowly, 0.04 a second); past 1.8 (two full blows close together)
                     // the colossus loses its footing (Basaran overturns, Gaius staggers far).
                     static float balance[2]{};
                     static Clock::time_point balance_at = Clock::now();
+                    static const Clock::time_point brawl_from = Clock::now(); // (the fight's setup)
                     {
                         const float elapsed = std::chrono::duration<float>(Clock::now() - balance_at).count();
                         balance_at = Clock::now();
@@ -4570,7 +4617,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         const Moves* moves = kind_of(k);
                         const bool was_attacking = fighter[k].act == Act::Attack;
-                        if (moves && !moves->idles.empty() && rng() % 100 < 30) {
+                        if (moves && !moves->taunts.empty() && was_attacking && attacking == k && landed && rng() % 100 < 45) {
+                            play(k, moves->taunts[rng() % moves->taunts.size()], Act::Idle, 3500);
+                            next_attack = Clock::now() + std::chrono::milliseconds(3500);
+                            LOG_INFO(Core, "cvcbrawl: {} taunts", k ? "B" : "A");
+                        } else if (moves && !moves->idles.empty() && rng() % 100 < 30) {
                             play(k, moves->idles[rng() % moves->idles.size()], Act::Idle, 0); // now and then, another stance
                         } else if (moves && moves->idle) {
                             play(k, moves->idle, Act::Idle, 0);
@@ -4600,15 +4651,36 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                          std::hypot(it[0] - target_root[0], it[2] - target_root[1]), int(fighter[1 - k].act));
                             }
                             attacking = -1;
-                            next_attack = Clock::now() + std::chrono::milliseconds(400 + rng() % 700);
+                            next_attack = std::max(next_attack, Clock::now() + std::chrono::milliseconds(400 + rng() % 700)); // (a taunt's own wait kept)
                         }
                     };
                     const auto attack = [&](int k) {
                         const Moves* moves = kind_of(k);
-                        const auto& list = closest < 2.0f && !moves->close.empty() ? moves->close : moves->attacks;
-                        // In turn, all of them (the user: Argus used one or two of its six).
-                        static size_t turn[2]{};
-                        auto [motion, ms] = list[turn[k]++ % list.size()];
+                        // Any of its moves is possible, chosen by the situation (the user: Argus used one or
+                        // two of its six): its shake-offs three times as likely when the bodies are
+                        // against each other (else less than half as likely), its blows twice as likely on
+                        // an opponent reeling, flinching or down (a follow-up).
+                        const Act other_act = fighter[1 - k].act;
+                        const bool reeling = other_act == Act::Flinch || other_act == Act::Retreat || other_act == Act::Down;
+                        std::vector<std::pair<std::pair<u64, int>, float>> options;
+                        for (const auto& m : moves->attacks) {
+                            options.push_back({m, reeling ? 2.0f : 1.0f});
+                        }
+                        for (const auto& m : moves->close) {
+                            options.push_back({m, closest < 2.0f ? 3.0f : 0.4f});
+                        }
+                        float total = 0.0f;
+                        for (const auto& o : options) {
+                            total += o.second;
+                        }
+                        float pick = float(rng() % 10000) / 10000.0f * total;
+                        auto [motion, ms] = options.front().first;
+                        for (const auto& o : options) {
+                            if ((pick -= o.second) <= 0.0f) {
+                                motion = o.first.first, ms = o.first.second;
+                                break;
+                            }
+                        }
                         // The other off to one side: the attack to that side, if it has one.
                         float cosine = 1.0f, side = 0.0f;
                         // (Its side slams bring its head down on the other; its middle one mostly lands
@@ -4626,8 +4698,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         } else {
                             play(k, motion, Act::Attack, 12000);
                         }
-                        attacking = k, landed = false, attack_from = Clock::now();
+                        attacking = k, landed = false, shook = false, attack_from = Clock::now();
                         g_cvc_gap = 1e9f;
+                        // The other, standing, now and then steps back out of it (a dodge).
+                        if (const Moves* other = kind_of(1 - k); other && other->retreat && fighter[1 - k].act == Act::Idle &&
+                                                                  rng() % 100 < 20) {
+                            play(1 - k, other->retreat, Act::Retreat, 1500);
+                            LOG_INFO(Core, "cvcbrawl: {} steps back from it (a dodge)", k ? "A" : "B");
+                        }
                         {
                             const float* me = k ? (const float*)rb : (const float*)ra;
                             const float* it = k ? (const float*)ra : (const float*)rb;
@@ -4724,6 +4802,17 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             attack(k);
                         }
                     };
+                    // A counter: just recovered from a flinch or a step back, facing the other and near,
+                    // now and then it answers at once (nobody attacking), out of turn.
+                    const auto counter = [&](int k) {
+                        const Moves* moves = kind_of(k);
+                        float cosine = 0.0f, side = 0.0f;
+                        if (attacking < 0 && moves && !moves->attacks.empty() && rng() % 100 < 35 && face(k, cosine, side) &&
+                            cosine > 0.8f && std::hypot(ra[0] - rb[0], ra[2] - rb[2]) < moves->reach) {
+                            LOG_INFO(Core, "cvcbrawl: {} counters", k ? "B" : "A");
+                            engage(k);
+                        }
+                    };
                     // Where an attacker's bones come down (test aid): each bone's lowest point during its
                     // attack, in its own frame (ahead, to its left) from its root; logged at the end.
                     if (attacking >= 0 && fighter[attacking].act == Act::Attack && !now[attacking].empty()) {
@@ -4744,6 +4833,52 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 if (now[k][i][1] < landing[i][2]) {
                                     const float dx = now[k][i][0] - me[0], dz = now[k][i][2] - me[2];
                                     landing[i] = {dx * fx + dz * fz, fx * dz - fz * dx, now[k][i][1]};
+                                }
+                            }
+                        }
+                        // A ground pound: a bone raised 4 above its planted foot comes down fast to the
+                        // ground; within 18 of the other (and no blow of it landed), the other staggers.
+                        static std::vector<float> was_y, raised;
+                        static u64 pound_of = 0;
+                        if (pound_of != fighter[k].motion + u64(k)) {
+                            pound_of = fighter[k].motion + u64(k), was_y.clear(), raised.clear();
+                        }
+                        // (Not in its first 0.6 s: crossfading in from its stance, bones held high came
+                        // down at once, and the other staggered into the blade, 4 deep.)
+                        if (moves && Clock::now() > attack_from + std::chrono::milliseconds(600) &&
+                            std::find(moves->pounds.begin(), moves->pounds.end(), fighter[k].motion) != moves->pounds.end()) {
+                            float ground = 1e9f;
+                            for (const auto& b : now[k]) {
+                                ground = std::min(ground, b[1]);
+                            }
+                            was_y.resize(now[k].size(), 1e9f), raised.resize(now[k].size(), 0.0f);
+                            for (size_t i = 0; i < now[k].size() && !landed && !shook; i++) {
+                                const float y = now[k][i][1], before = was_y[i];
+                                was_y[i] = y;
+                                if (y > ground + 4.0f) {
+                                    raised[i] = 1.0f;
+                                } else if (raised[i] > 0.0f && y < ground + 1.5f && before - y > 0.3f) {
+                                    float apart = 1e9f;
+                                    for (const auto& b : now[1 - k]) {
+                                        apart = std::min(apart, std::hypot(b[0] - now[k][i][0], b[2] - now[k][i][2]));
+                                    }
+                                    raised[i] = 0.0f;
+                                    if (apart > 18.0f) {
+                                        continue;
+                                    }
+                                    shook = true;
+                                    const float at[3]{now[k][i][0], ground, now[k][i][2]};
+                                    CvcEffect("npe/player_stone_dust.npe", at);
+                                    CvcEffect("npe/knight_shockwave_add.npe", at);
+                                    const Moves* other = kind_of(1 - k);
+                                    const Act act = fighter[1 - k].act;
+                                    if (other && !other->front.empty() && (act == Act::Idle || act == Act::Walk || act == Act::Turn)) {
+                                        const u64 flinch = other->front[rng() % other->front.size()];
+                                        play(1 - k, flinch, Act::Flinch, 4000);
+                                        LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other: it staggers", k ? "B" : "A", apart);
+                                    } else {
+                                        LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other", k ? "B" : "A", apart);
+                                    }
                                 }
                             }
                         }
@@ -4901,7 +5036,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                         CvcPlayMotion(image, objects[k], next->second, 0.2f);
                                         f.motion = next->second, f.since = Clock::now();
                                         f.until = Clock::now() + std::chrono::seconds(6);
+                                    } else if (static int combo[2]{}; !landed && closest < 3.0f && combo[k] == 0 && rng() % 100 < 35) {
+                                        // A combo: missed with the other still against it, another attack at once
+                                        // (one in a row).
+                                        combo[k] = 1;
+                                        LOG_INFO(Core, "cvcbrawl: {} follows up (a combo)", k ? "B" : "A");
+                                        attack(k);
                                     } else {
+                                        combo[k] = 0;
                                         stand(k);
                                     }
                                 }
@@ -5018,12 +5160,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                         LOG_INFO(Core, "cvcbrawl: {} steps back", k ? "B" : "A");
                                     } else {
                                         stand(k);
+                                        counter(k);
                                     }
                                 }
                                 break;
                             case Act::Retreat:
                                 if (played(k)) {
                                     stand(k);
+                                    counter(k);
                                 }
                                 break;
                             case Act::Down:
@@ -5268,8 +5412,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                  // (At least half a full blow's: at 0.1, glancing blows did next to nothing
                                                  // and a fight never ended, the user's verdict on a take.)
                                                  std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.5f, 2.0f) /* (past a full blow, half as much again) */;
-                            LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f})", k == 0 ? "B" : "A", region_name, region);
-                            *health = std::max(0.0f, *health - damage);
+                            // The fight wears on: past a minute, blows hurt more, twice as much 30 s later; past
+                            // three minutes any blow that lands is the last (the user: every fight must end;
+                            // at the slower ramp Argus and Gaius were both still standing at 4 minutes).
+                            const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
+                            const float wearing = fought > 180.0f ? 1e6f : 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
+                            LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f}, worn x{:.1f})", k == 0 ? "B" : "A", region_name,
+                                     region, wearing);
+                            *health = std::max(0.0f, *health - damage * wearing);
                             balance[1 - k] += force;
                             // The impact: both freeze for a moment, the view shakes, then the one hit
                             // flinches (one of its own, by where the blow landed: the head, from

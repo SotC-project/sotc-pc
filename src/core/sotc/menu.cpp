@@ -76,14 +76,30 @@ bool all_items = true;
 bool no_damage = false;
 bool unlimited_grip = false;
 bool max_damage = false;
-bool versus = false; // colossus vs colossus: watch Gaius fight another colossus
-// The colossi Gaius can be watched fighting, each in its own arena (boss table index): only pairs
-// whose fights pass re/cvc/quality.py (no snapping, deforming, locking or clipping) are offered.
-// In the game's order; Basaran first. (Valus and Phaedra pass the gate but not on film: the camera
-// went through rock on Valus's plateau and filmed Phaedra's fight through trees, which have no
-// collision for its line tests.)
-constexpr int VersusOpponents[]{1, 8, 14};
-int versus_opponent = 1;
+bool versus = false; // colossus vs colossus: watch two colossi fight
+// The battles that can be watched (boss table indices): the colossus brought in, then the one whose
+// arena it is. Only pairs whose fights pass re/cvc/quality.py (no snapping, deforming, locking or
+// clipping; a knockout) are offered. Gaius against Basaran first.
+constexpr std::pair<int, int> VersusPairs[]{{2, 8}, {2, 0}, {2, 1}, {2, 3}, {2, 14}, {14, 2}};
+int versus_first = 2; // the colossus chosen first (either of the pair)
+int versus_pair = 0;
+// The other colossus of the pair chosen.
+int VersusSecond() {
+    const auto [guest, host] = VersusPairs[versus_pair];
+    return guest == versus_first ? host : guest;
+}
+// The next pair (direction 1 or -1) among those `keep` accepts, from the one chosen.
+template <typename Keep>
+void VersusStep(int direction, Keep keep) {
+    constexpr int count = int(std::size(VersusPairs));
+    for (int i = 1; i <= count; i++) {
+        const int at = (versus_pair + direction * i + count * count) % count;
+        if (keep(VersusPairs[at])) {
+            versus_pair = at;
+            return;
+        }
+    }
+}
 
 constexpr std::array<const char*, 3> Difficulties{"Easy", "Normal", "Hard"};
 constexpr std::array<const char*, 3> DifficultyIds{"easy", "normal", "hard"};
@@ -175,9 +191,10 @@ void StartBattle() {
         // Colossus vs colossus: Gaius's arena start, then the battle script built into the program
         // (re/cvc_arena.sh PRODUCT=), for the chosen opponent (?host=): Gaius is brought to its
         // arena, they fight and the camera follows; Wander (unhurt) only watches.
-        Relaunch("+nointro +skipSplash=true +boss=2 +shadow_noDamage=true "
-                 "+shadow_disableCameraAutoCenter=true",
-                 "", fmt::format("@res:cvc_gaius_vs_basaran.txt?host={}", VersusOpponents[versus_opponent]));
+        const auto [guest, host] = VersusPairs[versus_pair];
+        Relaunch(fmt::format("+nointro +skipSplash=true +boss={} +shadow_noDamage=true "
+                             "+shadow_disableCameraAutoCenter=true", guest),
+                 "", fmt::format("@res:cvc_gaius_vs_basaran.txt?host={}&guest={}", host, guest));
         return;
     }
     std::string args = fmt::format("+nointro +skipSplash=true +boss={}", colossus);
@@ -656,18 +673,39 @@ std::vector<Row> BuildRows() {
         rows.push_back({"Colossus vs Colossus", OnOff(versus), "Watch two colossi fight each other",
                         true, true, [](int) { versus = !versus; }});
         if (versus) {
-            constexpr int count = int(std::size(VersusOpponents));
-            const int host = VersusOpponents[versus_opponent];
-            rows.push_back({"First Colossus", fmt::format("3. {}", Challenge::ColossusName(3)),
-                            "Brought into the second colossus's arena", true, false, [](int) {}});
-            rows.push_back({"Second Colossus",
-                            fmt::format("{}. {}", host + 1, Challenge::ColossusName(host + 1)),
-                            "Choose the colossus Gaius fights", true, count > 1, [step](int d) {
-                                versus_opponent = (versus_opponent + step(d) + count) % count;
+            const int second = VersusSecond();
+            const int host = VersusPairs[versus_pair].second;
+            const auto with = [](int a, int b) {
+                return [a, b](const std::pair<int, int>& p) {
+                    return (p.first == a && p.second == b) || (p.first == b && p.second == a);
+                };
+            };
+            // (Each row steps through what the pairs offer: another first colossus, another
+            // opponent for it, the other's arena.)
+            rows.push_back({"First Colossus", fmt::format("{}. {}", versus_first + 1, Challenge::ColossusName(versus_first + 1)),
+                            "Choose the first colossus", true, true, [step](int d) {
+                                // Every colossus in a pair, in the game's order; its first pair.
+                                std::vector<int> all;
+                                for (const auto& [guest, host] : VersusPairs) {
+                                    all.push_back(guest), all.push_back(host);
+                                }
+                                std::sort(all.begin(), all.end());
+                                all.erase(std::unique(all.begin(), all.end()), all.end());
+                                const int at = int(std::find(all.begin(), all.end(), versus_first) - all.begin());
+                                versus_first = all[(at + step(d) + int(all.size())) % all.size()];
+                                versus_pair = int(std::find_if(std::begin(VersusPairs), std::end(VersusPairs), [](const auto& p) {
+                                                      return p.first == versus_first || p.second == versus_first;
+                                                  }) - std::begin(VersusPairs));
                             }});
-            rows.push_back({"Arena", Challenge::ColossusName(host + 1),
-                            "The battle is fought where the second colossus lives", true, false,
-                            [](int) {}});
+            rows.push_back({"Second Colossus", fmt::format("{}. {}", second + 1, Challenge::ColossusName(second + 1)),
+                            "Choose the colossus it fights", true, true, [step](int d) {
+                                const int first = versus_first, second = VersusSecond();
+                                VersusStep(step(d), [first, second](const std::pair<int, int>& p) {
+                                    return (p.first == first || p.second == first) && p.first != second && p.second != second;
+                                });
+                            }});
+            rows.push_back({"Arena", Challenge::ColossusName(host + 1), "Choose whose arena the battle is fought in", true,
+                            true, [step, with](int d) { VersusStep(step(d), with(versus_first, VersusSecond())); }});
             rows.push_back({"Begin Battle", "", "The game restarts and loads the battle", true, false,
                             [](int d) {
                                 if (d == 0) {
