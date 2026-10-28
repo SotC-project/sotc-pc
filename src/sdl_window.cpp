@@ -4875,7 +4875,18 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     if (other && !other->front.empty() && (act == Act::Idle || act == Act::Walk || act == Act::Turn)) {
                                         const u64 flinch = other->front[rng() % other->front.size()];
                                         play(1 - k, flinch, Act::Flinch, 4000);
-                                        LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other: it staggers", k ? "B" : "A", apart);
+                                        // (It hurts too, a twelfth of its health, worn on as blows are, never the
+                                        // last of it: Gaius's slams fell short of Argus all fight and only
+                                        // shook it.)
+                                        auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
+                                        const float full = *reinterpret_cast<const float*>(managers[1 - k] + 0x4c);
+                                        const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
+                                        const float wearing = 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
+                                        if (*health > 1.0f && full > 0.0f) {
+                                            *health = std::max(1.0f, *health - full / 12.0f * wearing);
+                                        }
+                                        LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other: it staggers, health {:.0f}",
+                                                 k ? "B" : "A", apart, *health);
                                     } else {
                                         LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other", k ? "B" : "A", apart);
                                     }
@@ -4952,7 +4963,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                              locked ? "locked into" : "leaning on");
                                     if (moves->retreat) {
                                         play(k, moves->retreat, Act::Retreat, 2500);
-                                        CvcPlayMotion(image, objects[k], moves->retreat, 0.12f); // (out quickly)
+                                        // (Out quickly when inside it; leaning, over 0.4 s: from Argus's club swing
+                                        // in 0.12 s its body swung 1.8 rad round, the quality log's turn.)
+                                        CvcPlayMotion(image, objects[k], moves->retreat, locked ? 0.12f : 0.4f);
                                     } else {
                                         stand(k);
                                     }
@@ -5413,10 +5426,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                                  // and a fight never ended, the user's verdict on a take.)
                                                  std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.5f, 2.0f) /* (past a full blow, half as much again) */;
                             // The fight wears on: past a minute, blows hurt more, twice as much 30 s later; past
-                            // three minutes any blow that lands is the last (the user: every fight must end;
-                            // at the slower ramp Argus and Gaius were both still standing at 4 minutes).
+                            // three minutes a blow takes half its full health at least, past four any blow that
+                            // lands is the last (the user: every fight must end; at the slower ramp Argus and
+                            // Gaius were both still standing at 4 minutes; at three, a graze ended it from full).
                             const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
-                            const float wearing = fought > 180.0f ? 1e6f : 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
+                            const float full = *reinterpret_cast<const float*>(managers[1 - k] + 0x4c);
+                            const float wearing = fought > 240.0f ? 1e6f
+                                                  : fought > 180.0f ? std::max(1.0f + (fought - 60.0f) / 30.0f, 0.5f * full / std::max(damage, 0.01f))
+                                                                    : 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
                             LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f}, worn x{:.1f})", k == 0 ? "B" : "A", region_name,
                                      region, wearing);
                             *health = std::max(0.0f, *health - damage * wearing);
@@ -5562,7 +5579,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const Moves* moves = kind_of(k);
                                 const auto left = fighter[k].act == Act::Idle ? Clock::duration{}
                                                                               : std::max(Clock::duration{}, fighter[k].until - Clock::now());
-                                if (moves && moves->idle) {
+                                if (moves && moves->idle && moves->retreat && closest < 6.0f) {
+                                    // Against the loser: it steps back from the body as it falls (Gaius's
+                                    // death fell 3.6 into Argus for half a second), then stands.
+                                    CvcPlayMotion(image, objects[k], moves->retreat, 0.4f);
+                                    std::thread([image, winner = objects[k], idle = moves->idle] {
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+                                        CvcPlayMotion(image, winner, idle, 0.5f);
+                                    }).detach();
+                                } else if (moves && moves->idle) {
                                     std::thread([image, winner = objects[k], idle = moves->idle,
                                                  wait = std::min(left, Clock::duration(std::chrono::seconds(6)))] {
                                         std::this_thread::sleep_for(wait + std::chrono::milliseconds(200));
