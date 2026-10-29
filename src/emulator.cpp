@@ -700,6 +700,28 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         LOG_CRITICAL(Loader, "Failed to load game's eboot.bin: {}", guest_eboot_path);
         std::quick_exit(0);
     }
+#ifdef _WIN32
+    if (id == "CUSA08809") {
+        // The game's CP3 heap: 100 MiB (LoaderSysGetMemoryInfo, its size at 0x55fdbe and 0x55fe2e),
+        // 200 here: a colossus-vs-colossus fight in Quadratus's arena starts it 73 % full and its
+        // spikes ran it out ("Out of CP3 Memory!"); the PC has the memory to spare.
+        const auto* module = linker->GetModule(0);
+        const u64 image = module ? module->GetBaseAddress() : 0;
+        static constexpr u8 expected[5]{0xbe, 0x00, 0x00, 0x40, 0x06}; // mov esi, 0x6400000
+        for (const u64 at : {0x55fdbeull, 0x55fe2eull}) {
+            auto* code = reinterpret_cast<u8*>(image + at);
+            if (!image || std::memcmp(code, expected, 5) != 0) {
+                LOG_WARNING(Loader, "CP3 heap size not at {:#x}: left as it is", at);
+                continue;
+            }
+            DWORD old = 0;
+            VirtualProtect(code, 5, PAGE_EXECUTE_READWRITE, &old);
+            code[3] = 0x80, code[4] = 0x0c; // 0x0c800000
+            VirtualProtect(code, 5, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), code, 5);
+        }
+    }
+#endif
 
 #ifdef ENABLE_DISCORD_RPC
     // Discord RPC

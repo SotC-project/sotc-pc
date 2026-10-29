@@ -1361,6 +1361,13 @@ static u64 CvcFindEffect(u64 image, std::string_view name, bool list = false, u6
     return 0;
 }
 
+/// Effects started and not yet ended (the bridge's completion callback, called as the game frees
+/// one): a fight's game heap ran out with 40 of them started (test aid, in the log).
+static std::atomic<int> g_cvc_fx_live{0};
+static void PS4_SYSV_ABI CvcEffectDone(u64) {
+    g_cvc_fx_live--;
+}
+
 /// Starts a requested effect through the game's effect bridge (re/cvc/fx/SHAKE_PARTICLES.md):
 /// 0x5f5930 builds its transform, 0x690950 starts it; the game ends it itself.
 static void CvcEffectWork(u64 image, const char* name, const float* at, float yaw) {
@@ -1376,8 +1383,12 @@ static void CvcEffectWork(u64 image, const char* name, const float* at, float ya
     reinterpret_cast<void(PS4_SYSV_ABI*)(void*, const float*, const float*)>(image + 0x5f5930)(transform, rotation,
                                                                                               position);
     const u64 effect = reinterpret_cast<u64(PS4_SYSV_ABI*)(u64, const void*, u64, u64)>(image + 0x690950)(
-        live, transform, 0, 0);
-    LOG_INFO(Core, "cvc: effect {} at {:.0f} {:.0f} {:.0f}: {:#x}", name, at[0], at[1], at[2], effect);
+        live, transform, reinterpret_cast<u64>(&CvcEffectDone), 0);
+    if (effect) {
+        g_cvc_fx_live++;
+    }
+    LOG_INFO(Core, "cvc: effect {} at {:.0f} {:.0f} {:.0f}: {:#x} ({} live)", name, at[0], at[1], at[2], effect,
+             g_cvc_fx_live.load());
     // (Its particle resource, record +0x60: state +0x98 (0xb loaded), resolved +0x20, +0x60, its
     // loader +0x68; and the game-object resource +0x98 the same way.)
     static std::unordered_map<std::string, int> told;
@@ -2624,6 +2635,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             g_cvc_free_until[k] = (std::chrono::steady_clock::now() + std::chrono::milliseconds(s64(seconds * 1000)))
                                       .time_since_epoch().count();
             LOG_INFO(Core, "cvcfree: {} on its own AI for {:.0f} s", k ? "B" : "A", seconds);
+        } else if (action == "fxlist") {
+            // Test: log every effect the game has loaded now (CvcFindEffect's walk, read only), to
+            // find a colossus's own blood and dust by name.
+            const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
+            if (const u64 image = module ? module->GetBaseAddress() : 0) {
+                CvcFindEffect(image, "", true);
+            }
         } else if (action == "soundlog") {
             // Test: log the name of every sound the game plays (CvcSoundName), once each.
             const auto* module = Common::Singleton<Core::Linker>::Instance()->GetModule(0);
@@ -4022,9 +4040,18 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // looking down past it, eased over a few seconds.
                         static float over = 0.0f;
                         over += ((covered_part > 0.2f ? 1.0f : 0.0f) - over) * 0.03f;
-                        cam[0] = mid[0] + reach_now * (1.0f - 0.25f * over) * std::cos(angle);
-                        cam[1] = mid[1] + rise_now * (1.0f + 0.6f * over);
-                        cam[2] = mid[2] + reach_now * (1.0f - 0.25f * over) * std::sin(angle);
+                        // Nearly all of it covered, the camera is in rock the line tests pass through (the
+                        // cliffs round Quadratus's fight: risen into them, the fight unseen for 70 s): in
+                        // close and low, under it.
+                        // (Until the picture is clear again, or it went back in.)
+                        static float inside = 0.0f;
+                        static bool in_rock = false;
+                        in_rock = covered_part > 0.6f || (in_rock && covered_part > 0.2f);
+                        inside += ((in_rock ? 1.0f : 0.0f) - inside) * 0.05f;
+                        const float in_by = (1.0f - 0.25f * over) * (1.0f - 0.45f * inside);
+                        cam[0] = mid[0] + reach_now * in_by * std::cos(angle);
+                        cam[1] = mid[1] + rise_now * (1.0f + 0.6f * over) * (1.0f - 0.55f * inside);
+                        cam[2] = mid[2] + reach_now * in_by * std::sin(angle);
                         {
                             // What the picture shows, from its depth: the share of the middle of the
                             // screen (where the fight is) covered by something nearer than the fight,
@@ -4400,10 +4427,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                  g_cvc_hold_obj[0], g_cvc_hold_obj[1], g_cvc_hold_scale[0], g_cvc_hold_scale[1]);
                     }
                     if (ticks % 600 == 0) {
-                        LOG_INFO(Core, "cvcbrawl: motions A {:#x} B {:#x}, health A {:.0f} B {:.0f}",
+                        // (With the game's CP3 heap, image+0x2f35858: +0x18 in use, +0x28 its size, as
+                        // its "Heap Memory Usage" line reads them; fights in Quadratus's arena ran out.)
+                        LOG_INFO(Core, "cvcbrawl: motions A {:#x} B {:#x}, health A {:.0f} B {:.0f}, heap {:.2f} of {:.0f} MiB",
                                  q(objects[0] + 0x380) - image, q(objects[1] + 0x380) - image,
                                  *reinterpret_cast<const float*>(managers[0] + 0x50),
-                                 *reinterpret_cast<const float*>(managers[1] + 0x50));
+                                 *reinterpret_cast<const float*>(managers[1] + 0x50),
+                                 q(image + 0x2f35858 + 0x18) / 1048576.0, q(image + 0x2f35858 + 0x28) / 1048576.0);
                     }
                     for (int k = 0; k < 2; k++) {
                         before[k].swap(now[k]);
@@ -5565,6 +5595,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         // counts (slower than 8 units/s, or met where a limb already touched) grazes it at
                         // the bones that met (half the misses had the bodies meeting, the user: "most hits
                         // don't impact").
+                        bool grazed = false;
                         if (hit_bone < 0 && !pulsed && attacking == k && fighter[k].act == Act::Attack && !landed) {
                             const float gap = g_cvc_gap_now.load();
                             if (gap > 1.0f) {
@@ -5580,7 +5611,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                         }
                                     }
                                 }
-                                hit_bone = 0, hit_speed = 10.0f;
+                                grazed = true, hit_bone = 0, hit_speed = 10.0f;
                                 LOG_INFO(Core, "cvcbrawl: {} grazes the other", k ? "B" : "A");
                             }
                         }
@@ -5715,10 +5746,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // rocks back a little); losing its footing without a fall of its own (Gaius),
                             // it staggers far.
                             // (A body blow's lean and push came from the physics, there and then; the pulse
-                            // meets no body there, so its push is given here: a heavy blow's impulse.)
+                            // meets no body there, so its push is given here: a heavy blow's impulse; a graze
+                            // the physics took for no blow gets its own, or its flinch walked into the other and
+                            // they locked 3 deep.)
                             const Moves* victim_kind = kind_of(1 - k);
                             const bool stagger = *health > 0.0f && balance[1 - k] > 1.8f && victim_kind && victim_kind->down.empty();
-                            if (pulsed) {
+                            if (pulsed || grazed) {
                                 CvcReactImpulse(1 - k, dir, point.data(), force);
                                 const u64 entry = q(image + (k ? 0x1593b28 : 0x1593b30));
                                 const float mass = Sotc::CvcPhysics::Mass(entry >= table ? int((entry - table) / 0x1e8) : -1);
