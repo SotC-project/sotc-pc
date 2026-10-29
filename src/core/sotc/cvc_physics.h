@@ -59,6 +59,9 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
 /// A colossus's mass (its hulls' volume), 0 when unknown.
 float Mass(int kind);
 
+/// After the knockout the bodies are pushed apart from shallower (the loser falls into the winner).
+void SetKnockout(bool over);
+
 /// Colossus k's collision as last placed (each part's hull points, world), for a debug overlay.
 std::vector<std::vector<Vec3>> Shapes(int k);
 

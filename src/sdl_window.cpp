@@ -5102,6 +5102,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             g_cvc_rays.image = image;
                             *reinterpret_cast<volatile u64*>(image + 0x1593d70) =
                                 reinterpret_cast<u64>(&CvcAiThunk); // contact_patch.py HELD
+                            Sotc::CvcPhysics::SetKnockout(false);
                             LOG_INFO(Core, "cvcbrawl: fight placed, both held; motion clock hook {}",
                                      CvcInstallMotionHook(image) ? "in" : "NOT in (unexpected code)");
                             stand(0), stand(1);
@@ -5767,6 +5768,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         if (*health <= 0.0f) {
                             LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
+                            Sotc::CvcPhysics::SetKnockout(true);
                             *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
                             // Knockout: the colossi stop targeting each other (the one-entry target
                             // lists hold Wander, who takes no damage), the loser's weak points

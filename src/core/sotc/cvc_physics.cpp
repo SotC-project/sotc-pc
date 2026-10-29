@@ -17,6 +17,8 @@ CMRC_DECLARE(res);
 
 #include "core/sotc/cvc_physics.h"
 
+#include <atomic>
+
 namespace Sotc::CvcPhysics {
 
 namespace {
@@ -339,6 +341,12 @@ std::vector<std::vector<Vec3>> Shapes(int k) {
     return g_shapes[k & 1];
 }
 
+static std::atomic<bool> g_knockout{false};
+
+void SetKnockout(bool over) {
+    g_knockout = over;
+}
+
 float Mass(int kind) {
     static std::once_flag once;
     std::call_once(once, Load);
@@ -486,7 +494,8 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // (Over 3 deep, faster and swinging or not, for the moment it lasts: backing off a slam stopped
     // 3.1 inside Quadratus, Gaius went on to 4.2 for 0.2 s; at 4 a second, recovering from a slam
     // that missed, his blade still went 4.1 into Argus.)
-    const bool very_deep = deepest > 3.0f;
+    // (After the knockout from 1.5: Argus's death fall went 3.4 into Gaius beside it.)
+    const bool very_deep = deepest > (g_knockout.load() ? 1.5f : 3.0f);
     if (deepest > 1.0f && (deep_speed < 30.0f || very_deep)) {
         Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
         // (Over 3 deep, root from root: arms locked together met along a nearly upright normal, and its
