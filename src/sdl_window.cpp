@@ -193,7 +193,7 @@ struct CvcRays {
     struct SoundRequest {
         std::atomic<const char*> name{nullptr};
         float at[3]{};
-    } sounds[8];
+    } sounds[16];
 };
 static CvcRays g_cvc_rays;
 
@@ -1371,8 +1371,18 @@ static void PS4_SYSV_ABI CvcEffectDone(u64) {
 /// Starts a requested effect through the game's effect bridge (re/cvc/fx/SHAKE_PARTICLES.md):
 /// 0x5f5930 builds its transform, 0x690950 starts it; the game ends it itself.
 static void CvcEffectWork(u64 image, const char* name, const float* at, float yaw) {
-    u64 record = 0;
-    const u64 live = CvcFindEffect(image, name, false, &record);
+    u64 record = 0, live = 0;
+    // "a|b|c": the first of them loaded here (each colossus's own effects only where it fights).
+    std::string chosen;
+    for (std::string_view rest = name; !live && !rest.empty();) {
+        const size_t bar = rest.find('|');
+        chosen = std::string(rest.substr(0, bar));
+        rest = bar == std::string_view::npos ? std::string_view{} : rest.substr(bar + 1);
+        live = CvcFindEffect(image, chosen, false, &record);
+    }
+    if (live) {
+        name = chosen.c_str();
+    }
     if (!live) {
         LOG_INFO(Core, "cvc: effect {} not loaded", name);
         return;
@@ -1413,18 +1423,65 @@ static void CvcSoundWork(u64 image, const char* name, const float* at) {
     if (!system) {
         return;
     }
-    const u32 handle = reinterpret_cast<u32(PS4_SYSV_ABI*)(u64, const char*, bool)>(image + 0xa5fb70)(system, name, true);
+    // "a|b|c": the first of them the arena has loaded (each colossus's sounds are loaded only
+    // where it fights: most of the blows' sounds asked for were silent).
+    u32 handle = 0xffffffffu;
+    std::string chosen;
+    bool music = false;
+    const auto play = [&](const char* n) {
+        return reinterpret_cast<u32(PS4_SYSV_ABI*)(u64, const char*, bool)>(image + 0xa5fb70)(system, n, true);
+    };
+    for (std::string_view rest = name; handle == 0xffffffffu && !rest.empty();) {
+        const size_t bar = rest.find('|');
+        chosen = std::string(rest.substr(0, bar));
+        rest = bar == std::string_view::npos ? std::string_view{} : rest.substr(bar + 1);
+        if (chosen.empty() || chosen[0] != '@') {
+            handle = play(chosen.c_str());
+            continue;
+        }
+        // "@key": one of the game's music keys (win, M30_b, ...: the table at 0x102f4c4), mapped
+        // to its sound name as the music player does (0x6b168e..0x6b175f): the map resource at
+        // [0x2efc9e0]+0x50, looked up by 0xa5bd20; then its boss's own "bs%02i_" version, if any.
+        const u64 maps = *reinterpret_cast<const volatile u64*>(image + 0x2efc9e0);
+        if (!maps) {
+            continue;
+        }
+        reinterpret_cast<void(PS4_SYSV_ABI*)(u64)>(image + 0x95580)(maps + 0x50);
+        const u64 map = reinterpret_cast<u64(PS4_SYSV_ABI*)(u64)>(image + 0x14d7b0)(
+            *reinterpret_cast<const volatile u64*>(maps + 0x50));
+        const char* mapped = map ? reinterpret_cast<const char*(PS4_SYSV_ABI*)(u64, const char*)>(image + 0xa5bd20)(
+                                       map, chosen.c_str() + 1)
+                                 : nullptr;
+        LOG_INFO(Core, "cvc: music {} is {}", chosen, mapped ? mapped : "(none)");
+        if (!mapped || !*mapped) {
+            continue;
+        }
+        const int boss = reinterpret_cast<int(PS4_SYSV_ABI*)()>(image + 0x7d2410)();
+        const std::string plain = mapped;
+        music = true;
+        if (boss >= 0) {
+            chosen = fmt::format("bs{:02}_{}", boss + 1, plain);
+            handle = play(chosen.c_str());
+        }
+        if (handle == 0xffffffffu) {
+            chosen = plain;
+            handle = play(chosen.c_str());
+        }
+    }
     if (handle == 0xffffffffu) {
         LOG_INFO(Core, "cvc: sound {} not found", name);
         return;
     }
+    name = chosen.c_str();
     const auto* m = reinterpret_cast<const float*>(image + 0x160430c);
     alignas(16) float position[4]{}, velocity[4]{};
     for (int c = 0; c < 3; c++) {
         position[c] = at[0] * m[c] + at[1] * m[3 + c] + at[2] * m[6 + c] + m[9 + c];
     }
-    reinterpret_cast<void(PS4_SYSV_ABI*)(u64, u32, const float*, const float*)>(image + 0xa5fc70)(system, handle, position,
-                                                                                                velocity);
+    if (!music) { // music is not placed in the world
+        reinterpret_cast<void(PS4_SYSV_ABI*)(u64, u32, const float*, const float*)>(image + 0xa5fc70)(system, handle, position,
+                                                                                                    velocity);
+    }
     reinterpret_cast<void(PS4_SYSV_ABI*)(u64, u32, bool)>(image + 0xa5fb10)(system, handle, false);
     LOG_INFO(Core, "cvc: sound {} at {:.0f} {:.0f} {:.0f}: {:#x}", name, at[0], at[1], at[2], handle);
 }
@@ -1441,40 +1498,94 @@ static void CvcSound(const char* name, const float* at) {
     }
 }
 
-/// The effects of a blow landing at `point` on `victim` (its strength 0.5-1.6), the game's own:
-/// at the contact, Gaius's armour struck (metal and chips) or Basaran's stone shell (chips), and
-/// smoke; dust thrown up from the ground below.
-static void CvcImpact(u64 image, u64 victim, bool armoured, const float* point, const float* ground,
+/// A colossus's own sounds and effects for a blow on it, by its boss index (the names the game
+/// plays for each where it fights, logged with soundlog and fxlist: Valus minotaur/mivo, Quadratus
+/// mammo/mavo, Gaius knight/ktvo, Phaedra kirin/kivo, Basaran kame/kmvo, Argus minotaur_C/mivo_C).
+/// Each a "|" list: one is picked at random and the rest follow as its fallbacks, as not every
+/// arena loads every one (most blows were silent with Gaius's and Basaran's names everywhere).
+struct CvcHitSet {
+    std::vector<std::string> body, voice, effect;
+};
+static const CvcHitSet& CvcHitSounds(int kind) {
+    const auto range = [](const char* stem, int from, int to) {
+        std::vector<std::string> v;
+        for (int i = from; i <= to; i++) {
+            v.push_back(stem + std::to_string(i));
+        }
+        return v;
+    };
+    const auto join = [](std::vector<std::string> a, const std::vector<std::string>& b) {
+        a.insert(a.end(), b.begin(), b.end());
+        return a;
+    };
+    static const std::map<int, CvcHitSet> sets{
+        {0, {join(range("minotaur_body", 1, 8), range("minotaur_crack_s", 1, 6)), range("mivo_damage", 1, 4),
+             {"npe/minoA_shockwave_add.npe", "npe/clay_chip.npe"}}},
+        {1, {join(range("mammo_body", 1, 6), range("mammo_body_s", 1, 6)),
+             join({"mavo_damage_s1"}, range("mavo_groan_s", 1, 4)), {"npe/mam_shockwave_add.npe", "npe/impact_sand.npe"}}},
+        {2, {join(range("knight_body", 1, 8), range("knight_stone_l_s", 1, 10)), range("ktvo_damage_s", 1, 6),
+             {"npe/knight_metal_react.npe", "npe/knight_impact_smoke.npe"}}},
+        {3, {join(range("kirin_body", 1, 6), range("kirin_stone_s", 1, 5)), range("kivo_damage_s", 1, 5),
+             {"npe/kirin_impact_smoke.npe", "npe/kirin_shockwave_add.npe"}}},
+        {8, {join(range("kame_stone_", 1, 6), range("kame_stone_s", 1, 6)), {"kmvo_growl1", "kmvo_breath1"},
+             {"npe/tts_impact_smoke.npe", "npe/tts_add_chip.npe"}}},
+        {14, {join(range("minotaur_C_body", 1, 8), range("minotaur_C_crack_s", 1, 6)), range("mivo_C_damage", 1, 5),
+              {"npe/minoC_shockwave_add.npe", "npe/minoC_clay_chip.npe"}}},
+    };
+    static const CvcHitSet none{};
+    const auto it = sets.find(kind);
+    return it == sets.end() ? none : it->second;
+}
+
+/// One of `names` at random with the others after it as fallbacks, as a "|" list that stays valid
+/// (CvcSound and CvcEffect keep the pointer until the game thread plays it).
+static const char* CvcPick(const std::vector<std::string>& names, std::mt19937& rng, const char* fallback) {
+    static std::mutex lock;
+    static std::map<std::pair<const void*, size_t>, std::string> lists;
+    if (names.empty()) {
+        return fallback;
+    }
+    const size_t first = rng() % names.size();
+    std::scoped_lock guard{lock};
+    auto& list = lists[{&names, first}];
+    if (list.empty()) {
+        for (size_t i = 0; i < names.size(); i++) {
+            list += (i ? "|" : "") + names[(first + i) % names.size()];
+        }
+        list += std::string("|") + fallback;
+    }
+    return list.c_str();
+}
+
+/// The effects of a blow landing at `point` on `victim` (boss index `kind`; its strength
+/// 0.5-1.6), the game's own: the struck one's black blood and its own impact (Gaius's armour
+/// metal and chips, Basaran's stone, ...), smoke, dust thrown up from the ground below; the struck
+/// body's own sound, the stones falling and its cry (the user: no blood, impacts not heard).
+static void CvcImpact(u64 image, u64 victim, int kind, const float* point, const float* ground,
                       float strength, bool heavy) {
-    LOG_INFO(Core, "cvcbrawl: impact at {:.0f} {:.0f} {:.0f}, strength {:.2f}{}", point[0], point[1], point[2],
-             strength, heavy ? ", heavy" : "");
-    if (armoured) {
-        CvcEffect("npe/knight_metal_react.npe", point);
-        CvcEffect("npe/arrow_hit_spark.npe", point);
-        if (heavy) {
-            CvcEffect("npe/knight_metal_chip.npe", point);
-        }
+    LOG_INFO(Core, "cvcbrawl: impact at {:.0f} {:.0f} {:.0f}, strength {:.2f}{}, kind {}", point[0], point[1], point[2],
+             strength, heavy ? ", heavy" : "", kind);
+    static std::mt19937 rng{std::random_device{}()};
+    const CvcHitSet& set = CvcHitSounds(kind);
+    static const std::vector<std::string> blood_small{"npe/boss_blood_s1.npe", "npe/boss_blood_s2.npe", "npe/boss_blood_s3.npe"};
+    static const std::vector<std::string> blood_heavy{"npe/boss_blood_m1.npe", "npe/boss_blood_m2.npe", "npe/boss_blood_bow1.npe",
+                                                      "npe/boss_blood_bow2.npe"};
+    CvcEffect(CvcPick(heavy ? blood_heavy : blood_small, rng, "npe/boss_blood_1.npe"), point);
+    CvcEffect(CvcPick(set.effect, rng, "npe/arrow_hit_smoke.npe"), point);
+    if (kind == 2) {
+        CvcEffect(heavy ? "npe/knight_metal_chip.npe" : "npe/arrow_hit_spark.npe", point);
     } else {
-        CvcEffect("npe/knight_add_chip.npe", point);
-        CvcEffect("npe/arrow_hit_smoke.npe", point);
-        if (heavy) {
-            CvcEffect("npe/knight_shockwave_add.npe", point);
-        }
+        CvcEffect("npe/knight_add_chip.npe|npe/mud_chip.npe", point);
     }
     if (heavy) {
-        CvcEffect("npe/player_stone_dust.npe", ground);
+        CvcEffect("npe/player_stone_dust.npe|npe/player_sand_dust.npe|npe/mud_chip.npe", ground);
     }
-    // The crash of it (on Gaius's armour or Basaran's stone), stones falling, and the one hit
-    // crying out (their own damage voices).
-    static std::mt19937 rng{std::random_device{}()};
-    static const char* const armour[]{"knight_body1", "knight_body3", "knight_body5", "knight_body8"};
-    static const char* const stone[]{"kame_stone_2", "kame_stone_4", "kame_stone_6"};
-    static const char* const pebbles[]{"kame_stone_s1", "kame_stone_s3", "kame_stone_s5"};
-    static const char* const growl_knight[]{"knight_damage_voice_2", "knight_damage_voice_5", "knight_damage_voice_2"};
-    static const char* const growl_kame[]{"kmvo_dam1", "kmvo_dam3", "kmvo_dam5"};
-    CvcSound(armoured ? armour[rng() % 4] : stone[rng() % 3], point);
+    static const char* const pebbles[]{"knight_stone_l_s1|kame_stone_s1|minotaur_stone_s1",
+                                       "knight_stone_l_s3|kame_stone_s3|minotaur_stone_s3",
+                                       "knight_stone_l_s4|kame_stone_s5|minotaur_C_stone_s4"};
+    CvcSound(CvcPick(set.body, rng, "knight_body1"), point);
     CvcSound(pebbles[rng() % 3], ground);
-    CvcSound(armoured ? growl_knight[rng() % 3] : growl_kame[rng() % 3], point);
+    CvcSound(CvcPick(set.voice, rng, "ktvo_damage_s1"), point);
 }
 
 /// The two colossi as physical bodies (Sotc::CvcPhysics): their own collision hulls riding their
@@ -2635,6 +2746,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
             g_cvc_free_until[k] = (std::chrono::steady_clock::now() + std::chrono::milliseconds(s64(seconds * 1000)))
                                       .time_since_epoch().count();
             LOG_INFO(Core, "cvcfree: {} on its own AI for {:.0f} s", k ? "B" : "A", seconds);
+        } else if (action.starts_with("music=")) {
+            // Test: play a sound or "@key" music list now ("music=@sound/test_adpcm/M30.sts|...").
+            static const float origin[3]{};
+            CvcSound((new std::string(action.substr(6)))->c_str(), origin); // kept: the worker reads it later
         } else if (action == "fxlist") {
             // Test: log every effect the game has loaded now (CvcFindEffect's walk, read only), to
             // find a colossus's own blood and dust by name.
@@ -5740,7 +5855,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                                 const u64 entry = q(image + (k ? 0x1593b28 : 0x1593b30));
                                 const bool armoured = entry >= table && (entry - table) / 0x1e8 == 2; // Gaius
-                                CvcImpact(image, objects[1 - k], armoured, point.data(), ground.data(), strength, heavy);
+                                (void)armoured;
+                                CvcImpact(image, objects[1 - k], entry >= table ? int((entry - table) / 0x1e8) : -1, point.data(),
+                                          ground.data(), strength, heavy);
                             }
                             // Its body gives under the blow, as much as the blow carries (and the striker's
                             // rocks back a little); losing its footing without a fall of its own (Gaius),
@@ -5829,6 +5946,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (*health <= 0.0f) {
                             LOG_INFO(Core, "cvcbrawl: {} wins", k == 0 ? "A" : "B");
                             Sotc::CvcPhysics::SetKnockout(true);
+                            {
+                                // The game's own music for a colossus felled (its cue "win", named
+                                // bs<boss+1>_ as its battle music bs03_pinch_14_b is; the user: no
+                                // music on the defeat), at the fight.
+                                const float* at = k ? (const float*)ra : (const float*)rb;
+                                CvcSound("@sound/test_adpcm/M30.sts|@sound/test_adpcm/M30b.sts|@sound/test_adpcm/M31_E.sts", at);
+                            }
                             *reinterpret_cast<volatile u8*>(image + 0x1593efb) = u8(k + 1); // winner
                             // Knockout: the colossi stop targeting each other (the one-entry target
                             // lists hold Wander, who takes no damage), the loser's weak points
