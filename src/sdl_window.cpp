@@ -959,6 +959,78 @@ static void CvcReactWork(u64 image, float dt) {
                     }
                 }
             }
+            // Research (CVC_PARTS_DUMP): where B's separate pieces (armor, weapon) keep their place: the
+            // components one pointer away from its object with a matrix set of their own near it. Logged
+            // every 600th frame; with CVC_PARTS_DUMP=hide their matrices are zeroed every frame.
+            if (const char* dump = k == 1 ? std::getenv("CVC_PARTS_DUMP") : nullptr) {
+                static int frames = 0;
+                const bool hide = std::string_view{dump} == "hide";
+                const bool log = ++frames % 600 == 0;
+                if (log || hide) {
+                    const auto* root = reinterpret_cast<const volatile float*>(object + 0x130);
+                    // (only what the guest can read: a mapping can be reserved and not backed)
+                    static std::vector<std::pair<u64, u64>> readable;
+                    static std::vector<u64> found;
+                    const bool scan = log || found.empty();
+                    if (scan) {
+                        readable.clear();
+                        Core::Memory::Instance()->ForEachReadable([](u64 base, u64 size) { readable.emplace_back(base, size); });
+                    }
+                    const auto valid = [](u64 a, u64 n) {
+                        const auto it = std::upper_bound(readable.begin(), readable.end(), std::pair{a, ~u64(0)});
+                        return a % 8 == 0 && it != readable.begin() && a + n <= std::prev(it)->first + std::prev(it)->second;
+                    };
+                    const auto close = [&](u64 a) { return (a > object ? a - object : object - a) < 0x40000000; };
+                    // How many matrices of a set stand near the root (0: not a set of this body).
+                    const auto near_count = [&](u64 m) {
+                        int n = 0;
+                        for (; n < 256 && valid(m + u64(n) * 64, 64); n++) {
+                            const auto* t = reinterpret_cast<const volatile float*>(m + u64(n) * 64 + 0x30);
+                            if (t[3] != 1.0f || std::hypot(t[0] - root[0], t[1] - root[1], t[2] - root[2]) > 150.0f) {
+                                break;
+                            }
+                        }
+                        return n;
+                    };
+                    if (scan) {
+                        found.clear();
+                    }
+                    for (u64 off = 0; scan && off < 0x4000 && valid(object + off, 8); off += 8) {
+                        const u64 p = *reinterpret_cast<const volatile u64*>(object + off);
+                        if (p == object || !close(p) || !valid(p, 0x800)) {
+                            continue;
+                        }
+                        for (u64 o = 0; o < 0x800; o += 8) {
+                            const u64 c = *reinterpret_cast<const volatile u64*>(p + o);
+                            if (c == object || !close(c) || !valid(c, 0x200) ||
+                                std::find(found.begin(), found.end(), c) != found.end()) {
+                                continue;
+                            }
+                            const u64 set = *reinterpret_cast<const volatile u64*>(c + 0x198);
+                            if (set != matrices && close(set) && near_count(set) > 0) {
+                                found.push_back(c);
+                                if (log) {
+                                    LOG_INFO(Core, "cvcparts: frame {} object+{:#x} -> {:#x}+{:#x} -> component {:#x} set {:#x}, {} near",
+                                             frames, off, p, o, c, set, near_count(set));
+                                }
+                            }
+                        }
+                    }
+                    for (const u64 c : found) {
+                        const u64 set = *reinterpret_cast<const volatile u64*>(c + 0x198);
+                        const int n = hide && valid(set, 64) ? near_count(set) : 0;
+                        for (int i = 0; i < n; i++) {
+                            auto* m = reinterpret_cast<volatile float*>(set + u64(i) * 64);
+                            for (int r = 0; r < 12; r++) {
+                                m[r] = 0.0f;
+                            }
+                        }
+                    }
+                    if (log) {
+                        LOG_INFO(Core, "cvcparts: frame {} object {:#x} matrices {:#x}, {} components", frames, object, matrices, found.size());
+                    }
+                }
+            }
         }
     }
     for (int k = 0; k < 2; k++) {
