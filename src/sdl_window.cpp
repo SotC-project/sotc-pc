@@ -4978,10 +4978,11 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                         } else if (at_flank(k)) {
                             attack(k); // (beside its head: in reach; it turns onto it as it winds up)
-                        } else if (closest >= moves->strike && moves->walk && !moves->holds && !g_cvc_touch_now.load()) {
+                        } else if (closest >= std::max(moves->strike, 4.0f) && moves->walk && !moves->holds && !g_cvc_touch_now.load()) {
                             // (As long as the way takes: blows push the bodies apart now. Already touching,
                             // it strikes from there: a walk replaced by the slam a frame later jumped
-                            // Gaius's root 4 units.)
+                            // Gaius's root 4 units. Within 4 too: Argus's counter walked on from 3 apart
+                            // and stood 3.6 inside Gaius before the touch was seen.)
                             play(k, moves->walk, Act::Walk, int(std::clamp(closest * 400.0f, 7000.0f, 20000.0f)));
                             LOG_INFO(Core, "cvcbrawl: {} closes in (bodies {:.0f} apart)", k ? "B" : "A", closest);
                         } else {
@@ -5591,14 +5592,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                             }
                             // Its plates, one per region (head, back, limbs, trunk): each wears with the blows
-                            // it takes (1 to start, 0.15 and six tenths of a blow's force each: two or three
-                            // blows); worn through, it breaks (chips and dust where it was struck, the colossus
+                            // it takes (0.5 to start, 0.15 and six tenths of a blow's force each: one or two
+                            // blows; at 1 a fight's four or so blows, spread over the regions, broke none); worn through, it breaks (chips and dust where it was struck, the colossus
                             // staggers) and what was under it takes half as much again from then on. (Stage
                             // (b); the plate's mesh vanishing and falling is stages (c) and (d). Per bone, no
                             // bone took enough blows in a fight to break.)
                             static std::map<std::string, float> plates[2];
                             if (!pulsed && struck_bone >= 0) {
-                                auto& plate = plates[1 - k].try_emplace(region_name, 1.0f).first->second;
+                                auto& plate = plates[1 - k].try_emplace(region_name, 0.5f).first->second;
                                 if (plate <= 0.0f) {
                                     region *= 1.5f;
                                     LOG_INFO(Core, "cvcbrawl: {} struck where its {} plate was", k == 0 ? "B" : "A", region_name);
