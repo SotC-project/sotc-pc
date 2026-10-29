@@ -4824,6 +4824,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                          g_cvc_gap.load(), d * cosine, d * sine, side > 0.0f ? "left" : "right",
                                          std::hypot(me[0] - attack_root[0], me[2] - attack_root[1]),
                                          std::hypot(it[0] - target_root[0], it[2] - target_root[1]), int(fighter[1 - k].act));
+                                // Past four minutes a swing that came within 3 grazes the other (the blow code
+                                // takes it as a full blow, as Basaran's pulse; the user: every fight must end, and
+                                // a gate run had both missing from 240 s to its end at 266 s).
+                                const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
+                                if (fought > 240.0f && g_cvc_gap.load() < 3.0f && pulse_hit_for < 0) {
+                                    pulse_hit_for = k;
+                                    pulse_point = {(me[0] + it[0]) * 0.5f, it[1] + 15.0f, (me[2] + it[2]) * 0.5f};
+                                    LOG_INFO(Core, "cvcbrawl: {} grazes the other late in the fight", k ? "B" : "A");
+                                }
                             }
                             attacking = -1;
                             next_attack = std::max(next_attack, Clock::now() + std::chrono::milliseconds(400 + rng() % 700)); // (a taunt's own wait kept)
