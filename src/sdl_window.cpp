@@ -965,13 +965,14 @@ static void CvcReactWork(u64 image, float dt) {
             if (const char* dump = k == 1 ? std::getenv("CVC_PARTS_DUMP") : nullptr) {
                 static int frames = 0;
                 const bool hide = std::string_view{dump} == "hide";
+                const bool sweep = std::string_view{dump} == "sweep";
                 const bool log = ++frames % 600 == 0;
-                if (log || hide) {
+                if (log || hide || sweep) {
                     const auto* root = reinterpret_cast<const volatile float*>(object + 0x130);
                     // (only what the guest can read: a mapping can be reserved and not backed)
                     static std::vector<std::pair<u64, u64>> readable;
                     static std::vector<u64> found;
-                    const bool scan = log || found.empty();
+                    const bool scan = log || (hide && found.empty());
                     if (scan) {
                         readable.clear();
                         Core::Memory::Instance()->ForEachReadable([](u64 base, u64 size) { readable.emplace_back(base, size); });
@@ -1028,6 +1029,104 @@ static void CvcReactWork(u64 image, float dt) {
                     }
                     if (log) {
                         LOG_INFO(Core, "cvcparts: frame {} object {:#x} matrices {:#x}, {} components", frames, object, matrices, found.size());
+                    }
+                    // CVC_PARTS_DUMP=sweep: every readable matrix standing near B (any memory), in runs of
+                    // matrices one after another; from frame 900 each run is zeroed in turn for 600 frames
+                    // (the log gives the wall time, to match the screenshots).
+                    static std::vector<std::pair<u64, int>> runs;
+                    if (sweep && frames == 600) {
+                        const float rx = root[0], ry = root[1], rz = root[2];
+                        const u64 own_end = matrices + u64(Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind)) * 64;
+                        for (const auto& [base, size] : readable) {
+                            if (size > 0x40000000) {
+                                continue;
+                            }
+                            for (u64 a = base; a + 64 <= base + size; a += 16) {
+                                const auto* m = reinterpret_cast<const float*>(a);
+                                if (m[15] != 1.0f || m[3] != 0.0f || m[7] != 0.0f || m[11] != 0.0f ||
+                                    std::hypot(m[12] - rx, m[13] - ry, m[14] - rz) > 150.0f || (a >= matrices && a < own_end)) {
+                                    continue;
+                                }
+                                const float len = std::hypot(m[0], m[1], m[2]);
+                                if (!(len > 0.05f && len < 50.0f)) {
+                                    continue;
+                                }
+                                if (!runs.empty() && a == runs.back().first + u64(runs.back().second) * 64) {
+                                    runs.back().second++;
+                                } else if (runs.empty() || a >= runs.back().first + u64(runs.back().second) * 64) {
+                                    runs.push_back({a, 1});
+                                }
+                            }
+                        }
+                        for (size_t i = 0; i < runs.size() && i < 300; i++) {
+                            LOG_INFO(Core, "cvcparts: run {} at {:#x}, {} matrices", i, runs[i].first, runs[i].second);
+                        }
+                        LOG_INFO(Core, "cvcparts: {} runs near B", runs.size());
+                    }
+                    // Which runs ride on one of B's bones: in that bone's frame their place stays the same at
+                    // frames 600, 1200 and 1800 while the bone itself moves. From frame 2400 those are
+                    // zeroed in turn, 400 frames each.
+                    static std::vector<std::array<float, 3>> run_at[3];
+                    static std::vector<std::array<float, 16>> bone_at[3];
+                    static std::vector<std::pair<size_t, int>> riding; // (run, bone)
+                    const int bones = Sotc::CvcPhysics::Matrices(g_cvc_flex[k].kind);
+                    if (sweep && (frames == 600 || frames == 1200 || frames == 1800)) {
+                        const int at = frames / 600 - 1;
+                        for (const auto& [a, n] : runs) {
+                            const auto* m = reinterpret_cast<const float*>(a);
+                            run_at[at].push_back({m[12], m[13], m[14]});
+                        }
+                        for (int i = 0; i < bones; i++) {
+                            std::array<float, 16> m;
+                            std::memcpy(m.data(), reinterpret_cast<const void*>(matrices + u64(i) * 64), 64);
+                            bone_at[at].push_back(m);
+                        }
+                    }
+                    if (sweep && frames == 1800) {
+                        const auto local = [](const std::array<float, 16>& m, const std::array<float, 3>& p) {
+                            std::array<float, 3> l;
+                            const float d[3]{p[0] - m[12], p[1] - m[13], p[2] - m[14]};
+                            for (int r = 0; r < 3; r++) {
+                                const float* row = &m[size_t(r) * 4];
+                                const float sq = row[0] * row[0] + row[1] * row[1] + row[2] * row[2];
+                                l[size_t(r)] = sq > 1e-6f ? (d[0] * row[0] + d[1] * row[1] + d[2] * row[2]) / sq : 1e9f;
+                            }
+                            return l;
+                        };
+                        for (size_t i = 0; i < runs.size() && i < run_at[2].size(); i++) {
+                            for (int b = 0; b < bones; b++) {
+                                const auto& m0 = bone_at[0][size_t(b)];
+                                const auto& m1 = bone_at[1][size_t(b)];
+                                const auto& m2 = bone_at[2][size_t(b)];
+                                const float moved = std::max(std::hypot(m1[12] - m0[12], m1[13] - m0[13], m1[14] - m0[14]),
+                                                             std::hypot(m2[12] - m0[12], m2[13] - m0[13], m2[14] - m0[14]));
+                                const auto l0 = local(m0, run_at[0][i]), l1 = local(m1, run_at[1][i]), l2 = local(m2, run_at[2][i]);
+                                const float drift = std::max({std::abs(l1[0] - l0[0]), std::abs(l1[1] - l0[1]), std::abs(l1[2] - l0[2]),
+                                                              std::abs(l2[0] - l0[0]), std::abs(l2[1] - l0[1]), std::abs(l2[2] - l0[2])});
+                                if (moved > 3.0f && drift < 0.1f) {
+                                    riding.push_back({i, b});
+                                    LOG_INFO(Core, "cvcparts: run {} ({:#x}, {}) rides on bone {} (it moved {:.1f}, local {:.2f} {:.2f} {:.2f})", i,
+                                             runs[i].first, runs[i].second, b, moved, l0[0], l0[1], l0[2]);
+                                    break;
+                                }
+                            }
+                        }
+                        LOG_INFO(Core, "cvcparts: {} runs ride on B's bones", riding.size());
+                    }
+                    if (sweep && frames >= 2400 && (frames - 2400) / 400 < int(riding.size())) {
+                        const auto& [at, n] = runs[riding[size_t((frames - 2400) / 400)].first];
+                        if ((frames - 2400) % 400 == 0) {
+                            const std::time_t now = std::time(nullptr);
+                            const std::tm* t = std::localtime(&now);
+                            LOG_INFO(Core, "cvcparts: hiding run {} ({:#x}, {}) from {:02}{:02}{:02}",
+                                     riding[size_t((frames - 2400) / 400)].first, at, n, t->tm_hour, t->tm_min, t->tm_sec);
+                        }
+                        for (int i = 0; i < n; i++) {
+                            auto* m = reinterpret_cast<volatile float*>(at + u64(i) * 64);
+                            for (int r = 0; r < 12; r++) {
+                                m[r] = 0.0f;
+                            }
+                        }
                     }
                 }
             }
