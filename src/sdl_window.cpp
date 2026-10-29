@@ -5598,6 +5598,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     CvcEffect("npe/knight_metal_chip.npe", contact.data());
                                     CvcEffect("npe/player_stone_dust.npe", contact.data());
                                     CvcEffect("npe/knight_add_chip.npe", contact.data());
+                                    CvcEffect("npe/knight_shockwave_add.npe", contact.data());
+                                    // (and where its pieces come down: dust on the ground below, a crash of stone)
+                                    std::array<float, 3> below = contact;
+                                    for (const auto& b : now[1 - k]) {
+                                        below[1] = std::min(below[1], b[1]);
+                                    }
+                                    CvcEffect("npe/player_stone_dust.npe", below.data());
+                                    CvcSound("kame_stone_6", below.data());
                                     balance[1 - k] += 1.0f; // (a heavy stagger: its own, by the balance rule below)
                                 }
                             }
