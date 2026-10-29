@@ -4957,8 +4957,12 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                                 const bool locked = deep_since[k] != Clock::time_point{} &&
                                                     at > deep_since[k] + std::chrono::milliseconds(f.act == Act::Idle ? 300 : 600);
-                                const bool pressed = touch_since[k] != Clock::time_point{} &&
-                                                     at > touch_since[k] + std::chrono::milliseconds(3000);
+                                // (Or over a unit inside it for 1.5 s: Basaran's slow slam leant 1.2 deep into
+                                // Gaius for 5 s, its touching broken now and then, the quality log's trap.)
+                                const bool pressed = (touch_since[k] != Clock::time_point{} &&
+                                                      at > touch_since[k] + std::chrono::milliseconds(3000)) ||
+                                                     (deep_since[k] != Clock::time_point{} &&
+                                                      at > deep_since[k] + std::chrono::milliseconds(1500));
                                 // (Standing in it too: both stood 1.4 s 3 units inside each other. An attack
                                 // only once it has leant on the other 3 s: a slam winds up in contact, and
                                 // broken off then it never landed.)
