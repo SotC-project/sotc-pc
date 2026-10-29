@@ -5598,6 +5598,20 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // (b); the plate's mesh vanishing and falling is stages (c) and (d). Per bone, no
                             // bone took enough blows in a fight to break.)
                             static std::map<std::string, float> plates[2];
+                            // A plate breaking: chips, dust and a shockwave where it was struck, and where its
+                            // pieces come down dust on the ground below and a crash of stone.
+                            const auto shatter = [&] {
+                                CvcEffect("npe/knight_metal_chip.npe", contact.data());
+                                CvcEffect("npe/player_stone_dust.npe", contact.data());
+                                CvcEffect("npe/knight_add_chip.npe", contact.data());
+                                CvcEffect("npe/knight_shockwave_add.npe", contact.data());
+                                std::array<float, 3> below = contact;
+                                for (const auto& b : now[1 - k]) {
+                                    below[1] = std::min(below[1], b[1]);
+                                }
+                                CvcEffect("npe/player_stone_dust.npe", below.data());
+                                CvcSound("kame_stone_6", below.data());
+                            };
                             if (!pulsed && struck_bone >= 0) {
                                 auto& plate = plates[1 - k].try_emplace(region_name, 0.5f).first->second;
                                 if (plate <= 0.0f) {
@@ -5605,17 +5619,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     LOG_INFO(Core, "cvcbrawl: {} struck where its {} plate was", k == 0 ? "B" : "A", region_name);
                                 } else if ((plate -= 0.15f + 0.6f * force) <= 0.0f) {
                                     LOG_INFO(Core, "cvcbrawl: {}'s {} plate breaks (bone {})", k == 0 ? "B" : "A", region_name, struck_bone);
-                                    CvcEffect("npe/knight_metal_chip.npe", contact.data());
-                                    CvcEffect("npe/player_stone_dust.npe", contact.data());
-                                    CvcEffect("npe/knight_add_chip.npe", contact.data());
-                                    CvcEffect("npe/knight_shockwave_add.npe", contact.data());
-                                    // (and where its pieces come down: dust on the ground below, a crash of stone)
-                                    std::array<float, 3> below = contact;
-                                    for (const auto& b : now[1 - k]) {
-                                        below[1] = std::min(below[1], b[1]);
-                                    }
-                                    CvcEffect("npe/player_stone_dust.npe", below.data());
-                                    CvcSound("kame_stone_6", below.data());
+                                    shatter();
                                     balance[1 - k] += 1.0f; // (a heavy stagger: its own, by the balance rule below)
                                 }
                             }
@@ -5636,6 +5640,15 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f}, worn x{:.1f})", k == 0 ? "B" : "A", region_name,
                                      region, wearing);
                             *health = std::max(0.0f, *health - damage * wearing);
+                            // The finishing blow breaks the plate it lands on, if not broken already (a fight's
+                            // three or four blows seldom wore one through, and the break was never seen).
+                            if (*health <= 0.0f && !pulsed && struck_bone >= 0) {
+                                if (float& plate = plates[1 - k].try_emplace(region_name, 0.5f).first->second; plate > 0.0f) {
+                                    plate = 0.0f;
+                                    LOG_INFO(Core, "cvcbrawl: the finishing blow breaks {}'s {} plate", k == 0 ? "B" : "A", region_name);
+                                    shatter();
+                                }
+                            }
                             balance[1 - k] += force;
                             // The impact: both freeze for a moment, the view shakes, then the one hit
                             // flinches (one of its own, by where the blow landed: the head, from
