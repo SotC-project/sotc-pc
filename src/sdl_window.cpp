@@ -3098,6 +3098,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         if (y < catch_at && put_at - y < (on_ground ? 6.0f : 1e9f)) {
                             const float lift[3]{0.0f, put_at - y, 0.0f};
                             MoveCharacter(a, lift);
+                            if (put_at - y > 3.0f) { // (test aid: Gaius's slams dipped 20 on Phaedra's ground)
+                                LOG_INFO(Core, "cvcplace: net lifted A {:.1f} from {:.1f} (ground {:.1f}, {}measured, guess {:.1f})",
+                                         put_at - y, y, ground, measured ? "" : "not ", floor_y);
+                            }
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
@@ -4794,8 +4798,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                         } else if (at_flank(k)) {
                             attack(k); // (beside its head: in reach; it turns onto it as it winds up)
-                        } else if (closest >= moves->strike && moves->walk && !moves->holds) {
-                            // (As long as the way takes: blows push the bodies apart now.)
+                        } else if (closest >= moves->strike && moves->walk && !moves->holds && !g_cvc_touch_now.load()) {
+                            // (As long as the way takes: blows push the bodies apart now. Already touching,
+                            // it strikes from there: a walk replaced by the slam a frame later jumped
+                            // Gaius's root 4 units.)
                             play(k, moves->walk, Act::Walk, int(std::clamp(closest * 400.0f, 7000.0f, 20000.0f)));
                             LOG_INFO(Core, "cvcbrawl: {} closes in (bodies {:.0f} apart)", k ? "B" : "A", closest);
                         } else {
@@ -5579,8 +5585,8 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 const Moves* moves = kind_of(k);
                                 const auto left = fighter[k].act == Act::Idle ? Clock::duration{}
                                                                               : std::max(Clock::duration{}, fighter[k].until - Clock::now());
-                                if (moves && moves->idle && moves->retreat && closest < 6.0f) {
-                                    // Against the loser: it steps back from the body as it falls (Gaius's
+                                if (moves && moves->idle && moves->retreat && closest < 12.0f) {
+                                    // Near the loser: it steps back from the body as it falls (Gaius's
                                     // death fell 3.6 into Argus for half a second), then stands.
                                     CvcPlayMotion(image, objects[k], moves->retreat, 0.4f);
                                     std::thread([image, winner = objects[k], idle = moves->idle] {
@@ -5659,6 +5665,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             }
                             g_cvc_body[1 - k].object = 0;
                             *reinterpret_cast<volatile u64*>(image + (k == 0 ? 0x1593b10 : 0x1593b08)) = 0;
+                            // (No more meeting of the two: the last one's depth stayed, the quality log's
+                            // 30 s inside after a knockout.)
+                            g_cvc_depth_now = 0.0f, g_cvc_touch_now = false;
                             LOG_INFO(Core, "cvcbrawl: loser cleared from the fight");
                             for (int step = 0; step < 60; step++) {
                                 const auto* at = reinterpret_cast<const volatile float*>(loser + 0x130);
