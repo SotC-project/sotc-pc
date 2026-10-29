@@ -488,7 +488,13 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // that missed, his blade still went 4.1 into Argus.)
     const bool very_deep = deepest > 3.0f;
     if (deepest > 1.0f && (deep_speed < 30.0f || very_deep)) {
-        const Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
+        Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
+        // (Over 3 deep, root from root: arms locked together met along a nearly upright normal, and its
+        // flat part hardly moved them, 3.5 inside each other for 3 s, Argus and Gaius.)
+        if (const float rx = roots[1][0] - roots[0][0], rz = roots[1][2] - roots[0][2], rl = std::hypot(rx, rz);
+            very_deep && rl > 1.0f) {
+            flat = Vec3{rx / rl, 0.0f, rz / rl};
+        }
         const float out_by = std::min(deepest - 0.5f, (very_deep ? 8.0f : 1.5f) * dt);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);

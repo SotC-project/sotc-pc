@@ -3133,6 +3133,9 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     ignore[2 * i] = ignore[2 * i + 1] = b;
                                 }
                                 bool tested = false; // (the camera's filter is captured a few seconds in)
+                                // (The tries are kept although they run out before the filter comes: skipped,
+                                // the placement after the host's first-sight scene came 20 s sooner, before
+                                // Valus's ground around the host was loaded, and the host walked off.)
                                 for (int tries = 0; !tested && tries < 6; tries++) {
                                     tested = CvcProbeLines(32, from, to, ignore, hit);
                                 }
@@ -4990,11 +4993,14 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                     };
                     // A counter: just recovered from a flinch or a step back, facing the other and near,
-                    // now and then it answers at once (nobody attacking), out of turn.
+                    // now and then it answers at once (nobody attacking), out of turn. Not while the bodies are
+                    // still pressed into each other (Gaius countered from 1 apart, locked 1.6 deep with Argus
+                    // for 10 s: each break-off answered by another blow from there).
                     const auto counter = [&](int k) {
                         const Moves* moves = kind_of(k);
                         float cosine = 0.0f, side = 0.0f;
-                        if (attacking < 0 && moves && !moves->attacks.empty() && rng() % 100 < 35 && face(k, cosine, side) &&
+                        if (attacking < 0 && moves && !moves->attacks.empty() && g_cvc_depth_now.load() < 1.0f &&
+                            !g_cvc_touch_now.load() && rng() % 100 < 35 && face(k, cosine, side) &&
                             cosine > 0.8f && std::hypot(ra[0] - rb[0], ra[2] - rb[2]) < moves->reach) {
                             LOG_INFO(Core, "cvcbrawl: {} counters", k ? "B" : "A");
                             engage(k);
