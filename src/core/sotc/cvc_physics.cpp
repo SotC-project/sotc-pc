@@ -494,7 +494,8 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
     // (Over 3 deep, faster and swinging or not, for the moment it lasts: backing off a slam stopped
     // 3.1 inside Quadratus, Gaius went on to 4.2 for 0.2 s; at 4 a second, recovering from a slam
     // that missed, his blade still went 4.1 into Argus.)
-    // (After the knockout from 1.5: Argus's death fall went 3.4 into Gaius beside it.)
+    // (After the knockout from 1.5 and at 16 a second: Argus's death fall went 3.4 into Gaius beside it,
+    // and Gaius's blade stayed 4.2 in Valus while he stepped back from his finishing blow.)
     const bool very_deep = deepest > (g_knockout.load() ? 1.5f : 3.0f);
     if (deepest > 1.0f && (deep_speed < 30.0f || very_deep)) {
         Vec3 flat = Vec3{deep_normal[0], 0.0f, deep_normal[2]};
@@ -504,7 +505,7 @@ bool Step(const int kinds[2], const float* const bones[2], const float* const ro
             very_deep && rl > 1.0f) {
             flat = Vec3{rx / rl, 0.0f, rz / rl};
         }
-        const float out_by = std::min(deepest - 0.5f, (very_deep ? 8.0f : 1.5f) * dt);
+        const float out_by = std::min(deepest - 0.5f, (g_knockout.load() ? 16.0f : very_deep ? 8.0f : 1.5f) * dt);
         out.shift[1] = flat * (out_by * (1.0f / mass[1]) / share);
         out.shift[0] = flat * (-out_by * (1.0f / mass[0]) / share);
     }

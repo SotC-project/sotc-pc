@@ -1645,10 +1645,12 @@ static void CvcPhysicsWork(u64 image, float dt) {
         std::memcpy(at, found, 12);
         return true;
     };
+    // (Any new meeting coming in at 8 units/s or more: the brawl takes it only from a colossus that is
+    // attacking. At 40 units/s and 8000 of impulse most blows seen landing were not counted, the user:
+    // "most hits don't impact"; Argus's swings met Gaius at 12-27.)
+    (void)least, (void)coming;
     for (const auto& hit : result.hits) {
-        const float need = std::min({coming, g_cvc_coming[hit.striker].load(), g_cvc_struck[1 - hit.striker].load()});
-        const float floor = g_cvc_least[hit.striker].load();
-        if (!hit.first || hit.impulse < (floor > 0.0f ? floor : least * need / coming) || hit.closing < need) {
+        if (!hit.first || hit.closing < 8.0f) {
             continue;
         }
         float point[3]{hit.point[0], hit.point[1], hit.point[2]};
@@ -4604,6 +4606,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                     static int attacking = -1;
                     static int last_attacker = int(std::random_device{}() % 2); // who goes first: either
                     static bool landed = false;
+                    static bool swing_apart = false; // the bodies were apart since the swing began (a graze, below)
                     static bool shook = false; // this attack's ground pound has shaken the other
                     // Balance lost to blows (impulses add up, it drains back slowly, 0.04 a second); past 1.8 (two full blows close together)
                     // the colossus loses its footing (Basaran overturns, Gaius staggers far).
@@ -4887,6 +4890,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                         }
                         attacking = k, landed = false, shook = false, attack_from = Clock::now();
                         g_cvc_gap = 1e9f;
+                        swing_apart = g_cvc_gap_now.load() > 1.0f;
                         // The other, standing, now and then steps back out of it (a dodge).
                         if (const Moves* other = kind_of(1 - k); other && other->retreat && fighter[1 - k].act == Act::Idle &&
                                                                   rng() % 100 < 20) {
@@ -5068,15 +5072,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     if (other && !other->front.empty() && (act == Act::Idle || act == Act::Walk || act == Act::Turn)) {
                                         const u64 flinch = other->front[rng() % other->front.size()];
                                         play(1 - k, flinch, Act::Flinch, 4000);
-                                        // (It hurts too, a twelfth of its health, worn on as blows are, never the
-                                        // last of it: Gaius's slams fell short of Argus all fight and only
-                                        // shook it.)
+                                        // (It hurts only when it lands at its feet, a thirtieth of its health, worn
+                                        // on as blows are, never the last of it: a twelfth from up to 18 away did
+                                        // half a fight's damage with nothing seen to land, the user: "damage is
+                                        // all wrong".)
                                         auto* health = reinterpret_cast<float*>(managers[1 - k] + 0x50);
                                         const float full = *reinterpret_cast<const float*>(managers[1 - k] + 0x4c);
                                         const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
-                                        const float wearing = 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
-                                        if (*health > 1.0f && full > 0.0f) {
-                                            *health = std::max(1.0f, *health - full / 12.0f * wearing);
+                                        const float wearing = fought > 240.0f ? 3.0f : fought > 180.0f ? 1.5f : 1.0f;
+                                        if (apart < 6.0f && *health > 1.0f && full > 0.0f) {
+                                            *health = std::max(1.0f, *health - full / 30.0f * wearing);
                                         }
                                         LOG_INFO(Core, "cvcbrawl: {} pounds the ground {:.0f} from the other: it staggers, health {:.0f}",
                                                  k ? "B" : "A", apart, *health);
@@ -5556,6 +5561,29 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             hit_bone = 0, hit_speed = 300.0f, contact = pulse_point; // its pulse struck
                             pulse_hit_for = -1;
                         }
+                        // A swing that comes in from apart and meets the other with no blow the physics
+                        // counts (slower than 8 units/s, or met where a limb already touched) grazes it at
+                        // the bones that met (half the misses had the bodies meeting, the user: "most hits
+                        // don't impact").
+                        if (hit_bone < 0 && !pulsed && attacking == k && fighter[k].act == Act::Attack && !landed) {
+                            const float gap = g_cvc_gap_now.load();
+                            if (gap > 1.0f) {
+                                swing_apart = true;
+                            } else if (swing_apart && gap <= 0.05f && Clock::now() > attack_from + std::chrono::milliseconds(300) &&
+                                       !now[k].empty() && !now[1 - k].empty()) {
+                                float nearest = 1e9f;
+                                for (const auto& a : now[k]) {
+                                    for (const auto& b : now[1 - k]) {
+                                        if (const float d = std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); d < nearest) {
+                                            nearest = d;
+                                            contact = {(a[0] + b[0]) * 0.5f, (a[1] + b[1]) * 0.5f, (a[2] + b[2]) * 0.5f};
+                                        }
+                                    }
+                                }
+                                hit_bone = 0, hit_speed = 10.0f;
+                                LOG_INFO(Core, "cvcbrawl: {} grazes the other", k ? "B" : "A");
+                            }
+                        }
                         if (hit_bone < 0 && !fell) {
                             continue;
                         }
@@ -5566,7 +5594,10 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // as a full blow. Damage goes with it: a graze does little, the heaviest blow
                             // twice a full one.
                             constexpr float full_blow = 30000.0f; // (Gaius's solid slam)
-                            const float force = pulsed ? 1.0f : std::clamp(impulse / full_blow, 0.05f, 3.0f);
+                            // (From how fast it came in, 50 units/s a full blow: the impulse also carries the
+                            // bodies' masses, and a fast blow of Argus's light arm read as a graze.)
+                            const float force = pulsed ? 1.0f : std::clamp(hit_speed / 50.0f, 0.2f, 1.5f);
+                            (void)impulse;
                             // Below 1: a share of the victim's full health for a full blow.
                             const float set = k == 0 ? dmg_a : dmg_b;
                             // Where it landed: the head (its top fifth: every colossus's sigil is there or
@@ -5589,13 +5620,13 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                 }
                                 float cosine = 0.0f, side = 0.0f;
                                 if (contact[1] > low + 0.8f * (high - low)) {
-                                    region = 2.5f, region_name = "head";
+                                    region = 1.6f, region_name = "head";
                                 } else if (face(1 - k, cosine, side) && cosine < -0.2f) {
-                                    region = 1.5f, region_name = "back";
+                                    region = 1.3f, region_name = "back";
                                 } else if (CvcLimb(g_cvc_flex[1 - k].kind, bone)) {
                                     region = 1.0f, region_name = "limb";
                                 } else {
-                                    region = 0.5f, region_name = "armor";
+                                    region = 0.8f, region_name = "armor";
                                 }
                             }
                             // Its plates, one per region (head, back, limbs, trunk): each wears with the blows
@@ -5622,7 +5653,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             if (!pulsed && struck_bone >= 0) {
                                 auto& plate = plates[1 - k].try_emplace(region_name, 0.5f).first->second;
                                 if (plate <= 0.0f) {
-                                    region *= 1.5f;
+                                    region *= 1.25f;
                                     LOG_INFO(Core, "cvcbrawl: {} struck where its {} plate was", k == 0 ? "B" : "A", region_name);
                                 } else if ((plate -= 0.15f + 0.6f * force) <= 0.0f) {
                                     LOG_INFO(Core, "cvcbrawl: {}'s {} plate breaks (bone {})", k == 0 ? "B" : "A", region_name, struck_bone);
@@ -5630,20 +5661,16 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                                     balance[1 - k] += 1.0f; // (a heavy stagger: its own, by the balance rule below)
                                 }
                             }
-                            const float damage = region *
-                                                 (set < 1.0f ? set * *reinterpret_cast<const float*>(managers[1 - k] + 0x4c) : set) *
-                                                 // (At least half a full blow's: at 0.1, glancing blows did next to nothing
-                                                 // and a fight never ended, the user's verdict on a take.)
-                                                 std::clamp(force > 1.0f ? 1.0f + 0.5f * (force - 1.0f) : force, 0.5f, 2.0f) /* (past a full blow, half as much again) */;
-                            // The fight wears on: past a minute, blows hurt more, twice as much 30 s later; past
-                            // three minutes a blow takes half its full health at least, past four any blow that
-                            // lands is the last (the user: every fight must end; at the slower ramp Argus and
-                            // Gaius were both still standing at 4 minutes; at three, a graze ended it from full).
+                            // A share of the victim's full health: a full blow on a limb a ninth, the head 1.6
+                            // times, its back 1.3, armor 0.8, a graze 0.6 of it; seven to ten blows a fight. Past
+                            // three minutes half as much again, past four three times (every fight ends).
+                            // (Was a time ramp over a floor of half a full blow: a graze on the head took 168 of
+                            // 220, a solid blow 69, the user: "damage is all wrong".)
+                            (void)set;
                             const float fought = std::chrono::duration<float>(Clock::now() - brawl_from).count();
                             const float full = *reinterpret_cast<const float*>(managers[1 - k] + 0x4c);
-                            const float wearing = fought > 240.0f ? 1e6f
-                                                  : fought > 180.0f ? std::max(1.0f + (fought - 60.0f) / 30.0f, 0.5f * full / std::max(damage, 0.01f))
-                                                                    : 1.0f + std::max(0.0f, (fought - 60.0f) / 30.0f);
+                            const float damage = full * 0.11f * region * (0.6f + 0.4f * std::min(force, 1.5f));
+                            const float wearing = fought > 240.0f ? 3.0f : fought > 180.0f ? 1.5f : 1.0f;
                             LOG_INFO(Core, "cvcbrawl: {} struck on its {} (x{:.1f}, worn x{:.1f})", k == 0 ? "B" : "A", region_name,
                                      region, wearing);
                             *health = std::max(0.0f, *health - damage * wearing);
@@ -5715,7 +5742,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // The striker's blow is stopped by the body it met: its attack ends there and it
                             // recovers into its stance (crossfaded) instead of cutting on through the other
                             // (blades 2-4 units inside for up to 0.7 s in the quality log).
-                            if (fighter[k].act == Act::Attack && force > 0.2f) {
+                            if (fighter[k].act == Act::Attack) {
                                 stand(k);
                                 // (Quickly out: crossfaded over the stance's 0.6 s the blade stayed 4 deep
                                 // in the other for half a second.)
@@ -5726,7 +5753,7 @@ static Uint32 SDLCALL ScriptTick(void* userdata, SDL_TimerID timer_id, Uint32 in
                             // The flinch (not from the knockout blow: the death follows that).
                             u64 flinch = 0;
                             // (A graze is only felt in its body, not a flinch; down, it lies on.)
-                            if (*health > 0.0f && victim_moves && fighter[1 - k].act != Act::Down && force > 0.35f) {
+                            if (*health > 0.0f && victim_moves && fighter[1 - k].act != Act::Down) { // (every blow: the user saw hits not felt)
                                 float low = 1e9f, high = -1e9f;
                                 for (const auto& b : now[1 - k]) {
                                     low = std::min(low, b[1]), high = std::max(high, b[1]);
