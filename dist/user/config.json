@@ -11,7 +11,7 @@
     "sdl_padSpk_output_device": "Default Device"
   },
   "Debug": {
-    "config_version": "4d7299cfa48712695ccc33f640c9e6d5b17d400b",
+    "config_version": "f40b2cc452ee174b56078d5aef75d727bc8b6cae",
     "debug_dump": false,
     "shader_collect": false
   },

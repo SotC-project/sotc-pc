@@ -144,6 +144,8 @@ All Weapons and Items
 Start with every weapon and item
 Invincibility
 Wander takes no damage
+Colossus vs Colossus
+Watch Gaius and Basaran fight each other
 Unlimited Grip
 The grip gauge never empties
 Maximum Damage
@@ -279,3 +281,5 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data
 There is not saved data.
 The data is corrupted.
+Knockout
+Winner

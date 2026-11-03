@@ -1,0 +1,5 @@
+f=open(r"D:\Games\CUSA08809\eboot.bin","rb").read()
+img=bytearray(0x1604000+0x2352aa4)
+img[0:0x1593978]=f[0xb590:0xb590+0x1593978]
+img[0x1604000:0x1604000+0x17d3100]=f[0x16182c0:0x16182c0+0x17d3100]
+open('img.bin','wb').write(img)

@@ -141,6 +141,8 @@ All Weapons and Items	Alle våpen og gjenstander
 Start with every weapon and item	Start med alle våpen og gjenstander
 Invincibility	Uovervinnelighet
 Wander takes no damage	Wander tar ingen skade
+Colossus vs Colossus	Koloss mot koloss
+Watch Gaius and Basaran fight each other	Se Gaius og Basaran kjempe mot hverandre
 Unlimited Grip	Ubegrenset grep
 The grip gauge never empties	Grepmåleren går aldri tom
 Maximum Damage	Maksimal skade
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Kan ikke opprette flere lagrede data
 There is not saved data.	Ingen lagrede data.
 The data is corrupted.	Dataene er ødelagt.
+Knockout	Knockout
+Winner	Vinner
+Watch two colossi fight each other	Se to kolosser kjempe mot hverandre
+First Colossus	Første koloss
+Choose the first colossus	Velg den første kolossen
+Second Colossus	Andre koloss
+Choose the colossus it fights	Velg kolossen den kjemper mot
+Arena	Arena
+Choose whose arena the battle is fought in	Velg hvem sin arena kampen utkjempes i

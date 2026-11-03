@@ -141,6 +141,8 @@ All Weapons and Items	Cała broń i przedmioty
 Start with every weapon and item	Zacznij z każdą bronią i przedmiotem
 Invincibility	Nieśmiertelność
 Wander takes no damage	Wander nie odnosi obrażeń
+Colossus vs Colossus	Kolos kontra kolos
+Watch Gaius and Basaran fight each other	Zobacz, jak Gaius i Basaran walczą ze sobą
 Unlimited Grip	Nieograniczony chwyt
 The grip gauge never empties	Pasek chwytu nigdy się nie opróżnia
 Maximum Damage	Maksymalne obrażenia
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Nie można utworzyć więcej zapisów
 There is not saved data.	Brak zapisanych danych.
 The data is corrupted.	Dane są uszkodzone.
+Knockout	Nokaut
+Winner	Zwycięzca
+Watch two colossi fight each other	Obserwuj walkę dwóch kolosów
+First Colossus	Pierwszy kolos
+Choose the first colossus	Wybierz pierwszego kolosa
+Second Colossus	Drugi kolos
+Choose the colossus it fights	Wybierz kolosa, z którym walczy
+Arena	Arena
+Choose whose arena the battle is fought in	Wybierz, na czyjej arenie toczy się walka

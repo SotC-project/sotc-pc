@@ -141,6 +141,8 @@ All Weapons and Items	Tutte le armi e gli oggetti
 Start with every weapon and item	Inizia con ogni arma e oggetto
 Invincibility	Invincibilità
 Wander takes no damage	Wander non subisce danni
+Colossus vs Colossus	Colosso contro colosso
+Watch Gaius and Basaran fight each other	Guarda Gaius e Basaran combattere tra loro
 Unlimited Grip	Presa illimitata
 The grip gauge never empties	L'indicatore di presa non si svuota mai
 Maximum Damage	Danno massimo
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Impossibile creare altri dati salvati
 There is not saved data.	Nessun dato salvato.
 The data is corrupted.	I dati sono danneggiati.
+Knockout	K.O.
+Winner	Vincitore
+Watch two colossi fight each other	Guarda due colossi combattere tra loro
+First Colossus	Primo colosso
+Choose the first colossus	Scegli il primo colosso
+Second Colossus	Secondo colosso
+Choose the colossus it fights	Scegli il colosso che affronta
+Arena	Arena
+Choose whose arena the battle is fought in	Scegli in quale arena si combatte

@@ -141,6 +141,8 @@ All Weapons and Items	כל הנשקים והפריטים
 Start with every weapon and item	התחל עם כל נשק ופריט
 Invincibility	אל-פגיעות
 Wander takes no damage	Wander לא ניזוק
+Colossus vs Colossus	קולוסוס מול קולוסוס
+Watch Gaius and Basaran fight each other	צפה ב-Gaius וב-Basaran נלחמים זה בזה
 Unlimited Grip	אחיזה בלתי מוגבלת
 The grip gauge never empties	מד האחיזה אינו מתרוקן
 Maximum Damage	נזק מרבי
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	לא ניתן ליצור עוד נתונים שמורים
 There is not saved data.	אין נתונים שמורים.
 The data is corrupted.	הנתונים פגומים.
+Knockout	נוקאאוט
+Winner	המנצח
+Watch two colossi fight each other	צפו בשני קולוסים נלחמים זה בזה
+First Colossus	הקולוס הראשון
+Choose the first colossus	בחר את הענק הראשון
+Second Colossus	הקולוס השני
+Choose the colossus it fights	בחר את הענק שמולו הוא נלחם
+Arena	זירה
+Choose whose arena the battle is fought in	בחר באיזו זירה יתנהל הקרב

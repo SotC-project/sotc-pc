@@ -141,6 +141,8 @@ All Weapons and Items	كل الأسلحة والأغراض
 Start with every weapon and item	ابدأ بكل سلاح وغرض
 Invincibility	عدم القهر
 Wander takes no damage	Wander لا يتلقى ضرراً
+Colossus vs Colossus	عملاق ضد عملاق
+Watch Gaius and Basaran fight each other	شاهد Gaius و Basaran يتقاتلان
 Unlimited Grip	قبضة لا نهائية
 The grip gauge never empties	مقياس القبضة لا ينفد
 Maximum Damage	أقصى ضرر
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	لا يمكن إنشاء المزيد من البيانات المحفوظة
 There is not saved data.	لا توجد بيانات محفوظة.
 The data is corrupted.	البيانات تالفة.
+Knockout	ضربة قاضية
+Winner	الفائز
+Watch two colossi fight each other	شاهد عملاقين يتقاتلان
+First Colossus	العملاق الأول
+Choose the first colossus	اختر العملاق الأول
+Second Colossus	العملاق الثاني
+Choose the colossus it fights	اختر العملاق الذي يقاتله
+Arena	الساحة
+Choose whose arena the battle is fought in	اختر في ساحة أيٍّ منهما تدور المعركة

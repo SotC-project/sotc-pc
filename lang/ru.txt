@@ -141,6 +141,8 @@ All Weapons and Items	Всё оружие и предметы
 Start with every weapon and item	Начать со всем оружием и предметами
 Invincibility	Неуязвимость
 Wander takes no damage	Wander не получает урона
+Colossus vs Colossus	Колосс против колосса
+Watch Gaius and Basaran fight each other	Смотрите, как Gaius и Basaran сражаются друг с другом
 Unlimited Grip	Бесконечная хватка
 The grip gauge never empties	Шкала хватки не истощается
 Maximum Damage	Максимальный урон
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Нельзя создать больше сохранений
 There is not saved data.	Нет сохранённых данных.
 The data is corrupted.	Данные повреждены.
+Knockout	Нокаут
+Winner	Победитель
+Watch two colossi fight each other	Смотрите, как сражаются два колосса
+First Colossus	Первый колосс
+Choose the first colossus	Выберите первого колосса
+Second Colossus	Второй колосс
+Choose the colossus it fights	Выберите колосса, с которым он сражается
+Arena	Арена
+Choose whose arena the battle is fought in	Выберите, на чьей арене пройдёт битва

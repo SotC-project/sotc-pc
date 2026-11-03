@@ -141,6 +141,8 @@ All Weapons and Items	Tüm Silahlar ve Eşyalar
 Start with every weapon and item	Her silah ve eşyayla başla
 Invincibility	Ölümsüzlük
 Wander takes no damage	Wander hasar almaz
+Colossus vs Colossus	Kolosa karşı kolos
+Watch Gaius and Basaran fight each other	Gaius ve Basaran’ın birbiriyle dövüşünü izleyin
 Unlimited Grip	Sınırsız Kavrama
 The grip gauge never empties	Kavrama göstergesi hiç boşalmaz
 Maximum Damage	Azami Hasar
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Daha fazla kayıtlı veri oluşturulamaz
 There is not saved data.	Kayıtlı veri yok.
 The data is corrupted.	Veri bozuk.
+Knockout	Nakavt
+Winner	Kazanan
+Watch two colossi fight each other	İki devin birbiriyle dövüşünü izleyin
+First Colossus	Birinci dev
+Choose the first colossus	İlk colossus'u seç
+Second Colossus	İkinci dev
+Choose the colossus it fights	Dövüşeceği colossus'u seç
+Arena	Arena
+Choose whose arena the battle is fought in	Savaşın kimin arenasında yapılacağını seç

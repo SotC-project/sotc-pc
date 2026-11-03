@@ -25,6 +25,9 @@ for ((w = 0; w < 360; w++)); do mkdir "$lock" 2> /dev/null && break; sleep 5; do
 if [ "$(tasklist | grep -ciE "shadps4|ShadowOfTheColossus")" != "0" ]; then rmdir "$lock"; echo "REFUSED: a game instance is running"; exit 1; fi
 touch /d/sotc-pc/GPU_RUNNING
 trap 'rm -f /d/sotc-pc/GPU_RUNNING; rmdir "$lock"' EXIT
+# JC4 may have passed its own check in the same moment: look again once our marker is up.
+sleep 5
+if jc4_busy; then echo "REFUSED: JC4 started at the same time"; exit 1; fi
 # The script clock starts at the first frame, which the pipeline cache preload delays.
 secs=$((secs + 30))
 sd=user/home/1000/savedata
@@ -46,7 +49,7 @@ exe=$bin/shadps4.exe
 if [ -n "$EXE" ]; then
     cp "$exe" "$bin/$EXE" && exe=$bin/$EXE
 fi
-env SOTC_HEADLESS=1 ${UNMUTE:-SOTC_MUTE=1} "$@" "$exe" -f false --game "D:/Juegos PS4/CUSA08809T/eboot.bin" > /dev/null 2>&1 &
+env SOTC_HEADLESS=1 ${UNMUTE:-SOTC_MUTE=1} "$@" "$exe" -f false --game "D:/Games/CUSA08809T/eboot.bin" > /dev/null 2>&1 &
 pid=$!
 # Poll instead of `timeout`: a process stuck inside the GPU driver never exits, and waiting on
 # it would hang this script as well.

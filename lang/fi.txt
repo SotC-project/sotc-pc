@@ -141,6 +141,8 @@ All Weapons and Items	Kaikki aseet ja esineet
 Start with every weapon and item	Aloita kaikilla aseilla ja esineillä
 Invincibility	Kuolemattomuus
 Wander takes no damage	Wander ei ota vahinkoa
+Colossus vs Colossus	Kolossi vastaan kolossi
+Watch Gaius and Basaran fight each other	Katso, kun Gaius ja Basaran taistelevat keskenään
 Unlimited Grip	Rajaton ote
 The grip gauge never empties	Otemittari ei tyhjene koskaan
 Maximum Damage	Enimmäisvahinko
@@ -276,3 +278,12 @@ The saved data is corrupted. The data that was backed up by the system will be r
 Cannot create more saved data	Lisää tallennuksia ei voi luoda
 There is not saved data.	Tallennettuja tietoja ei ole.
 The data is corrupted.	Tiedot ovat vioittuneet.
+Knockout	Tyrmäys
+Winner	Voittaja
+Watch two colossi fight each other	Katso kahden kolossin taistelevan keskenään
+First Colossus	Ensimmäinen kolossi
+Choose the first colossus	Valitse ensimmäinen jättiläinen
+Second Colossus	Toinen kolossi
+Choose the colossus it fights	Valitse jättiläinen, jota vastaan se taistelee
+Arena	Areena
+Choose whose arena the battle is fought in	Valitse, kenen areenalla taistelu käydään
