@@ -5,7 +5,8 @@ Bluepoint Games or the shadPS4 project.
 
 This project starts one game, Shadow of the Colossus (2018, CUSA08809), from a single program
 on Windows, with keyboard, mouse and controller support, PC graphics settings, an uncapped
-frame rate, a free play mode and an achievements panel.
+frame rate, a free play mode (with an experimental Colossus vs Colossus spectator mode) and
+an achievements panel.
 
 It has two parts:
 
@@ -110,6 +111,11 @@ as a test version:
 - Not every part of the game has been played through on it.
 - Some sounds may still be off: the game's per-sound filters are now applied and loud sounds
   have headroom, but this is checked by measurement, not yet by ear.
+- **Colossus vs Colossus** (experimental, work paused): on the title menu choose Free Play >
+  Colossus vs Colossus, pick the first colossus, the second and the arena, then Begin Battle.
+  The game restarts into the arena and the two colossi fight until one is knocked out, watched
+  from a spectator camera. Fights are paced by the colossi's own moves and are still rough:
+  attacks are sparse, physics and some effects are incomplete, and not every pair is tested.
 
 ## What you need
 
